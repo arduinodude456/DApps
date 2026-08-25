@@ -43,6 +43,14 @@ Die Originaldatei wird niemals verändert. Bei Erfolg entsteht daneben eine neue
 
 > **Datenschutz:** Der Buchtext verlässt das Gerät nur nach der sichtbaren Übersetzungsbestätigung und ausschließlich zum in der DApp angezeigten DeepL- oder LibreTranslate-Endpunkt. Für vertrauliche Texte empfiehlt sich ein selbst betriebener LibreTranslate- bzw. Argos-Translate-Dienst.
 
+## Draw
+
+[`draw.lua`](draw.lua) ist ein mehrseitiges E-Ink-Skizzenbuch für AppDock. Es speichert Striche als bearbeitbare Vektorpunkte in einem eigenen lokalen `.draw.lua`-Format und kann gespeicherte Zeichnungen wieder laden. Jede Zeichnung besitzt mehrere Seiten mit den Hintergrundtypen **blank**, **lined**, **grid** oder einem optionalen Bildhintergrund über einen vom Nutzer eingegebenen PNG-, JPG-, GIF- oder WEBP-Pfad.
+
+Die Werkzeugleiste bietet sieben Schnellfarben, eine Eingabe für eine sechsstellige eigene Farbe, einen Stiftdicken-Slider, Radierer, Seitenwechsel, neue Seiten sowie Speichern und Laden. Auf Geräten, auf denen KOReader Stylus-Slots bereitstellt, übernimmt Draw deren Stifteingaben exklusiv innerhalb der Canvas. Kobo-artige Radierer- und Markiertasten werden als Radierer beziehungsweise breiterer Marker übernommen; falls ein Druckwert mitgeliefert wird, beeinflusst er die Strichstärke. Ohne solche Hardware bleibt die Zeichenfläche vollständig per Touch-Pan und Tippen verwendbar.
+
+> **E-Ink-Hinweis:** Draw zeichnet während einer Bewegung nur die Canvas mit einem schnellen regionalen Update neu. Der finale Strich erhält danach einen regulären UI-Refresh. Stiftdruck und Seitentasten sind geräte- und KOReader-abhängig; sie werden daher auf dem Zielgerät getestet, nicht vorausgesetzt.
+
 ## NightLua
 
 [`night_lua.lua`](night_lua.lua) ist ein E-Ink-tauglicher Editor für **Lua-Dateien**. Nach der Installation wird eine `.lua`-Datei in der eigenen AppDock-DApp **Files** mit **Open in NightLua** direkt an den Editor übergeben; KOReaders Standard-Dateimanager wird dabei nicht verwendet.
