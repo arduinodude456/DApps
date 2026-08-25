@@ -52,6 +52,14 @@ Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^
 
 > **Sicherheitsgrenze:** Ausdruckslänge, Tokenanzahl, Namen, Funktionen und Wertebereich sind begrenzt. Unbekannte Namen, Lua-Syntax, Dateizugriffe, Anweisungen und Division durch null werden abgewiesen.
 
+## BWR Video
+
+[`bwr_video.lua`](bwr_video.lua) ist die **neu aufgebaute, empfohlene** BWR1-Video-DApp. Sie wurde bewusst als frischer Store-Eintrag mit eigener DApp-ID erstellt und enthält weder eine `Player`-Klasse noch Testexporte oder die frühere Player-Laufzeitstruktur. Dadurch lädt AppDock sie unabhängig von jeder zuvor installierten VideoPlayer-Version.
+
+Die DApp spielt ausschließlich lokale, vorab geditherte `.bwr`-Dateien ab, bietet **Open video**, **−5 s**, **Play/Pause**, **+5 s** und **Stop** und aktualisiert die Canvas nur regional mit `fast`. Eine gleichnamige `.wav`-Datei wird als optionaler Begleitton erkannt und über den bestehenden Systemaudio-Ausgang – also auch über ein bereits verbundenes Bluetooth-Headset – ausgegeben. Bluetooth-Paarung bleibt beim System.
+
+> Nach der Installation von BWR Video sollte die fehlerhafte DApp **VideoPlayer** über deren AppStore-Karte mit **Uninstall** entfernt werden. BWR Video ist kein Update dieser alten DApp, sondern ein bewusst unabhängiger Neuaufbau.
+
 ## VideoPlayer
 
 [`video_player.lua`](video_player.lua) spielt lokale, für E-Ink vorbereitete **BWR1**-Dateien (`.bwr`) ab. BWR1 ist ein vorab gedithertes, 1-Bit-schwarzweißes Rohvideoformat: Die DApp decodiert bewusst **keine** komprimierten Container wie MP4, WebM oder MKV. Dadurch bleiben Framedaten, Speicherbedarf und regionale E-Ink-Updates vorhersehbar.
