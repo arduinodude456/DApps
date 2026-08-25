@@ -35,6 +35,14 @@ return {
 
 Die `id` darf nur Buchstaben, Ziffern, `_` und `-` enthalten. Sie muss im gesamten AppDock-Katalog eindeutig sein. DApps müssen ihren gesamten sichtbaren Inhalt innerhalb von `context.dimen` aufbauen, damit sie mit Open Apps und Splitscreen funktionieren.
 
+## BookTranslator
+
+[`book_translator.lua`](book_translator.lua) ist eine LibreTranslate-kompatible DApp für **TXT**, **HTML/XHTML** und **FB2**. Sie liest das aktuell in KOReader geöffnete Dokument, fragt nach Ziel- und optionaler Quellsprache sowie nach einem LibreTranslate-Endpunkt und optionalen API-Schlüssel. Vor dem Start zeigt sie den konkreten Buchpfad, das Ziel und den Endpunkt in einer Bestätigung an.
+
+Die Originaldatei wird niemals verändert. Bei Erfolg entsteht daneben eine neue Datei wie `roman.de.translated.fb2`. Der Text wird absatzweise und größenbegrenzt an den gewählten Dienst gesendet. EPUB, PDF und MOBI werden in dieser Version bewusst nicht verändert, weil ihre Container oder ihr Layout für einen zuverlässigen Export eine gesonderte Verarbeitung benötigen.
+
+> **Datenschutz:** Der Buchtext verlässt das Gerät nur nach der sichtbaren Übersetzungsbestätigung und ausschließlich zum in der DApp eingetragenen LibreTranslate-kompatiblen Endpunkt. Für vertrauliche Texte empfiehlt sich ein selbst betriebener Dienst.
+
 ## Beispiel
 
 [`examples/quote_card.lua`](examples/quote_card.lua) ist eine kleine offline DApp und ein minimaler Ausgangspunkt für neue DApps.

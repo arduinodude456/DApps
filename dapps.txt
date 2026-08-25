@@ -1,3 +1,4 @@
 # AppDock DApp catalog
 # One unique relative .lua path per line. Lines beginning with # are comments.
 examples/quote_card.lua
+book_translator.lua
