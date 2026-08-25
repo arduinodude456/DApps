@@ -64,6 +64,19 @@ local function backgroundInk()
     return Blitbuffer.COLOR_WHITE
 end
 
+local function liveInkFor(stroke)
+    if stroke.tool == "eraser" then return backgroundInk() end
+    local red, green, blue = hexToRGB(stroke.color)
+    -- On colour E-Ink, the fast waveform is grayscale-first on common
+    -- devices. A black live preview is reliable and visible immediately;
+    -- the regular full canvas paint retains the selected RGB ink afterwards.
+    if Screen:isColorEnabled() then
+        if red + green + blue > 660 then return Blitbuffer.COLOR_WHITE end
+        return Blitbuffer.COLOR_BLACK
+    end
+    return inkFor(stroke.color)
+end
+
 local function isImagePath(path)
     local extension = type(path) == "string" and path:lower():match("%.([%w]+)$") or nil
     return extension == "png" or extension == "jpg" or extension == "jpeg" or extension == "gif" or extension == "webp"
@@ -206,6 +219,7 @@ local Canvas = InputContainer:extend{
     _origin_y = 0,
     _active_stroke = nil,
     _last_refresh_region = nil,
+    _live_segment = nil,
     _stylus_active = false,
     _stylus_id = nil,
 }
@@ -254,6 +268,7 @@ function Canvas:_begin(point, tool)
     local stroke = { tool = tool or self.document.tool or "pen", color = self.document.color, width = self.document.width, points = { point } }
     self._active_stroke = stroke
     table.insert(self:page().strokes, stroke)
+    self._live_segment = { first = point, second = point, stroke = stroke }
     self._last_refresh_region = self:_refreshRegion(point, point, stroke.tool)
     return self._last_refresh_region
 end
@@ -262,15 +277,34 @@ function Canvas:_extend(point, tool)
     if not self._active_stroke then return self:_begin(point, tool) end
     local previous = self._active_stroke.points[#self._active_stroke.points]
     table.insert(self._active_stroke.points, point)
+    self._live_segment = { first = previous, second = point, stroke = self._active_stroke }
     self._last_refresh_region = self:_refreshRegion(previous, point, self._active_stroke.tool)
     return self._last_refresh_region
 end
 
+function Canvas:_paintLiveSegment()
+    local segment, bb = self._live_segment, Screen.bb
+    if not segment or not bb or not bb.paintRect then return false end
+    local stroke, first, second = segment.stroke, segment.first, segment.second
+    if not stroke or not first or not second then return false end
+    local pressure = clamp(tonumber(second.p) or 1, 0.25, 2)
+    local base_width = clamp(tonumber(stroke.width) or 3, 1, 14)
+    local thickness = math.max(1, math.floor(base_width * (stroke.tool == "highlighter" and 1.7 or pressure)))
+    drawLine(bb, self._origin_x + first.x, self._origin_y + first.y, self._origin_x + second.x, self._origin_y + second.y, thickness, liveInkFor(stroke))
+    return true
+end
+
 function Canvas:_refreshDisplay(region)
-    if not region or not UIManager.widgetRepaint or not UIManager.setDirty then return false end
-    -- A Canvas is not a window-level widget. Repaint it explicitly into the
-    -- screen buffer first, then submit only its changed line segment to E-Ink.
-    UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
+    if not region or not UIManager.setDirty then return false end
+    -- Render just the fresh segment directly into the active screen buffer.
+    -- This avoids repainting and clearing the whole canvas for every sampled
+    -- pen point, while the regional fast refresh makes it visible immediately.
+    local directly_painted = self:_paintLiveSegment()
+    if not directly_painted and UIManager.widgetRepaint then
+        UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
+        directly_painted = true
+    end
+    if not directly_painted then return false end
     UIManager:setDirty(nil, "fast", region)
     if UIManager.forceRePaint then UIManager:forceRePaint() end
     -- Let an E-Ink controller start the regional transfer before the next
@@ -286,11 +320,17 @@ end
 
 function Canvas:_finish(region)
     if self._active_stroke then
-        if #self._active_stroke.points == 1 then table.insert(self._active_stroke.points, self._active_stroke.points[1]) end
+        if #self._active_stroke.points == 1 then
+            local point = self._active_stroke.points[1]
+            table.insert(self._active_stroke.points, point)
+            self._live_segment = { first = point, second = point, stroke = self._active_stroke }
+        end
         region = region or self._last_refresh_region
-        self._active_stroke = nil
-        self._last_refresh_region = nil
+        -- Paint the terminal dot or final segment before clearing live state.
         self:_notifyChanged(true, region)
+        self._active_stroke = nil
+        self._live_segment = nil
+        self._last_refresh_region = nil
     end
 end
 
@@ -491,7 +531,7 @@ end
 
 return {
     id = "draw",
-    version = "1.2.0",
+    version = "1.2.1",
     title = "Draw",
     subtitle = "Multi-page E-Ink sketchbook",
     symbol = "D",
