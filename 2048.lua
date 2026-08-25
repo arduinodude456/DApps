@@ -204,11 +204,11 @@ end
 
 return {
     id = "game_2048",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "2048",
     subtitle = "Merge tiles and reach 2048",
     symbol = "2",
-    logo = "apps",
+    logo = "other",
     buildPane = function(instance, context)
         local state = stateFor(instance)
         if not state.board[1] then reset(state) end

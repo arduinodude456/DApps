@@ -38,7 +38,7 @@ package.preload["appdock_theme"] = function()
 end
 
 local app = dofile("2048.lua")
-assert(app.id == "game_2048" and app.version == "1.0.0")
+assert(app.id == "game_2048" and app.version == "1.0.1" and app.logo == "other")
 local instance = {}
 local context = { dimen = { w = 600, h = 900 }, manager = { appdock = {} }, requestRebuild = function(kind) assert(kind == "ui"); rebuilds = rebuilds + 1 end }
 local pane = app.buildPane(instance, context)
