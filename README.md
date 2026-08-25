@@ -52,6 +52,14 @@ Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^
 
 > **Sicherheitsgrenze:** Ausdruckslänge, Tokenanzahl, Namen, Funktionen und Wertebereich sind begrenzt. Unbekannte Namen, Lua-Syntax, Dateizugriffe, Anweisungen und Division durch null werden abgewiesen.
 
+## RSS Reader
+
+[`rss_reader.lua`](rss_reader.lua) ist ein **lokaler, textorientierter Feedreader** für explizit hinzugefügte RSS-2.0- und Atom-Feeds. Die DApp zeigt eine Feedliste, eine begrenzte Artikelübersicht und einen paginierten E-Ink-Lesemodus. Feedbeschreibungen werden als Plain Text gelesen; entfernte HTML-, Skript- und Style-Anteile können nicht ausgeführt werden.
+
+Über **+ Feed** wird eine Feedadresse hinzugefügt. RSS Reader akzeptiert ausschließlich `https://`-URLs, begrenzt Antwortgröße, Verbindungszeit, Gesamtzeit und die Zahl gelesener Artikel. **Refresh all** sowie die feedbezogene Aktualisierung holen Daten nur auf ausdrückliche Nutzeraktion. Ein fehlerhafter Abruf oder ungültiger Feed ersetzt den zuletzt gültigen lokalen Artikelcache nicht.
+
+> **Datenschutz und Grenzen:** RSS Reader führt weder JavaScript noch HTML aus, öffnet Artikel-Originaladressen nicht automatisch und unterstützt keine Feed-Logins, HTTP-Adressen, OPML, Podcasts, Bilder oder Hintergrundaktualisierungen. Feedliste, begrenzter Artikelcache und Lesestatus bleiben lokal im KOReader-Datenverzeichnis.
+
 ## Calendar
 
 [`calendar.lua`](calendar.lua) ist ein **lokaler Monatsplaner** für AppDock. Die DApp zeigt eine E-Ink-geeignete Sechszeilen-Monatsansicht mit Montag als Wochenbeginn, hebt Heute sowie den ausgewählten Tag hervor und markiert Tage mit Terminen. Pfeiltasten wechseln den Monat; **Today** kehrt zum aktuellen Monat zurück.
