@@ -6,15 +6,15 @@ Dieses Repository ist der **vertrauenswürdige AppStore-Katalog** für die AppDo
 
 ## Katalog
 
-`dapps.txt` enthält **eine sichere relative `.lua`-Datei pro Zeile**. Optional kann nach einem senkrechten Strich eine numerische Version stehen. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
+`dapps.txt` enthält **eine sichere relative `.lua`-Datei pro Zeile**. Nach dem Pfad können eine numerische Version und ein AppDock-Logo stehen. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
 
 ```text
 # Example catalog
-examples/quote_card.lua | 1.0.0
-examples/reading_timer.lua | 1.2.0
+examples/quote_card.lua | 1.0.0 | help
+examples/reading_timer.lua | 1.2.0 | timer
 ```
 
-Der AppStore vergleicht numerische Versionen komponentenweise. Ist die Repository-Version höher als die installierte Version, wird **Update** statt einer Installationssperre angeboten. Doppelte Pfade werden weiterhin ignoriert; die Reihenfolge im Katalog beeinflusst die Installationslogik nicht.
+Der AppStore vergleicht numerische Versionen komponentenweise. Ist die Repository-Version höher als die installierte Version, wird **Update** statt einer Installationssperre angeboten. Die Logo-Spalte akzeptiert ausschließlich Namen aus AppDocks Logo-Bibliothek, etwa `calculator`, `code`, `help`, `notes`, `timer` oder `translate`; ungültige Logoangaben werden ignoriert. Doppelte Pfade werden weiterhin ignoriert; die Reihenfolge im Katalog beeinflusst die Installationslogik nicht.
 
 ## DApp-Modulformat
 
