@@ -399,15 +399,14 @@ function Book.open(path)
     local title = HTML.title(source, basename(path):gsub("%.[^.]+$", ""))
     local html_chapters = HTML.sections(source, title)
     if #html_chapters == 0 or trim(html_chapters[1].text or "") == "" then return nil, _("The HTML document has no readable text.") end
-    local image_cache = {}
-    for chapter_index, group in ipairs(HTML.imageGroups(source)) do
-        image_cache[chapter_index] = {}
-        for image_index, relative in ipairs(HTML.images(group)) do
-            if image_index > MAX_CHAPTER_IMAGES then break end
-            local target = resolveLocalFile(dirname(path), relative)
-            if target and lfs.attributes(target) and lfs.attributes(target).mode == "file" then image_cache[chapter_index][#image_cache[chapter_index] + 1] = target end
-        end
+    local all_images = {}
+    for image_index, relative in ipairs(HTML.images(source)) do
+        if image_index > MAX_CHAPTER_IMAGES * 8 then break end
+        local target = resolveLocalFile(dirname(path), relative)
+        if target and lfs.attributes(target) and lfs.attributes(target).mode == "file" then all_images[#all_images + 1] = target end
     end
+    local image_cache = {}
+    for chapter_index = 1, #html_chapters do image_cache[chapter_index] = all_images end
     local chapters = {}
     for index, section in ipairs(html_chapters) do chapters[index] = { title = section.title, start = index } end
     return { format = "html", path = path, title = title, chapters = chapters, html_chapters = html_chapters, image_cache = image_cache, cache = {}, cache_order = {}, style = HTML.style(source) }
@@ -737,7 +736,7 @@ end
 
 return {
     id = "dreader",
-    version = "2.0.2",
+    version = "2.0.3",
     title = "DReader",
     subtitle = "A calm EPUB and HTML reader",
     symbol = "R",

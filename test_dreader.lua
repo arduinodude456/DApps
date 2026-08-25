@@ -78,7 +78,7 @@ local bad_epub_path = root .. "/bad.epub"
 local bad_epub = assert(io.open(bad_epub_path, "wb")); bad_epub:write("broken"); bad_epub:close()
 
 local app = dofile("/home/ubuntu/dapps-store-repo/dreader.lua")
-assert(app.id == "dreader" and app.version == "2.0.2" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
+assert(app.id == "dreader" and app.version == "2.0.3" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
 local context = { dimen = { w = 600, h = 760 }, requestRebuild = function() end, requestRefresh = function() end }
 local html_instance = {}
 assert(app.openFile(html_instance, html_path), "DReader must open supported HTML")
@@ -86,7 +86,9 @@ assert(html_instance.dreader.book.title == "Sample HTML" and #html_instance.drea
 assert(html_instance.dreader.book.html_chapters[2].title == "Next" and html_instance.dreader.book.html_chapters[2].text:find("More words", 1, true), "DReader must retain the correct text for each HTML chapter")
 assert(html_instance.dreader.book.style.family == "MissingFont" and html_instance.dreader.book.style.base_font == 12 and html_instance.dreader.book.style.heading_ratio == 2, "DReader must parse safe HTML/CSS style metadata")
 assert(html_instance.dreader.book.image_cache[1][1] == root .. "/cover.png", "DReader must resolve the first local HTML image path")
-assert(html_instance.dreader.book.image_cache[2][1] == root .. "/back.png", "DReader must resolve a later chapter image instead of only the first document image")
+assert(html_instance.dreader.book.image_cache[2][1] == root .. "/cover.png" and html_instance.dreader.book.image_cache[2][2] == root .. "/back.png", "DReader must preserve the global HTML image order for every chapter")
+assert(html_instance.dreader.book.html_chapters[1].text:find("@@DREADER_IMAGE_1@@", 1, true), "DReader must retain the first image marker in the first chapter")
+assert(html_instance.dreader.book.html_chapters[2].text:find("@@DREADER_IMAGE_2@@", 1, true), "DReader must retain the second global image marker in the later chapter")
 assert(not html_instance.dreader.book.html_chapters[1].text:find("alert", 1, true), "DReader must remove scripts from HTML text")
 local html_pane = app.buildPane(html_instance, context)
 assert(html_pane and html_pane.dimen and html_pane.dimen.w == 600, "DReader must build a reader pane using only context dimensions")

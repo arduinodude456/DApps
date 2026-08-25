@@ -8,7 +8,7 @@ draw.lua | 1.2.1 | notes
 calc.lua | 1.0.0 | calculator
 video_player.lua | 1.0.2 | gallery
 bwr_video.lua | 1.0.0 | gallery
-dreader.lua | 2.0.2 | document
+dreader.lua | 2.0.3 | document
 calendar.lua | 1.0.1 | calendar
 rss_reader.lua | 1.0.1 | rss
 dock_update.lua | 1.0.3 | download
