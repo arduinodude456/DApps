@@ -2,6 +2,7 @@
 -- A compact, E-Ink friendly implementation with theme-derived tile colors.
 
 local Blitbuffer = require("ffi/blitbuffer")
+local CenterContainer = require("ui/widget/container/centercontainer")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -184,6 +185,13 @@ function GamePane:on2048Left() self.on_move("left"); return true end
 function GamePane:on2048Right() self.on_move("right"); return true end
 function GamePane:on2048Up() self.on_move("up"); return true end
 function GamePane:on2048Down() self.on_move("down"); return true end
+function GamePane:onSwipe2048(_, gesture)
+    local direction = gesture and gesture.direction
+    local moves = { west = "left", east = "right", north = "up", south = "down" }
+    local move_direction = moves[direction]
+    if move_direction and self.on_move then self.on_move(move_direction); return true end
+    return false
+end
 
 local function buildBoard(state, palette, x, y, size, gap)
     local board = OverlapGroup:new{ dimen = Geom:new{ w = size, h = size }, allow_mirroring = false }
@@ -194,8 +202,11 @@ local function buildBoard(state, palette, x, y, size, gap)
         local text = value == 0 and "" or tostring(value)
         board[#board + 1] = FrameContainer:new{
             width = tile, height = tile, padding = 0, bordersize = 0, radius = scale(6), background = background,
-            TextWidget:new{ text = text, face = Font:getFace("cfont", value >= 1000 and scale(14) or scale(19)), fgcolor = foreground, bold = true,
-                max_width = tile - scale(4), align = "center", valign = "center", overlap_offset = { col == 1 and 0 or (col - 1) * (tile + gap), row == 1 and 0 or (row - 1) * (tile + gap) } },
+            CenterContainer:new{
+                dimen = Geom:new{ w = tile, h = tile },
+                TextWidget:new{ text = text, face = Font:getFace("cfont", value >= 1000 and scale(14) or scale(19)), fgcolor = foreground, bold = true, max_width = tile - scale(4) },
+            },
+            overlap_offset = { (col - 1) * (tile + gap), (row - 1) * (tile + gap) },
         }
     end end
     board.overlap_offset = { x, y }
@@ -204,7 +215,7 @@ end
 
 return {
     id = "game_2048",
-    version = "1.0.2",
+    version = "1.0.3",
     title = "2048",
     subtitle = "Merge tiles and reach 2048",
     symbol = "2",
@@ -217,6 +228,9 @@ return {
         local margin, gap = scale(12), scale(7)
         local pane = GamePane:new{ dimen = Geom:new{ w = width, h = height } }
         pane.on_move = function(direction) if move(state, direction) then context.requestRebuild("ui") end end
+        pane.ges_events = {
+            Swipe2048 = { GestureRange:new{ ges = "swipe", range = pane.dimen } },
+        }
         pane.key_events = {}
         local groups = Device.input and Device.input.group or {}
         if groups.Left then pane.key_events.MoveLeft = { { groups.Left }, event = "2048Left" } end
@@ -247,7 +261,7 @@ return {
                 callback = function() if move(state, item[2]) then context.requestRebuild("ui") end end,
                 overlap_offset = { margin + (i - 1) * (control_w + gap), control_y } }
         end
-        local status = state.over and _("Game over — press 2048 to restart") or (state.won and _("2048 reached — keep playing") or _("Use the arrows to move"))
+        local status = state.over and _("Game over — press New game to restart") or (state.won and _("2048 reached — keep playing") or _("Swipe to move · arrows are a fallback"))
         if state.over then
             layers[#layers + 1] = DirectionButton:new{ title = _("New game"), width = math.min(scale(100), width - 2 * margin), height = button_h, background = palette.secondary, foreground = palette.on_secondary,
                 callback = function() reset(state); context.requestRebuild("ui") end, overlap_offset = { width - margin - math.min(scale(100), width - 2 * margin), control_y } }
