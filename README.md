@@ -52,6 +52,16 @@ Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^
 
 > **Sicherheitsgrenze:** Ausdruckslänge, Tokenanzahl, Namen, Funktionen und Wertebereich sind begrenzt. Unbekannte Namen, Lua-Syntax, Dateizugriffe, Anweisungen und Division durch null werden abgewiesen.
 
+## DReader
+
+[`dreader.lua`](dreader.lua) ist ein ruhiger, **stateful** AppDock-Reader für lokale EPUB-, HTML-, HTM- und XHTML-Dokumente. Er enthält eine eigene Bibliothek der zuletzt geöffneten Bücher, einen Kapitelbrowser, seitenorientiertes Blättern, ein-/ausblendbare Bedienelemente, Schriftstufen, anpassbare Ränder und einen persistent gespeicherten Lesefortschritt.
+
+Bei EPUB nutzt DReader KOReaders Archivschnittstelle, um `META-INF/container.xml`, OPF, Manifest, Spine und – sofern vorhanden – EPUB-3-Navigation oder NCX auszulesen. Ein Buch wird nicht pauschal entpackt: Nur benötigte, begrenzte reguläre Archiveinträge werden in den Speicher gelesen. HTML/XHTML wird als Lesetext normalisiert; Skripte, Styles, eingebettete/interaktive Elemente und browserartige Ausführung bleiben ausgeschlossen.
+
+> **Installation und Öffnen:** DReader benötigt **AppDock 1.7.0**. Nach der Installation zeigt die eigene **Files**-DApp bei `.epub`, `.html`, `.htm` und `.xhtml` den Eintrag **Open in DReader**. Alternativ kann ein absoluter lokaler Pfad in DReaders Bibliothek eingegeben werden.
+
+DReader ist bewusst kein vollständiger Webbrowser und kein Ersatz für KOReaders professionelle Satzengine: Komplexes CSS, JavaScript, DRM-EPUBs, interaktive Inhalte und eingebettete Medien werden nicht vollständig unterstützt. Die erste Version konzentriert sich stattdessen auf robustes, schnelles textorientiertes Lesen und verständliche Fehler bei beschädigten oder ungewöhnlich großen Büchern.
+
 ## BWR Video
 
 [`bwr_video.lua`](bwr_video.lua) ist die **neu aufgebaute, empfohlene** BWR1-Video-DApp. Sie wurde bewusst als frischer Store-Eintrag mit eigener DApp-ID erstellt und enthält weder eine `Player`-Klasse noch Testexporte oder die frühere Player-Laufzeitstruktur. Dadurch lädt AppDock sie unabhängig von jeder zuvor installierten VideoPlayer-Version.
