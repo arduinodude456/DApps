@@ -55,6 +55,7 @@ local function cssColor(value)
     local hex = value:match("#([%da-fA-F][%da-fA-F][%da-fA-F][%da-fA-F][%da-fA-F][%da-fA-F])%s*$")
     if not hex then return readableColor() end
     local r, g, b = tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
+    if (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.68 then return readableColor() end
     if Blitbuffer.ColorRGB32 then return Blitbuffer.ColorRGB32(r, g, b, 0xFF) end
     return readableColor()
 end
@@ -251,6 +252,20 @@ local function safeArchivePath(path)
     return type(path) == "string" and #path > 0 and #path <= 512 and not path:match("^/") and not path:match("%.%.")
 end
 
+local function resolveLocalFile(base, relative)
+    relative = (relative or ""):gsub("#.*$", ""):gsub("%?.*$", "")
+    if relative == "" or relative:match("^[%a]+:") or relative:match("^/") then return nil end
+    local parts = {}
+    for part in (base .. "/" .. relative):gmatch("[^/]+") do
+        if part == ".." then
+            if #parts == 0 then return nil end
+            table.remove(parts)
+        elseif part ~= "." and part ~= "" then parts[#parts + 1] = part end
+    end
+    local prefix = base:sub(1, 1) == "/" and "/" or ""
+    return prefix .. table.concat(parts, "/")
+end
+
 local function resolvePath(base, relative)
     relative = (relative or ""):gsub("#.*$", ""):gsub("%?.*$", "")
     if relative:match("^[%a]+:") then return nil end
@@ -361,8 +376,8 @@ function Book.open(path)
     local html_images = {}
     for index, relative in ipairs(HTML.images(source)) do
         if index > MAX_CHAPTER_IMAGES then break end
-        local target = resolvePath("", relative)
-        if target then html_images[#html_images + 1] = dirname(path) .. "/" .. target end
+        local target = resolveLocalFile(dirname(path), relative)
+        if target and lfs.attributes(target) and lfs.attributes(target).mode == "file" then html_images[#html_images + 1] = target end
     end
     local chapters = {}
     for index, section in ipairs(html_chapters) do chapters[index] = { title = section.title, start = index } end
