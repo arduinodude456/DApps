@@ -37,11 +37,11 @@ Die `id` darf nur Buchstaben, Ziffern, `_` und `-` enthalten. Sie muss im gesamt
 
 ## BookTranslator
 
-[`book_translator.lua`](book_translator.lua) ist eine LibreTranslate-kompatible DApp für **TXT**, **HTML/XHTML** und **FB2**. Sie liest das aktuell in KOReader geöffnete Dokument, fragt nach Ziel- und optionaler Quellsprache sowie nach einem LibreTranslate-Endpunkt und optionalen API-Schlüssel. Vor dem Start zeigt sie den konkreten Buchpfad, das Ziel und den Endpunkt in einer Bestätigung an.
+[`book_translator.lua`](book_translator.lua) übersetzt **TXT**, **HTML/XHTML** und **FB2** über eine wählbare Providerkarte. Standardmäßig ist **DeepL API Free** aktiv; die DApp verwendet dafür fest `https://api-free.deepl.com/v2/translate` und benötigt einen persönlichen DeepL-API-Free-Schlüssel. Durch Antippen der Providerkarte lässt sich jederzeit zurück zu **LibreTranslate** wechseln, dessen HTTPS-Endpunkt und optionaler Schlüssel konfigurierbar bleiben.
 
 Die Originaldatei wird niemals verändert. Bei Erfolg entsteht daneben eine neue Datei wie `roman.de.translated.fb2`. Der Text wird absatzweise und größenbegrenzt an den gewählten Dienst gesendet. EPUB, PDF und MOBI werden in dieser Version bewusst nicht verändert, weil ihre Container oder ihr Layout für einen zuverlässigen Export eine gesonderte Verarbeitung benötigen.
 
-> **Datenschutz:** Der Buchtext verlässt das Gerät nur nach der sichtbaren Übersetzungsbestätigung und ausschließlich zum in der DApp eingetragenen LibreTranslate-kompatiblen Endpunkt. Für vertrauliche Texte empfiehlt sich ein selbst betriebener Dienst.
+> **Datenschutz:** Der Buchtext verlässt das Gerät nur nach der sichtbaren Übersetzungsbestätigung und ausschließlich zum in der DApp angezeigten DeepL- oder LibreTranslate-Endpunkt. Für vertrauliche Texte empfiehlt sich ein selbst betriebener LibreTranslate- bzw. Argos-Translate-Dienst.
 
 ## Beispiel
 

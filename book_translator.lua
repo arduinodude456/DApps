@@ -34,8 +34,12 @@ local MAX_FILE_BYTES = 3 * 1024 * 1024
 local CHUNK_BYTES = 2600
 local SUPPORTED = { txt = true, html = true, htm = true, xhtml = true, fb2 = true }
 
+local DEEPL_FREE_ENDPOINT = "https://api-free.deepl.com/v2/translate"
+local DEFAULT_LIBRE_ENDPOINT = "https://libretranslate.com/translate"
+
 local DEFAULT_CONFIG = {
-    endpoint = "https://libretranslate.com/translate",
+    provider = "deepl",
+    libre_endpoint = DEFAULT_LIBRE_ENDPOINT,
     api_key = "",
     source = "auto",
     target = "de",
@@ -59,8 +63,12 @@ local function trim(value)
 end
 
 local function cloneConfig(config)
+    config = config or {}
+    -- Existing BookTranslator configurations used `endpoint` and LibreTranslate.
+    local provider = config.provider or (config.endpoint and "libretranslate" or DEFAULT_CONFIG.provider)
     return {
-        endpoint = config.endpoint or DEFAULT_CONFIG.endpoint,
+        provider = provider == "libretranslate" and "libretranslate" or "deepl",
+        libre_endpoint = config.libre_endpoint or config.endpoint or DEFAULT_CONFIG.libre_endpoint,
         api_key = config.api_key or "",
         source = config.source or DEFAULT_CONFIG.source,
         target = config.target or DEFAULT_CONFIG.target,
@@ -129,47 +137,78 @@ local function splitText(text)
     return chunks
 end
 
-local function translateRequest(config, text)
-    if trim(text) == "" then return text end
-    local parsed = require("socket.url").parse(config.endpoint)
-    if not parsed or parsed.scheme ~= "https" then
-        return nil, _("The LibreTranslate endpoint must use HTTPS.")
-    end
+local function providerLabel(config)
+    return config.provider == "deepl" and _("DeepL API Free") or _("LibreTranslate")
+end
+
+local function providerEndpoint(config)
+    return config.provider == "deepl" and DEEPL_FREE_ENDPOINT or config.libre_endpoint
+end
+
+local function performRequest(endpoint, body, headers)
     local socket = require("socket")
     local socketutil = require("socketutil")
     local ltn12 = require("ltn12")
-    local url = require("socket.url")
     local http = require("ssl.https")
-    local JSON = require("json")
-    local body = "q=" .. url.escape(text)
-        .. "&source=" .. url.escape(config.source)
-        .. "&target=" .. url.escape(config.target)
-        .. "&format=text"
-    if trim(config.api_key) ~= "" then body = body .. "&api_key=" .. url.escape(config.api_key) end
     local sink = {}
     socketutil:set_timeout(20, 40)
-    local ok, code, headers, status = pcall(function()
+    local ok, code, response_headers, status = pcall(function()
         return socket.skip(1, http.request{
-            url = config.endpoint,
+            url = endpoint,
             method = "POST",
             source = ltn12.source.string(body),
             sink = ltn12.sink.table(sink),
-            headers = {
-                ["content-type"] = "application/x-www-form-urlencoded",
-                ["content-length"] = tostring(#body),
-                ["accept"] = "application/json",
-            },
+            headers = headers,
         })
     end)
     socketutil:reset_timeout()
-    if not ok or not headers then return nil, status or _("The translation service could not be reached.") end
+    if not ok or not response_headers then return nil, status or _("The translation service could not be reached.") end
     if code ~= 200 then return nil, status or (_("Translation service returned HTTP ") .. tostring(code)) end
-    local response = table.concat(sink)
+    return table.concat(sink)
+end
+
+local function translateWithLibre(config, text)
+    local url = require("socket.url")
+    local parsed = url.parse(config.libre_endpoint)
+    if not parsed or parsed.scheme ~= "https" then return nil, _("The LibreTranslate endpoint must use HTTPS.") end
+    local body = "q=" .. url.escape(text) .. "&source=" .. url.escape(config.source)
+        .. "&target=" .. url.escape(config.target) .. "&format=text"
+    if trim(config.api_key) ~= "" then body = body .. "&api_key=" .. url.escape(config.api_key) end
+    local response, err = performRequest(config.libre_endpoint, body, {
+        ["content-type"] = "application/x-www-form-urlencoded", ["content-length"] = tostring(#body), ["accept"] = "application/json",
+    })
+    if not response then return nil, err end
+    local JSON = require("json")
     local decoded_ok, decoded = pcall(JSON.decode, response, JSON.decode.simple)
     if not decoded_ok or type(decoded) ~= "table" or type(decoded.translatedText) ~= "string" then
-        return nil, _("The translation service returned an invalid response.")
+        return nil, _("LibreTranslate returned an invalid response.")
     end
     return decoded.translatedText
+end
+
+local function translateWithDeepL(config, text)
+    if trim(config.api_key) == "" then return nil, _("Enter your DeepL API Free key before translating.") end
+    local url = require("socket.url")
+    local target = trim(config.target):upper()
+    local body = "text=" .. url.escape(text) .. "&target_lang=" .. url.escape(target)
+    if trim(config.source):lower() ~= "auto" then body = body .. "&source_lang=" .. url.escape(trim(config.source):upper()) end
+    local response, err = performRequest(DEEPL_FREE_ENDPOINT, body, {
+        ["content-type"] = "application/x-www-form-urlencoded", ["content-length"] = tostring(#body),
+        ["authorization"] = "DeepL-Auth-Key " .. trim(config.api_key), ["accept"] = "application/json",
+        ["user-agent"] = "AppDock-BookTranslator/1.1",
+    })
+    if not response then return nil, err end
+    local JSON = require("json")
+    local decoded_ok, decoded = pcall(JSON.decode, response, JSON.decode.simple)
+    local translation = decoded_ok and decoded and decoded.translations and decoded.translations[1]
+    if type(translation) ~= "table" or type(translation.text) ~= "string" then return nil, _("DeepL returned an invalid response.") end
+    return translation.text
+end
+
+local function translateRequest(config, text)
+    if trim(text) == "" then return text end
+    if config.provider == "deepl" then return translateWithDeepL(config, text) end
+    return translateWithLibre(config, text)
 end
 
 local function translatePlainText(content, config, request_fn)
@@ -313,6 +352,29 @@ local function editConfig(instance, context, key, title, hint)
     end)
 end
 
+local function toggleProvider(instance, context)
+    local config = instance.book_translator.config
+    config.provider = config.provider == "deepl" and "libretranslate" or "deepl"
+    saveConfig(config)
+    context.requestRebuild("ui")
+end
+
+local function editServiceConfig(instance, context)
+    local config = instance.book_translator.config
+    if config.provider == "deepl" then
+        editConfig(instance, context, "api_key", _("DeepL API Free key"), _("Paste your DeepL API Free key"))
+        return
+    end
+    showInput(_("LibreTranslate endpoint"), _("https://example.org/translate"), config.libre_endpoint, function(endpoint)
+        config.libre_endpoint = trim(endpoint)
+        showInput(_("LibreTranslate API key"), _("Leave empty when your service needs no key"), config.api_key, function(api_key)
+            config.api_key = trim(api_key)
+            saveConfig(config)
+            context.requestRebuild("ui")
+        end)
+    end)
+end
+
 local function startTranslation(instance, context)
     local state = instance.book_translator
     local path = currentBookPath(context)
@@ -330,10 +392,11 @@ local function startTranslation(instance, context)
         return
     end
     local confirm = ConfirmBox:new{
-        text = _("Translate this book with your configured LibreTranslate service?\n\n")
+        text = _("Translate this book with the selected service?\n\n")
             .. path .. "\n\n"
+            .. _("Provider: ") .. providerLabel(state.config) .. "\n"
             .. _("Target: ") .. state.config.target .. "\n"
-            .. _("Endpoint: ") .. state.config.endpoint .. "\n\n"
+            .. _("Endpoint: ") .. providerEndpoint(state.config) .. "\n\n"
             .. _("The selected book text will be sent to that service. The original file is never changed."),
         ok_text = _("Translate"),
         ok_callback = function()
@@ -354,7 +417,7 @@ end
 return {
     id = "book_translator",
     title = "BookTranslator",
-    subtitle = "Translate supported books with LibreTranslate",
+    subtitle = "Translate supported books with DeepL or LibreTranslate",
     symbol = "T",
     logo = "translate",
     buildPane = function(instance, context)
@@ -374,10 +437,10 @@ return {
         }
         local cards = {
             { title = _("Current book"), subtitle = book or _("No reader document open"), callback = function() end },
+            { title = _("Translation provider"), subtitle = providerLabel(state.config) .. _(" · tap to switch"), callback = function() toggleProvider(instance, context) end },
             { title = _("Target language"), subtitle = state.config.target, callback = function() editConfig(instance, context, "target", _("Target language"), _("Language code, e.g. de")) end },
             { title = _("Source language"), subtitle = state.config.source, callback = function() editConfig(instance, context, "source", _("Source language"), _("Language code or auto")) end },
-            { title = _("LibreTranslate endpoint"), subtitle = state.config.endpoint, callback = function() editConfig(instance, context, "endpoint", _("LibreTranslate endpoint"), _("https://example.org/translate")) end },
-            { title = _("API key"), subtitle = trim(state.config.api_key) == "" and _("Not set") or _("Stored locally"), callback = function() editConfig(instance, context, "api_key", _("LibreTranslate API key"), _("Optional for self-hosted services")) end },
+            { title = state.config.provider == "deepl" and _("DeepL API Free key") or _("LibreTranslate service"), subtitle = trim(state.config.api_key) == "" and _("Not set · tap to configure") or _("Configured locally · tap to edit"), callback = function() editServiceConfig(instance, context) end },
             { title = _("Translate current book"), subtitle = _("Confirm before text leaves this device"), callback = function() startTranslation(instance, context) end },
         }
         local first_y = scale(60)
@@ -402,5 +465,8 @@ return {
         splitText = splitText,
         translateMarkup = translateMarkup,
         translateBook = translateBook,
+        providerEndpoint = providerEndpoint,
+        providerLabel = providerLabel,
+        cloneConfig = cloneConfig,
     },
 }
