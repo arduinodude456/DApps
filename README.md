@@ -43,6 +43,14 @@ Die Originaldatei wird niemals verändert. Bei Erfolg entsteht daneben eine neue
 
 > **Datenschutz:** Der Buchtext verlässt das Gerät nur nach der sichtbaren Übersetzungsbestätigung und ausschließlich zum in der DApp angezeigten DeepL- oder LibreTranslate-Endpunkt. Für vertrauliche Texte empfiehlt sich ein selbst betriebener LibreTranslate- bzw. Argos-Translate-Dienst.
 
+## NightLua
+
+[`night_lua.lua`](night_lua.lua) ist ein E-Ink-tauglicher Editor für **Lua-Dateien**. Nach der Installation wird eine `.lua`-Datei in der eigenen AppDock-DApp **Files** mit **Open in NightLua** direkt an den Editor übergeben; KOReaders Standard-Dateimanager wird dabei nicht verwendet.
+
+NightLua zeigt im DApp-Pane eine scrollbar Syntaxhervorhebung für Schlüsselwörter, Literale, Zahlen, Zeichenketten und Kommentare. **Edit** öffnet KOReaders nativen Vollbild-Mehrzeileneditor mit Monospace-Schrift, **Check** prüft Lua-Syntax, und **Save** schreibt nach erfolgreicher Syntaxprüfung über eine temporäre Datei zurück. NightLua akzeptiert nur reguläre `.lua`-Dateien bis 512 KiB und ändert keine andere Dateiart.
+
+> **Hinweis:** Die Live-Eingabe verwendet bewusst KOReaders bewährtes natives Texteingabefeld. Die farbige beziehungsweise kontrastverstärkte Syntaxansicht ist die separate, nach dem Speichern oder Aktualisieren angezeigte Vorschau im NightLua-Pane.
+
 ## Beispiel
 
 [`examples/quote_card.lua`](examples/quote_card.lua) ist eine kleine offline DApp und ein minimaler Ausgangspunkt für neue DApps.
