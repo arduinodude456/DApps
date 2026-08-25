@@ -153,14 +153,21 @@ local function sourceTreeFromJSON(body)
     for item_index, item in ipairs(raw.tree) do
         if type(item) == "table" and item.type == "blob" then
             local path, size = item.path, tonumber(item.size)
-            if not safeSourcePath(path) then return nil, _("The release contains an unsupported file: ") .. tostring(path) end
-            if not size or size < 1 or size > MAX_FILE_BYTES then return nil, _("A release source file has an invalid size.") end
-            if seen[path] then return nil, _("The release contains duplicate source files.") end
-            seen[path] = true
-            total = total + size
-            if total > MAX_TOTAL_BYTES then return nil, _("The release source package is too large.") end
-            entries[#entries + 1] = { path = path, size = size }
-            if #entries > MAX_SOURCE_FILES then return nil, _("The release contains too many source files.") end
+            -- GitHub releases may contain Markdown documentation such as README.md.
+            -- It is metadata for humans, not AppDock source, and must not enter the
+            -- downloader or Lua validator. Every other unexpected file remains rejected.
+            if type(path) == "string" and path:match("%.md$") then
+                -- intentionally ignored
+            else
+                if not safeSourcePath(path) then return nil, _("The release contains an unsupported file: ") .. tostring(path) end
+                if not size or size < 1 or size > MAX_FILE_BYTES then return nil, _("A release source file has an invalid size.") end
+                if seen[path] then return nil, _("The release contains duplicate source files.") end
+                seen[path] = true
+                total = total + size
+                if total > MAX_TOTAL_BYTES then return nil, _("The release source package is too large.") end
+                entries[#entries + 1] = { path = path, size = size }
+                if #entries > MAX_SOURCE_FILES then return nil, _("The release contains too many source files.") end
+            end
         end
     end
     for required_index, required in ipairs(REQUIRED_FILES) do
@@ -423,7 +430,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
