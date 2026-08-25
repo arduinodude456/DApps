@@ -156,8 +156,9 @@ local function sourceTreeFromJSON(body)
             -- GitHub releases may contain Markdown documentation such as README.md.
             -- It is metadata for humans, not AppDock source, and must not enter the
             -- downloader or Lua validator. Every other unexpected file remains rejected.
-            if type(path) == "string" and path:match("%.md$") then
-                -- intentionally ignored
+            if type(path) == "string" and (path:match("%.md$") or path:match("^appdock%.koplugin/")) then
+                -- Documentation and the repository's packaged plugin mirror are
+                -- ignored; only the validated root-level source tree is installed.
             else
                 if not safeSourcePath(path) then return nil, _("The release contains an unsupported file: ") .. tostring(path) end
                 if not size or size < 1 or size > MAX_FILE_BYTES then return nil, _("A release source file has an invalid size.") end
@@ -430,7 +431,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
