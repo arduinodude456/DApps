@@ -43,6 +43,14 @@ Die Originaldatei wird niemals verändert. Bei Erfolg entsteht daneben eine neue
 
 > **Datenschutz:** Der Buchtext verlässt das Gerät nur nach der sichtbaren Übersetzungsbestätigung und ausschließlich zum in der DApp angezeigten DeepL- oder LibreTranslate-Endpunkt. Für vertrauliche Texte empfiehlt sich ein selbst betriebener LibreTranslate- bzw. Argos-Translate-Dienst.
 
+## Calc
+
+[`calc.lua`](calc.lua) verbindet einen wissenschaftlichen Taschenrechner mit einem Funktionsplotter. Calc wertet Ausdrücke über einen eigenen begrenzten Parser aus und führt **nie** frei eingegebenen Lua-Code aus. Unterstützt werden `+`, `-`, `*`, `/`, `^`, Klammern, die Konstanten `pi` und `e` sowie `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt`, `abs`, `exp`, `ln`, `log`, `floor` und `ceil`. Die Trigonometrie arbeitet im **Bogenmaß**.
+
+Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^2-4`. **Range** legt den sichtbaren x-Bereich fest; der y-Bereich ist bewusst auf `-10` bis `10` fixiert, um auf E-Ink-Displays eine stabile und schnell erkennbare Achsenskalierung zu behalten. Der lokale Verlauf speichert die letzten zwölf Berechnungen, solange die DApp geöffnet ist.
+
+> **Sicherheitsgrenze:** Ausdruckslänge, Tokenanzahl, Namen, Funktionen und Wertebereich sind begrenzt. Unbekannte Namen, Lua-Syntax, Dateizugriffe, Anweisungen und Division durch null werden abgewiesen.
+
 ## Draw
 
 [`draw.lua`](draw.lua) ist ein mehrseitiges E-Ink-Skizzenbuch für AppDock. Es speichert Striche als bearbeitbare Vektorpunkte in einem eigenen lokalen `.draw.lua`-Format und kann gespeicherte Zeichnungen wieder laden. Jede Zeichnung besitzt mehrere Seiten mit den Hintergrundtypen **blank**, **lined**, **grid** oder einem optionalen Bildhintergrund über einen vom Nutzer eingegebenen PNG-, JPG-, GIF- oder WEBP-Pfad.

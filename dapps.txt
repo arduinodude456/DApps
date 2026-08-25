@@ -4,3 +4,4 @@ examples/quote_card.lua
 book_translator.lua
 night_lua.lua
 draw.lua
+calc.lua
