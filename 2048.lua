@@ -204,7 +204,7 @@ end
 
 return {
     id = "game_2048",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "2048",
     subtitle = "Merge tiles and reach 2048",
     symbol = "2",
@@ -231,7 +231,10 @@ return {
         local board_x = math.floor((width - board_size) / 2)
         local board_y = header_h
         local layers = {
-            FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background },
+            FrameContainer:new{
+                width = width, height = height, padding = 0, bordersize = 0, background = palette.background,
+                WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } },
+            },
             TextWidget:new{ text = "2048", face = Font:getFace("cfont", scale(22)), fgcolor = palette.on_surface, bold = true, overlap_offset = { margin, scale(8) } },
             TextWidget:new{ text = (_("Score") .. ": " .. tostring(state.score)), face = Font:getFace("smallinfofont", scale(11)), fgcolor = palette.on_variant, overlap_offset = { width - margin - scale(105), scale(15) }, max_width = scale(105) },
             buildBoard(state, palette, board_x, board_y, board_size, gap),
