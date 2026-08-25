@@ -1,0 +1,13 @@
+{
+  "name": "appdock-gmail-local-adapter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "authorize": "node gmail-adapter.mjs authorize --config config.json",
+    "start": "node gmail-adapter.mjs start --config config.json",
+    "token": "node gmail-adapter.mjs token",
+    "test": "node test_gmail_adapter.mjs"
+  },
+  "description": "Local HTTPS metadata-only Gmail adapter for AppDock Gmail Notifications"
+}
