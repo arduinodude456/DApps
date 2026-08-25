@@ -11,3 +11,4 @@ bwr_video.lua | 1.0.0 | gallery
 dreader.lua | 1.0.2 | document
 calendar.lua | 1.0.1 | calendar
 rss_reader.lua | 1.0.1 | rss
+dock_update.lua | 1.0.0 | download

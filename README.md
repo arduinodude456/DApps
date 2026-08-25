@@ -36,6 +36,14 @@ return {
 
 Die `id` darf nur Buchstaben, Ziffern, `_` und `-` enthalten. Sie muss im gesamten AppDock-Katalog eindeutig sein. DApps müssen ihren gesamten sichtbaren Inhalt innerhalb von `context.dimen` aufbauen, damit sie mit Open Apps und Splitscreen funktionieren.
 
+## DockUpdate
+
+[`dock_update.lua`](dock_update.lua) ist die **manuelle Kernaktualisierung** für AppDock. Mit **Check updates** fragt sie ausschließlich den neuesten stabilen Release von [`arduinodude456/appdock.koplugin`](https://github.com/arduinodude456/appdock.koplugin) über HTTPS ab. Die Karte zeigt installierte und veröffentlichte Version, eine Zusammenfassung der Release Notes sowie den Updatestatus; **Release Notes** öffnet den vollständigen, lesbaren Release-Text.
+
+Eine Aktualisierung startet niemals automatisch. Erst nach einer ausdrücklichen Bestätigung prüft DockUpdate die freigegebene AppDock-Dateiliste, begrenzt deren Größe, lädt die etablierten Lua-Kernmodule einzeln über HTTPS, prüft ihre Lua-Syntax und schreibt sie in ein Staging-Verzeichnis. Danach ersetzt ein atomarer Ordnerwechsel die aktive Pluginversion. Der vorherige AppDock-Ordner bleibt als Rückrollkopie neben dem Plugin erhalten.
+
+> **Wichtig:** Nach einer erfolgreichen Aktualisierung muss KOReader neu gestartet werden, damit die neuen Pluginmodule geladen werden. DockUpdate akzeptiert ausschließlich stabile Releases des fest eingebauten AppDock-Repositorys, nur erwartete root-level Lua-Kernmodule und keine absoluten Pfade, `..`-Pfade, Archive, Binärdateien oder Hintergrundaktualisierungen.
+
 ## BookTranslator
 
 [`book_translator.lua`](book_translator.lua) übersetzt **TXT**, **HTML/XHTML** und **FB2** über eine wählbare Providerkarte. Standardmäßig ist **DeepL API Free** aktiv; die DApp verwendet dafür fest `https://api-free.deepl.com/v2/translate` und benötigt einen persönlichen DeepL-API-Free-Schlüssel. Durch Antippen der Providerkarte lässt sich jederzeit zurück zu **LibreTranslate** wechseln, dessen HTTPS-Endpunkt und optionaler Schlüssel konfigurierbar bleiben.
