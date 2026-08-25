@@ -180,6 +180,7 @@ AppDock erzeugt für jedes aktive Pane einen eigenen Kontext. Die aktuell verlä
 | `context.host` | Aktiver DApp-Host | Nur für fortgeschrittene Hostprüfungen |
 | `context.requestRebuild(kind)` | Pane neu aufbauen und danach aktualisieren | `context.requestRebuild("ui")` |
 | `context.requestRefresh(kind, region)` | Bestehende Darstellung regional aktualisieren | `context.requestRefresh("fast", region)` |
+| `context.notify(payload)` | Lokale AppDock-Benachrichtigung in Inbox und Pop-up erstellen | `context.notify({ title = "Weather", message = "Forecast updated" })` |
 
 Die Funktionen sind bereits an den aktiven Host gebunden. Rufe deshalb in einer DApp **nicht** direkt auf interne Host-Stacks zu und verwende nicht die globale Fensterverwaltung als Ersatz für den Kontext. Die konkrete Kontextbildung sowie die Weiterleitung an KOReaders `UIManager` liegen im AppDock-Kern [2].
 
@@ -207,6 +208,20 @@ context.requestRefresh("fast", Geom:new{
 ```
 
 `fast` ist für kleine, kurzfristige Änderungen gedacht. Es ersetzt keinen UI-Neuaufbau. Wenn sich Widgets, Text, Layout oder ein Dialog ändern, ist `requestRebuild("ui")` die richtige Wahl. Fordere keinen Fullscreen-Refresh bei jeder Eingabe an.
+
+### 4.3 Lokale Benachrichtigungen
+
+Ab AppDock 2.1.0 kann eine DApp eine lokale Benachrichtigung erzeugen. AppDock speichert sie in einer begrenzten Inbox, zeigt eine kurze nicht animierte E-Ink-Karte an und führt sie im Quick-Settings-Dropdown auf. Es gibt keine Remote-Push-Infrastruktur, keine Hintergrundschleife und kein Aufwecken des Geräts.
+
+```lua
+local ok, notification = context.notify({
+    title = "Weather",
+    message = "Forecast updated from the local cache.",
+    priority = "normal", -- optional: "normal" oder "high"
+})
+```
+
+`title` und `message` sind Pflichtfelder. Titel werden auf 72 Zeichen, Nachrichten auf 240 Zeichen begrenzt. `source` ist optional; ohne Angabe setzt AppDock automatisch den Titel der aufrufenden DApp. Die Inbox hält maximal 50 Einträge. DApps dürfen keine Funktions-Callbacks, externe Push-Token oder eigene Timer in den Payload schreiben. Benachrichtige nur bei einem echten Ergebnis oder Fehler, nicht bei jedem Repaint oder Seitenwechsel.
 
 ## 5. E-Ink- und UI-Regeln
 
