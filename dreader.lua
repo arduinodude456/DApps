@@ -367,7 +367,7 @@ function Action:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     local items = { TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", scale(10)), bold = true, fgcolor = readableColor(), max_width = self.width - scale(10) } }
     if self.subtitle then items[#items + 1] = TextWidget:new{ text = self.subtitle, face = Font:getFace("smallinfofont", scale(8)), fgcolor = mutedColor(), max_width = self.width - scale(10) } end
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.floor(self.height * .28), background = self.shade or surfaceColor(), CenterContainer:new{ dimen = self.dimen, VerticalGroup:new(unpack(items)) } }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.floor(self.height * .28), background = self.shade or surfaceColor(), CenterContainer:new{ dimen = self.dimen, VerticalGroup:new{ unpack(items) } } }
     self.ges_events = { TapDReaderAction = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function Action:paintTo(bb, x, y)
@@ -535,7 +535,7 @@ end
 
 return {
     id = "dreader",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "DReader",
     subtitle = "A calm EPUB and HTML reader",
     symbol = "R",

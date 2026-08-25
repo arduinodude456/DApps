@@ -8,6 +8,6 @@ draw.lua | 1.2.0 | notes
 calc.lua | 1.0.0 | calculator
 video_player.lua | 1.0.2 | gallery
 bwr_video.lua | 1.0.0 | gallery
-dreader.lua | 1.0.1 | document
-calendar.lua | 1.0.0 | calendar
-rss_reader.lua | 1.0.0 | rss
+dreader.lua | 1.0.2 | document
+calendar.lua | 1.0.1 | calendar
+rss_reader.lua | 1.0.1 | rss

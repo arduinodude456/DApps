@@ -191,7 +191,7 @@ function Action:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     local children = { TextWidget:new{ text = self.title or "", face = smallFace(self.width), fgcolor = self.foreground or Blitbuffer.COLOR_BLACK, bold = true, max_width = self.width - 8 } }
     if self.subtitle then children[#children + 1] = TextWidget:new{ text = self.subtitle, face = smallFace(self.width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = self.width - 8 } end
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .23)), background = self.background or Blitbuffer.COLOR_LIGHT_GRAY, CenterContainer:new{ dimen = self.dimen, VerticalGroup:new(unpack(children)) } }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .23)), background = self.background or Blitbuffer.COLOR_LIGHT_GRAY, CenterContainer:new{ dimen = self.dimen, VerticalGroup:new{ unpack(children) } } }
     self.ges_events = { TapCalendarAction = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function Action:paintTo(bb, x, y) local range = self.ges_events.TapCalendarAction[1].range; range.x, range.y, range.w, range.h = x, y, self.width, self.height; return InputContainer.paintTo(self, bb, x, y) end
@@ -307,7 +307,7 @@ end
 
 return {
     id = "calendar",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Calendar",
     subtitle = "Local monthly planner",
     symbol = "C",
