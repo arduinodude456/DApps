@@ -46,7 +46,7 @@ local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
-    "appdock_theme.lua",
+    "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua",
 }
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -453,7 +453,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.0.3",
+    version = "1.0.4",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
