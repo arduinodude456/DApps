@@ -205,6 +205,7 @@ local Canvas = InputContainer:extend{
     _origin_x = 0,
     _origin_y = 0,
     _active_stroke = nil,
+    _last_refresh_region = nil,
     _stylus_active = false,
     _stylus_id = nil,
 }
@@ -237,21 +238,41 @@ function Canvas:_toolFor(input, slot)
     return self.document.tool or "pen"
 end
 
+function Canvas:_refreshRegion(first, second, tool)
+    second = second or first
+    local width = clamp(tonumber(self.document.width) or 3, 1, 14)
+    if tool == "highlighter" then width = width * 1.7 end
+    local padding = math.max(2, math.ceil(width / 2) + 2)
+    local left = math.floor(self._origin_x + math.min(first.x, second.x) - padding)
+    local top = math.floor(self._origin_y + math.min(first.y, second.y) - padding)
+    local right = math.ceil(self._origin_x + math.max(first.x, second.x) + padding)
+    local bottom = math.ceil(self._origin_y + math.max(first.y, second.y) + padding)
+    return Geom:new{ x = left, y = top, w = math.max(1, right - left + 1), h = math.max(1, bottom - top + 1) }
+end
+
 function Canvas:_begin(point, tool)
     local stroke = { tool = tool or self.document.tool or "pen", color = self.document.color, width = self.document.width, points = { point } }
     self._active_stroke = stroke
     table.insert(self:page().strokes, stroke)
+    self._last_refresh_region = self:_refreshRegion(point, point, stroke.tool)
+    return self._last_refresh_region
 end
 
 function Canvas:_extend(point, tool)
-    if not self._active_stroke then self:_begin(point, tool) else table.insert(self._active_stroke.points, point) end
+    if not self._active_stroke then return self:_begin(point, tool) end
+    local previous = self._active_stroke.points[#self._active_stroke.points]
+    table.insert(self._active_stroke.points, point)
+    self._last_refresh_region = self:_refreshRegion(previous, point, self._active_stroke.tool)
+    return self._last_refresh_region
 end
 
-function Canvas:_finish()
+function Canvas:_finish(region)
     if self._active_stroke then
         if #self._active_stroke.points == 1 then table.insert(self._active_stroke.points, self._active_stroke.points[1]) end
+        region = region or self._last_refresh_region
         self._active_stroke = nil
-        if self.on_changed then self.on_changed(true) end
+        self._last_refresh_region = nil
+        if self.on_changed then self.on_changed(true, region) end
     end
 end
 
@@ -287,21 +308,21 @@ function Canvas:paintTo(bb, x, y)
 end
 
 function Canvas:onPanDrawPan(_, ges)
-    self:_extend(self:_point(ges.pos or ges), self.document.tool)
-    if self.on_changed then self.on_changed(false) end
+    local region = self:_extend(self:_point(ges.pos or ges), self.document.tool)
+    if self.on_changed then self.on_changed(false, region) end
     return true
 end
 
 function Canvas:onPanReleaseDrawPanRelease(_, ges)
-    self:_extend(self:_point(ges.pos or ges), self.document.tool)
-    self:_finish()
+    local region = self:_extend(self:_point(ges.pos or ges), self.document.tool)
+    self:_finish(region)
     return true
 end
 
 function Canvas:onTapDrawTap(_, ges)
     local point = self:_point(ges.pos or ges)
-    self:_begin(point, self.document.tool)
-    self:_finish()
+    local region = self:_begin(point, self.document.tool)
+    self:_finish(region)
     return true
 end
 
@@ -310,10 +331,10 @@ function Canvas:onStylus(input, slot)
     if not x or not y or x < self._origin_x or y < self._origin_y or x > self._origin_x + self.width or y > self._origin_y + self.height then return false end
     if self._stylus_active and self._stylus_id and slot.id and slot.id ~= self._stylus_id then self:finishStylus() end
     local point = self:_point{ x = x, y = y, pressure = slot.pressure or slot.p }
-    self:_extend(point, self:_toolFor(input, slot))
+    local region = self:_extend(point, self:_toolFor(input, slot))
     self._stylus_active = true
     self._stylus_id = slot.id
-    if self.on_changed then self.on_changed(false) end
+    if self.on_changed then self.on_changed(false, region) end
     return true
 end
 
@@ -469,12 +490,14 @@ return {
         local canvas_y = slider_y + slider_h + scale(8)
         local canvas_h = math.max(scale(72), height - canvas_y - scale(22))
         local canvas_w = width - 2 * margin
-        local canvas = Canvas:new{ document = document, width = canvas_w, height = canvas_h, on_changed = function(final)
-            if final then
-                state.status = _("Stroke added")
-                context.requestRefresh("ui")
-            else
-                context.requestRefresh("fast")
+        local canvas = Canvas:new{ document = document, width = canvas_w, height = canvas_h, on_changed = function(final, region)
+            if final then state.status = _("Stroke added") end
+            -- Every sampled drawing movement redraws only its changed canvas area
+            -- with KOReader's E-Ink fast mode. This must never trigger a full refresh.
+            if context.requestRefresh then
+                context.requestRefresh("fast", region)
+            elseif context.requestRebuild then
+                context.requestRebuild("ui")
             end
         end }
         state.canvas = canvas
@@ -521,5 +544,6 @@ return {
         saveDocument = saveDocument,
         loadDocument = loadDocument,
         safeName = safeName,
+        Canvas = Canvas,
     },
 }
