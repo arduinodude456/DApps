@@ -43,6 +43,14 @@ Store-Widgets sind kleine, passive Homescreen-Karten. Sie werden mit dem vierten
 
 Das Beispiel [`quote_widget.lua`](quote_widget.lua) enthält drei lokale Zitate und zeigt jeweils eines auf einer kontrastreichen Karte. Es verwendet keinen Netzwerkdienst und speichert keine persönlichen Daten.
 
+## Weather Widget
+
+[`weather_widget.lua`](weather_widget.lua) zeigt aktuelle Wetterbedingungen von der öffentlichen [Open-Meteo Forecast API](https://open-meteo.com/en/docs). Die Beispielkonfiguration verwendet Berlin; Entwickler oder Nutzer können Name, Breitengrad und Längengrad in der Datei vor der Installation anpassen. Das Widget fragt nur aktuelle Temperatur, Luftfeuchtigkeit, Wettercode, Windgeschwindigkeit und Tag/Nacht-Status ab und zeigt die Daten in einer kontrastreichen Homescreen-Karte.
+
+Der Abruf erfolgt ausschließlich über HTTPS, ist auf 96 KiB Antwortgröße sowie kurze Netzwerkzeiten begrenzt und validiert die JSON-Struktur vor der Anzeige. Der letzte erfolgreiche Stand bleibt im Widget-Zustand erhalten; vor Ablauf von 180 Sekunden wird kein neuer Abruf ausgelöst. Bei einem Fehler bleibt der letzte Wert sichtbar oder es erscheint eine verständliche Offline-Meldung. Das Widget führt keine Standortberechtigung, automatische Ortung, Hintergrundschleife oder aktive Webinhalte aus.
+
+> **Open-Meteo-Hinweis:** Die kostenlose Open-Meteo-API ist laut [Nutzungsbedingungen](https://open-meteo.com/en/terms) für nicht-kommerzielle Nutzung vorgesehen und unterliegt dort genannten Aufrufgrenzen. Das Widget enthält deshalb eine sichtbare Open-Meteo-Kennung und ist für persönliche AppDock-Nutzung ausgelegt.
+
 ## DockUpdate
 
 [`dock_update.lua`](dock_update.lua) ist die **manuelle Kernaktualisierung** für AppDock. Mit **Check updates** fragt sie ausschließlich den neuesten stabilen Release von [`arduinodude456/appdock.koplugin`](https://github.com/arduinodude456/appdock.koplugin) über HTTPS ab. Die Karte zeigt installierte und veröffentlichte Version, eine Zusammenfassung der Release Notes sowie den Updatestatus; **Release Notes** öffnet den vollständigen, lesbaren Release-Text.
