@@ -68,8 +68,9 @@ end
 
 local html_path = root .. "/sample.html"
 local html = assert(io.open(html_path, "wb"))
-html:write([[<html><head><title>Sample HTML</title><style>body{font-family:MissingFont;font-size:12px;color:#202020} h1{font-size:24px}</style></head><body><h1>Start</h1><img src="cover.png" alt="Cover"><p>Hello &amp; welcome.</p><h2>Next</h2><p>More words for pagination.</p><script>alert(1)</script></body></html>]])
+html:write([[<html><head><title>Sample HTML</title><style>body{font-family:MissingFont;font-size:12px;color:#202020} h1{font-size:24px}</style></head><body><h1>Start</h1><img src="cover.png" alt="Cover"><p>Hello &amp; welcome.</p><h2>Next</h2><img src="back.png" alt="Back"><p>More words for pagination.</p><script>alert(1)</script></body></html>]])
 local cover = assert(io.open(root .. "/cover.png", "wb")); cover:write("not-a-real-image"); cover:close()
+local back = assert(io.open(root .. "/back.png", "wb")); back:write("not-a-real-image"); back:close()
 html:close()
 local epub_path = root .. "/fixture.epub"
 local epub = assert(io.open(epub_path, "wb")); epub:write("fixture"); epub:close()
@@ -77,14 +78,15 @@ local bad_epub_path = root .. "/bad.epub"
 local bad_epub = assert(io.open(bad_epub_path, "wb")); bad_epub:write("broken"); bad_epub:close()
 
 local app = dofile("/home/ubuntu/dapps-store-repo/dreader.lua")
-assert(app.id == "dreader" and app.version == "2.0.0" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
+assert(app.id == "dreader" and app.version == "2.0.2" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
 local context = { dimen = { w = 600, h = 760 }, requestRebuild = function() end, requestRefresh = function() end }
 local html_instance = {}
 assert(app.openFile(html_instance, html_path), "DReader must open supported HTML")
 assert(html_instance.dreader.book.title == "Sample HTML" and #html_instance.dreader.book.chapters == 2, "DReader must split HTML headings into selectable chapters; got " .. #html_instance.dreader.book.chapters .. " first=" .. tostring(html_instance.dreader.book.chapters[1] and html_instance.dreader.book.chapters[1].title))
 assert(html_instance.dreader.book.html_chapters[2].title == "Next" and html_instance.dreader.book.html_chapters[2].text:find("More words", 1, true), "DReader must retain the correct text for each HTML chapter")
 assert(html_instance.dreader.book.style.family == "MissingFont" and html_instance.dreader.book.style.base_font == 12 and html_instance.dreader.book.style.heading_ratio == 2, "DReader must parse safe HTML/CSS style metadata")
-assert(html_instance.dreader.book.image_cache[1][1] == root .. "/cover.png", "DReader must resolve local HTML image paths")
+assert(html_instance.dreader.book.image_cache[1][1] == root .. "/cover.png", "DReader must resolve the first local HTML image path")
+assert(html_instance.dreader.book.image_cache[2][1] == root .. "/back.png", "DReader must resolve a later chapter image instead of only the first document image")
 assert(not html_instance.dreader.book.html_chapters[1].text:find("alert", 1, true), "DReader must remove scripts from HTML text")
 local html_pane = app.buildPane(html_instance, context)
 assert(html_pane and html_pane.dimen and html_pane.dimen.w == 600, "DReader must build a reader pane using only context dimensions")

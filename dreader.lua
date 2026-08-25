@@ -177,6 +177,22 @@ function HTML.style(source)
     return { family = family and trim(family:gsub("^[\"']", ""):gsub("[\"']$", "")) or nil, base_font = size, color = color, heading_ratio = (heading_size and size and heading_size / size) or 1.35 }
 end
 
+function HTML.imageGroups(source)
+    local groups, first_heading = {}, (source or ""):find("<[Hh][1-3][^>]*>")
+    if not first_heading then return { source or "" } end
+    local prefix = source:sub(1, first_heading - 1)
+    if trim(HTML.text(prefix)) ~= "" then groups[#groups + 1] = prefix end
+    local cursor = first_heading
+    while cursor do
+        local close_start, close_end = source:find("</[Hh][1-3]>", cursor)
+        if not close_end then break end
+        local next_heading = source:find("<[Hh][1-3][^>]*>", close_end + 1)
+        groups[#groups + 1] = source:sub(cursor, next_heading and next_heading - 1 or #source)
+        cursor = next_heading
+    end
+    return #groups > 0 and groups or { source or "" }
+end
+
 function HTML.images(source)
     local images = {}
     for fragment in (source or ""):gmatch("<[Ii][Mm][Gg][^>]*>") do
@@ -192,6 +208,16 @@ end
 
 function HTML.text(source)
     source = source or ""
+    local image_index = 0
+    source = source:gsub("<[Ii][Mm][Gg][^>]*>", function(fragment)
+        local item = attributes(fragment)
+        local relative = item.src
+        if relative and not relative:match("^[%a]+:") and not relative:match("^/") then
+            image_index = image_index + 1
+            return "\n\n@@DREADER_IMAGE_" .. image_index .. "@@\n\n"
+        end
+        return ""
+    end)
     source = source:gsub("<!%-%-.-%-%->", "")
     source = source:gsub("<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*>.-</[Ss][Cc][Rr][Ii][Pp][Tt]>", "")
     source = source:gsub("<[Ss][Tt][Yy][Ll][Ee][^>]*>.-</[Ss][Tt][Yy][Ll][Ee]>", "")
@@ -373,15 +399,18 @@ function Book.open(path)
     local title = HTML.title(source, basename(path):gsub("%.[^.]+$", ""))
     local html_chapters = HTML.sections(source, title)
     if #html_chapters == 0 or trim(html_chapters[1].text or "") == "" then return nil, _("The HTML document has no readable text.") end
-    local html_images = {}
-    for index, relative in ipairs(HTML.images(source)) do
-        if index > MAX_CHAPTER_IMAGES then break end
-        local target = resolveLocalFile(dirname(path), relative)
-        if target and lfs.attributes(target) and lfs.attributes(target).mode == "file" then html_images[#html_images + 1] = target end
+    local image_cache = {}
+    for chapter_index, group in ipairs(HTML.imageGroups(source)) do
+        image_cache[chapter_index] = {}
+        for image_index, relative in ipairs(HTML.images(group)) do
+            if image_index > MAX_CHAPTER_IMAGES then break end
+            local target = resolveLocalFile(dirname(path), relative)
+            if target and lfs.attributes(target) and lfs.attributes(target).mode == "file" then image_cache[chapter_index][#image_cache[chapter_index] + 1] = target end
+        end
     end
     local chapters = {}
     for index, section in ipairs(html_chapters) do chapters[index] = { title = section.title, start = index } end
-    return { format = "html", path = path, title = title, chapters = chapters, html_chapters = html_chapters, image_cache = { [1] = html_images }, cache = {}, cache_order = {}, style = HTML.style(source) }
+    return { format = "html", path = path, title = title, chapters = chapters, html_chapters = html_chapters, image_cache = image_cache, cache = {}, cache_order = {}, style = HTML.style(source) }
 end
 
 function Book.chapterImages(book, index)
@@ -627,11 +656,21 @@ local function readerPane(instance, context)
     local content_h = state.controls and height - content_y - bottom_h - scale(7) or height - content_y - scale(6)
     local chapter = state.book.chapters[state.chapter]
     local page_text = state.pages and state.pages[state.page] or ""
-    local image_height = state.images and state.images[1] and math.min(scale(130), math.floor(content_h * 0.30)) or 0
-    local text_y = content_y + (image_height > 0 and image_height + scale(8) or 0)
+    local page_images = {}
+    for image_index in page_text:gmatch("@@DREADER_IMAGE_(%d+)@@") do
+        image_index = tonumber(image_index)
+        if image_index and state.images and state.images[image_index] and #page_images < MAX_CHAPTER_IMAGES then page_images[#page_images + 1] = state.images[image_index] end
+    end
+    page_text = page_text:gsub("@@DREADER_IMAGE_%d+@@", "")
+    local image_height = #page_images > 0 and math.min(scale(116), math.floor(content_h * 0.24)) or 0
+    local image_gap = #page_images > 0 and scale(5) or 0
+    local image_total = #page_images * image_height + math.max(0, #page_images - 1) * image_gap
+    local text_y = content_y + (image_total > 0 and image_total + scale(8) or 0)
     local text_h = math.max(scale(60), content_h - (text_y - content_y))
     local elements = { background(width, height) }
-    if image_height > 0 then elements[#elements + 1] = ImageWidget:new{ file = state.images[1], width = width - 2 * scale(state.store.settings.padding), height = image_height, scale_factor = 0, overlap_offset = { scale(state.store.settings.padding), content_y } } end
+    for image_index, page_image in ipairs(page_images) do
+        elements[#elements + 1] = ImageWidget:new{ file = page_image, width = width - 2 * scale(state.store.settings.padding), height = image_height, scale_factor = 0, overlap_offset = { scale(state.store.settings.padding), content_y + (image_index - 1) * (image_height + image_gap) } }
+    end
     elements[#elements + 1] =         TextBoxWidget:new{ text = page_text, face = safeFace(state.book.style and state.book.style.family, scale(state.store.settings.font)), width = width - 2 * scale(state.store.settings.padding), height = text_h, line_height = 0.32, alignment = "left", fgcolor = cssColor(state.book.style and state.book.style.color), overlap_offset = { scale(state.store.settings.padding), text_y } }
     if state.controls then
         local button_w = math.floor((width - 2 * margin - 5 * scale(4)) / 6)
@@ -698,7 +737,7 @@ end
 
 return {
     id = "dreader",
-    version = "2.0.1",
+    version = "2.0.2",
     title = "DReader",
     subtitle = "A calm EPUB and HTML reader",
     symbol = "R",
