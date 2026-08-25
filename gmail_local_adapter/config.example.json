@@ -1,0 +1,17 @@
+{
+  "clientId": "YOUR_GOOGLE_DESKTOP_CLIENT_ID.apps.googleusercontent.com",
+  "clientSecret": "",
+  "stateFile": "./gmail-adapter-state.json",
+  "adapterToken": "GENERATE_A_LONG_RANDOM_TOKEN_WITH_npm_run_token",
+  "tls": {
+    "keyPath": "/absolute/path/to/adapter-key.pem",
+    "certPath": "/absolute/path/to/adapter-cert.pem"
+  },
+  "listen": {
+    "host": "0.0.0.0",
+    "port": 8443
+  },
+  "allowedClientIPs": [
+    "192.168.1.42"
+  ]
+}
