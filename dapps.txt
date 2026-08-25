@@ -17,3 +17,6 @@ status_message.lua | 1.0.0 | help
 gmail_notifications.lua | 1.0.0 | mail
 quote_widget.lua | 1.0.0 | help | widget
 weather_widget.lua | 1.0.1 | weather | widget
+reading_stats_widget.lua | 1.0.0 | reading | widget
+analog_clock_widget.lua | 1.0.0 | analog_clock | widget
+calendar_widget.lua | 1.0.0 | calendar | widget
