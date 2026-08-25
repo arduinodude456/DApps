@@ -217,12 +217,12 @@ function VideoCanvas:refreshFast()
     return true
 end
 
-local Player = {}
-Player.__index = Player
+local VideoSession = {}
+VideoSession.__index = VideoSession
 
-function Player.new(video_path, audio_path, on_status)
+function VideoSession.new(video_path, audio_path, on_status)
     local handle, open_err = io.open(video_path, "rb")
-    local self = setmetatable({ video_path = video_path, audio_path = audio_path, handle = handle, open_error = open_err, frame_bb = nil, frame_index = -1, paused = true, closed = false, position = 0, anchor_wall = nil, anchor_position = 0, canvas = nil, on_status = on_status }, Player)
+    local self = setmetatable({ video_path = video_path, audio_path = audio_path, handle = handle, open_error = open_err, frame_bb = nil, frame_index = -1, paused = true, closed = false, position = 0, anchor_wall = nil, anchor_position = 0, canvas = nil, on_status = on_status }, VideoSession)
     if not handle then self.open_error = _("BWR1 video file was not found."); return self end
     self.header, self.open_error = parseHeader(handle)
     if not self.header then handle:close(); self.handle = nil; return self end
@@ -234,26 +234,26 @@ function Player.new(video_path, audio_path, on_status)
     return self
 end
 
-function Player:setCanvas(canvas)
+function VideoSession:setCanvas(canvas)
     self.canvas = canvas
     if canvas then canvas.player = self end
 end
-function Player:_setStatus(message) if self.on_status then self.on_status(message) end end
-function Player:_audioPosition()
+function VideoSession:_setStatus(message) if self.on_status then self.on_status(message) end end
+function VideoSession:_audioPosition()
     if not self.anchor_wall then return self.position end
     return clamp(self.anchor_position + math.max(0, clockSeconds() - self.anchor_wall), 0, self.duration)
 end
-function Player:_markPosition(position)
+function VideoSession:_markPosition(position)
     self.position, self.anchor_position, self.anchor_wall = position, position, clockSeconds()
 end
-function Player:_readFrame(index)
+function VideoSession:_readFrame(index)
     if not self.handle or index < 0 or index >= self.header.frames then return nil, _("Video frame is outside the file.") end
     self.handle:seek("set", HEADER_BYTES + index * self.header.frame_bytes)
     local packed = self.handle:read(self.header.frame_bytes)
     if not packed or #packed ~= self.header.frame_bytes then return nil, _("Could not read a complete BWR1 frame.") end
     return packed
 end
-function Player:_loadFrame(index)
+function VideoSession:_loadFrame(index)
     local packed, err = self:_readFrame(index)
     if not packed then return nil, err end
     local bb = Blitbuffer.new(self.header.width, self.header.height, Blitbuffer.TYPE_BB8)
@@ -268,7 +268,7 @@ function Player:_loadFrame(index)
     self.frame_bb, self.frame_index = bb, index
     return true
 end
-function Player:_show(position)
+function VideoSession:_show(position)
     local index = clamp(math.floor(position * self.fps), 0, self.header.frames - 1)
     if index ~= self.frame_index or not self.frame_bb then
         local ok, err = self:_loadFrame(index)
@@ -277,7 +277,7 @@ function Player:_show(position)
     if self.canvas then self.canvas:refreshFast() end
     return true
 end
-function Player:_tick()
+function VideoSession:_tick()
     if self.closed or self.paused then return end
     local position = self:_audioPosition()
     if position >= self.duration then
@@ -287,7 +287,7 @@ function Player:_tick()
     self:_show(position)
     UIManager:scheduleIn(self.tick_period, self._tick)
 end
-function Player:start()
+function VideoSession:start()
     if self.open_error then return nil, self.open_error end
     if self.audio then
         local ok, err = self.audio:startFrom(self.position)
@@ -303,18 +303,18 @@ function Player:start()
     UIManager:unschedule(self._tick); UIManager:scheduleIn(self.tick_period, self._tick)
     return true
 end
-function Player:pause()
+function VideoSession:pause()
     if self.paused then return end
     self.position = self:_audioPosition()
     if self.audio then self.audio:pause() end
     self.anchor_wall, self.paused = nil, true
     UIManager:unschedule(self._tick)
 end
-function Player:toggle()
+function VideoSession:toggle()
     if self.paused then return self:start() end
     self:pause(); self:_setStatus(_("Paused")); return true
 end
-function Player:seek(delta)
+function VideoSession:seek(delta)
     local target = clamp((self.paused and self.position or self:_audioPosition()) + delta, 0, self.duration)
     self.position = target
     if not self.paused then
@@ -326,14 +326,14 @@ function Player:seek(delta)
     end
     return self:_show(target)
 end
-function Player:stop()
+function VideoSession:stop()
     UIManager:unschedule(self._tick)
     if self.audio then self.audio:stop() end
     self.paused, self.position, self.anchor_wall = true, 0, nil
     if self.frame_bb then self.frame_bb:free(); self.frame_bb = nil end
     self.frame_index = -1
 end
-function Player:close()
+function VideoSession:close()
     if self.closed then return end
     self.closed = true; self:stop()
     if self.handle then self.handle:close(); self.handle = nil end
@@ -370,7 +370,7 @@ local function configureVideo(instance, context, path)
     local companion = path:gsub("%.bwr$", ".wav")
     local wav = io.open(companion, "rb")
     if wav then wav:close(); state.audio_path = companion else state.audio_path = nil end
-    state.player = Player.new(state.video_path, state.audio_path, function(message) state.status = message end)
+    state.player = VideoSession.new(state.video_path, state.audio_path, function(message) state.status = message end)
     if state.player.open_error then state.status = state.player.open_error else state.status = _("Loaded ") .. basename(path) .. (state.audio_path and _(" with companion WAV audio.") or _(" without companion audio.")) end
     context.requestRebuild("ui")
     return not state.player.open_error
@@ -388,7 +388,7 @@ local function editPath(instance, context, kind)
             local value = trim(dialog:getInputText()); UIManager:close(dialog)
             if is_video then configureVideo(instance, context, value) else
                 state.audio_path = value ~= "" and value or nil
-                if state.player then state.player:close(); state.player = Player.new(state.video_path, state.audio_path, function(message) state.status = message end) end
+                if state.player then state.player:close(); state.player = VideoSession.new(state.video_path, state.audio_path, function(message) state.status = message end) end
                 state.status = state.audio_path and (_("Audio selected: ") .. basename(state.audio_path)) or _("Silent video selected")
                 context.requestRebuild("ui")
             end
@@ -412,7 +412,7 @@ end
 
 return {
     id = "video_player",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "VideoPlayer",
     subtitle = "BWR1 E-Ink video with system and Bluetooth audio",
     symbol = "V",
@@ -425,7 +425,7 @@ return {
         local companion = path:gsub("%.bwr$", ".wav")
         local wav = io.open(companion, "rb")
         if wav then wav:close(); state.audio_path = companion end
-        state.player = Player.new(path, state.audio_path, function(message) state.status = message end)
+        state.player = VideoSession.new(path, state.audio_path, function(message) state.status = message end)
         state.status = state.player.open_error or (_("Loaded from AppDock Files: ") .. basename(path))
         return not state.player.open_error, state.player.open_error
     end,
@@ -464,7 +464,6 @@ return {
     end,
     test = {
         parseHeader = parseHeader,
-        Player = Player,
-        AudioPlayer = AudioPlayer,
+        session = VideoSession,
     },
 }

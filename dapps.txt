@@ -6,4 +6,4 @@ book_translator.lua | 1.1.0 | translate
 night_lua.lua | 1.0.0 | code
 draw.lua | 1.2.0 | notes
 calc.lua | 1.0.0 | calculator
-video_player.lua | 1.0.1 | gallery
+video_player.lua | 1.0.2 | gallery
