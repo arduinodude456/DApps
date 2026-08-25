@@ -149,24 +149,46 @@ local function sourceTreeFromJSON(body)
     if not raw then return nil, err end
     if raw.truncated then return nil, _("The release file list is incomplete.") end
     if type(raw.tree) ~= "table" then return nil, _("The release contains no readable file list.") end
+
+    -- Some repository layouts contain both the source files at the root and a
+    -- packaged appdock.koplugin/ mirror. Prefer the complete packaged mirror:
+    -- in AppDock 1.8.1 it contains the current _meta.lua while the old root
+    -- mirror does not. The destination is still the active plugin root.
+    local packaged = {}
+    for item_index, item in ipairs(raw.tree) do
+        if type(item) == "table" and item.type == "blob" and type(item.path) == "string" then
+            local inner = item.path:match("^appdock%.koplugin/(.+)$")
+            if inner and safeSourcePath(inner) then packaged[inner] = true end
+        end
+    end
+    local use_packaged = true
+    for required_index, required in ipairs(REQUIRED_FILES) do
+        if not packaged[required] then use_packaged = false; break end
+    end
+
     local entries, seen, total = {}, {}, 0
     for item_index, item in ipairs(raw.tree) do
         if type(item) == "table" and item.type == "blob" then
-            local path, size = item.path, tonumber(item.size)
-            -- GitHub releases may contain Markdown documentation such as README.md.
-            -- It is metadata for humans, not AppDock source, and must not enter the
-            -- downloader or Lua validator. Every other unexpected file remains rejected.
-            if type(path) == "string" and (path:match("%.md$") or path:match("^appdock%.koplugin/")) then
-                -- Documentation and the repository's packaged plugin mirror are
-                -- ignored; only the validated root-level source tree is installed.
-            else
-                if not safeSourcePath(path) then return nil, _("The release contains an unsupported file: ") .. tostring(path) end
+            local original_path, path, size = item.path, item.path, tonumber(item.size)
+            local source_path = original_path
+            if use_packaged then
+                path = type(original_path) == "string" and original_path:match("^appdock%.koplugin/(.+)$") or nil
+                if not path then
+                    -- Root files are an older repository mirror when a complete
+                    -- package directory exists; they must not override it.
+                    path = nil
+                else
+                    source_path = original_path
+                end
+            end
+            if path and not path:match("%.md$") then
+                if not safeSourcePath(path) then return nil, _("The release contains an unsupported file: ") .. tostring(original_path) end
                 if not size or size < 1 or size > MAX_FILE_BYTES then return nil, _("A release source file has an invalid size.") end
                 if seen[path] then return nil, _("The release contains duplicate source files.") end
                 seen[path] = true
                 total = total + size
                 if total > MAX_TOTAL_BYTES then return nil, _("The release source package is too large.") end
-                entries[#entries + 1] = { path = path, size = size }
+                entries[#entries + 1] = { path = path, source_path = source_path, size = size }
                 if #entries > MAX_SOURCE_FILES then return nil, _("The release contains too many source files.") end
             end
         end
@@ -220,7 +242,7 @@ local function stageRelease(release, entries, target)
     if not created then return nil, mkdir_err or _("The update staging folder could not be created.") end
 
     for entry_index, entry in ipairs(entries) do
-        local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. entry.path, MAX_FILE_BYTES, "text/plain,text/x-lua;q=0.9,*/*;q=0.1")
+        local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), MAX_FILE_BYTES, "text/plain,text/x-lua;q=0.9,*/*;q=0.1")
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
         if #source ~= entry.size then removeTree(stage); return nil, _("Downloaded source size does not match release metadata: ") .. entry.path end
         local chunk, syntax_err = loadstring(source, "@dockupdate/" .. entry.path)
@@ -431,7 +453,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.0.2",
+    version = "1.0.3",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
