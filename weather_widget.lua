@@ -62,6 +62,9 @@ local function fetchWeather()
     if not validLocation() then return nil, "Invalid weather location." end
     local ok_url, url = pcall(require, "socket.url")
     if not ok_url or not url then return nil, "URL support is unavailable." end
+    -- Decimal coordinates contain no characters that need URL escaping.
+    -- Keeping the values plain also avoids LuaSocket versions that encode
+    -- the decimal point differently on Kobo firmware.
     local latitude = formatNumber(LOCATION.latitude, 4)
     local longitude = formatNumber(LOCATION.longitude, 4)
     local endpoint = "https://api.open-meteo.com/v1/forecast?latitude=" .. url.escape(latitude)
@@ -101,6 +104,7 @@ local function fetchWeather()
         })
     end)
     socketutil:reset_timeout()
+    code = tonumber(code)
     if not ok_request or code ~= 200 then return nil, "Open-Meteo request failed." end
 
     local ok_json, JSON = pcall(require, "json")
@@ -154,7 +158,7 @@ end
 
 return {
     id = "weather_widget",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Weather Widget",
     subtitle = "Current conditions from Open-Meteo",
     symbol = "W",
