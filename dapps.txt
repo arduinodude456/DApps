@@ -1,7 +1,8 @@
 # AppDock DApp catalog
-# One unique relative .lua path per line. Lines beginning with # are comments.
-examples/quote_card.lua
-book_translator.lua
-night_lua.lua
-draw.lua
-calc.lua
+# One unique safe relative .lua path per line. Optional version: path.lua | 1.2.0
+# Lines beginning with # are comments.
+examples/quote_card.lua | 1.0.0
+book_translator.lua | 1.1.0
+night_lua.lua | 1.0.0
+draw.lua | 1.1.0
+calc.lua | 1.0.0

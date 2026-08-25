@@ -473,6 +473,7 @@ end
 
 return {
     id = "draw",
+    version = "1.1.0",
     title = "Draw",
     subtitle = "Multi-page E-Ink sketchbook",
     symbol = "D",

@@ -289,6 +289,7 @@ end
 
 return {
     id = "calc",
+    version = "1.0.0",
     title = "Calc",
     subtitle = "Scientific calculator and function plotter",
     symbol = "∑",

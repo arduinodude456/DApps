@@ -259,6 +259,7 @@ end
 
 return {
     id = "night_lua",
+    version = "1.0.0",
     title = "NightLua",
     subtitle = "Lua editor with E-Ink syntax preview",
     symbol = "L",

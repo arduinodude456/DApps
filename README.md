@@ -6,23 +6,24 @@ Dieses Repository ist der **vertrauenswürdige AppStore-Katalog** für die AppDo
 
 ## Katalog
 
-`dapps.txt` enthält **eine relative `.lua`-Datei pro Zeile**. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
+`dapps.txt` enthält **eine sichere relative `.lua`-Datei pro Zeile**. Optional kann nach einem senkrechten Strich eine numerische Version stehen. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
 
 ```text
 # Example catalog
-examples/quote_card.lua
-examples/reading_timer.lua
+examples/quote_card.lua | 1.0.0
+examples/reading_timer.lua | 1.2.0
 ```
 
-Die Reihenfolge im Katalog beeinflusst die Installationslogik nicht. Doppelte Einträge werden vom AppStore ignoriert.
+Der AppStore vergleicht numerische Versionen komponentenweise. Ist die Repository-Version höher als die installierte Version, wird **Update** statt einer Installationssperre angeboten. Doppelte Pfade werden weiterhin ignoriert; die Reihenfolge im Katalog beeinflusst die Installationslogik nicht.
 
 ## DApp-Modulformat
 
-Jede gelistete Lua-Datei muss eine Tabelle mit mindestens `id`, `title` und `buildPane` zurückgeben.
+Jede gelistete Lua-Datei muss eine Tabelle mit mindestens `id`, `title` und `buildPane` zurückgeben. Für aktualisierbare Store-DApps gehört außerdem eine numerische `version` wie `1.0.0` in die Tabelle.
 
 ```lua
 return {
     id = "quote_card",
+    version = "1.0.0",
     title = "Quote Card",
     subtitle = "A small offline card",
     symbol = "Q",

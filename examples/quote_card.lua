@@ -22,6 +22,7 @@ end
 
 return {
     id = "quote_card",
+    version = "1.0.0",
     title = "Quote Card",
     subtitle = "A small offline reading companion",
     symbol = "Q",

@@ -416,6 +416,7 @@ end
 
 return {
     id = "book_translator",
+    version = "1.1.0",
     title = "BookTranslator",
     subtitle = "Translate supported books with DeepL or LibreTranslate",
     symbol = "T",
