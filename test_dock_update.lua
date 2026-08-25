@@ -39,7 +39,7 @@ local required = {
     "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
-    "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua",
+    "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
 }
 local sources = {}
 for _, name in ipairs(required) do
@@ -128,7 +128,7 @@ for _, name in ipairs(required) do
 end
 
 local app = dofile("/home/ubuntu/dapps-store-repo/dock_update.lua")
-assert(app.id == "dock_update" and app.version == "1.0.4" and app.logo == "download", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.0.5" and app.logo == "download", "DockUpdate must satisfy the Store DApp contract")
 local context = {
     dimen = { w = 600, h = 760 },
     manager = { appdock = { path = active, version = "1.6.0" } },
@@ -163,7 +163,7 @@ local backup = active .. ".appdock-backup-1.6.0"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 15, "DockUpdate must fetch only release metadata, one tree, and the validated thirteen source files")
+assert(#log.requests == 16, "DockUpdate must fetch only release metadata, one tree, and the validated fourteen source files")
 
 -- A malformed tree must be rejected before confirmation and leave the active release intact.
 tree_mode = "bad"
