@@ -698,7 +698,7 @@ end
 
 return {
     id = "dreader",
-    version = "2.0.0",
+    version = "2.0.1",
     title = "DReader",
     subtitle = "A calm EPUB and HTML reader",
     symbol = "R",
