@@ -93,13 +93,13 @@ Ein Antippen eines Tages aktualisiert die Detailkarte. Über **+ Event** wird ei
 
 ## DReader
 
-[`dreader.lua`](dreader.lua) ist ein ruhiger, **stateful** AppDock-Reader für lokale EPUB-, HTML-, HTM- und XHTML-Dokumente. Er enthält eine eigene Bibliothek der zuletzt geöffneten Bücher, einen Kapitelbrowser, seitenorientiertes Blättern, ein-/ausblendbare Bedienelemente, Schriftstufen, anpassbare Ränder und einen persistent gespeicherten Lesefortschritt.
+[`dreader.lua`](dreader.lua) ist seit Version **2.0.0** ein ruhiger, **stateful** AppDock-Reader für lokale EPUB-, HTML-, HTM- und XHTML-Dokumente. Er enthält eine eigene Bibliothek der zuletzt geöffneten Bücher, einen Seitenbrowser ohne Vorschauen, seitenorientiertes Blättern, ein-/ausblendbare Bedienelemente, Schriftstufen, anpassbare Ränder, persistenten Lesefortschritt sowie Lesezeichen mit optionalen Anmerkungen.
 
-Bei EPUB nutzt DReader KOReaders Archivschnittstelle, um `META-INF/container.xml`, OPF, Manifest, Spine und – sofern vorhanden – EPUB-3-Navigation oder NCX auszulesen. Ein Buch wird nicht pauschal entpackt: Nur benötigte, begrenzte reguläre Archiveinträge werden in den Speicher gelesen. HTML/XHTML wird als Lesetext normalisiert; Skripte, Styles, eingebettete/interaktive Elemente und browserartige Ausführung bleiben ausgeschlossen.
+Bei EPUB nutzt DReader KOReaders Archivschnittstelle, um `META-INF/container.xml`, OPF, Manifest, Spine und – sofern vorhanden – EPUB-3-Navigation oder NCX auszulesen. Ein Buch wird nicht pauschal entpackt: Nur benötigte, begrenzte reguläre Archiveinträge werden in den Speicher gelesen. HTML/XHTML wird als Lesetext normalisiert; lokale Rasterbilder werden in einem begrenzten Bildbereich gerendert. Eingebettete CSS-Metadaten für Schriftfamilie, Grundgröße und Textfarbe werden berücksichtigt; unbekannte Schriften fallen sicher auf KOReaders Standardschrift zurück. Skripte, interaktive Elemente und browserartige Ausführung bleiben ausgeschlossen.
 
 > **Installation und Öffnen:** DReader benötigt **AppDock 1.7.0**. Nach der Installation zeigt die eigene **Files**-DApp bei `.epub`, `.html`, `.htm` und `.xhtml` den Eintrag **Open in DReader**. Alternativ kann ein absoluter lokaler Pfad in DReaders Bibliothek eingegeben werden.
 
-DReader ist bewusst kein vollständiger Webbrowser und kein Ersatz für KOReaders professionelle Satzengine: Komplexes CSS, JavaScript, DRM-EPUBs, interaktive Inhalte und eingebettete Medien werden nicht vollständig unterstützt. Die erste Version konzentriert sich stattdessen auf robustes, schnelles textorientiertes Lesen und verständliche Fehler bei beschädigten oder ungewöhnlich großen Büchern.
+DReader ist bewusst kein vollständiger Webbrowser und kein Ersatz für KOReaders professionelle Satzengine: komplexes CSS, JavaScript, DRM-EPUBs, SVG-/Vektor-only-Bilder, interaktive Inhalte und entfernte Ressourcen werden nicht vollständig unterstützt. Die 2.0.0 konzentriert sich auf robustes lokales Lesen, begrenztes Bild-Rendering, direkte Seitenauswahl und nachvollziehbare Lesezeichen. Lesezeichen werden als `[buchname].lz` neben der Quelldatei gespeichert.
 
 ## BWR Video
 
