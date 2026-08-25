@@ -4,5 +4,5 @@
 examples/quote_card.lua | 1.0.0 | help
 book_translator.lua | 1.1.0 | translate
 night_lua.lua | 1.0.0 | code
-draw.lua | 1.1.0 | notes
+draw.lua | 1.2.0 | notes
 calc.lua | 1.0.0 | calculator

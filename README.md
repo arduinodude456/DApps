@@ -58,7 +58,9 @@ Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^
 
 Die Werkzeugleiste bietet sieben Schnellfarben, eine Eingabe für eine sechsstellige eigene Farbe, einen Stiftdicken-Slider, Radierer, Seitenwechsel, neue Seiten sowie Speichern und Laden. Auf Geräten, auf denen KOReader Stylus-Slots bereitstellt, übernimmt Draw deren Stifteingaben exklusiv innerhalb der Canvas. Kobo-artige Radierer- und Markiertasten werden als Radierer beziehungsweise breiterer Marker übernommen; falls ein Druckwert mitgeliefert wird, beeinflusst er die Strichstärke. Ohne solche Hardware bleibt die Zeichenfläche vollständig per Touch-Pan und Tippen verwendbar.
 
-> **E-Ink-Hinweis:** Draw zeichnet während einer Bewegung nur die Canvas mit einem schnellen regionalen Update neu. Der finale Strich erhält danach einen regulären UI-Refresh. Stiftdruck und Seitentasten sind geräte- und KOReader-abhängig; sie werden daher auf dem Zielgerät getestet, nicht vorausgesetzt.
+Ab **Version 1.2.0** zeichnet Draw jeden erfassten Strichabschnitt unmittelbar in die Canvas und fordert anschließend ausschließlich für dessen kleine absolute Region einen KOReader-Refresh mit `fast` an. Vor dem nächsten Punkt gibt Draw dem E-Ink-Controller kurz Zeit, die regionale Übertragung zu starten. Dieser Pfad nutzt bewusst keinen Vollrefresh.
+
+> **E-Ink-Hinweis:** Draw zeichnet während einer Bewegung und beim Abschluss eines Strichs nur die Canvas mit einem schnellen regionalen Update neu. Stiftdruck und Seitentasten sind geräte- und KOReader-abhängig; sie werden daher auf dem Zielgerät getestet, nicht vorausgesetzt.
 
 ## NightLua
 

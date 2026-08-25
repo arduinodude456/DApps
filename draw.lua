@@ -266,13 +266,31 @@ function Canvas:_extend(point, tool)
     return self._last_refresh_region
 end
 
+function Canvas:_refreshDisplay(region)
+    if not region or not UIManager.widgetRepaint or not UIManager.setDirty then return false end
+    -- A Canvas is not a window-level widget. Repaint it explicitly into the
+    -- screen buffer first, then submit only its changed line segment to E-Ink.
+    UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
+    UIManager:setDirty(nil, "fast", region)
+    if UIManager.forceRePaint then UIManager:forceRePaint() end
+    -- Let an E-Ink controller start the regional transfer before the next
+    -- sampled point writes into the same framebuffer area.
+    if UIManager.yieldToEPDC then UIManager:yieldToEPDC() end
+    return true
+end
+
+function Canvas:_notifyChanged(final, region)
+    local directly_repainted = self:_refreshDisplay(region)
+    if self.on_changed then self.on_changed(final, region, directly_repainted) end
+end
+
 function Canvas:_finish(region)
     if self._active_stroke then
         if #self._active_stroke.points == 1 then table.insert(self._active_stroke.points, self._active_stroke.points[1]) end
         region = region or self._last_refresh_region
         self._active_stroke = nil
         self._last_refresh_region = nil
-        if self.on_changed then self.on_changed(true, region) end
+        self:_notifyChanged(true, region)
     end
 end
 
@@ -309,7 +327,7 @@ end
 
 function Canvas:onPanDrawPan(_, ges)
     local region = self:_extend(self:_point(ges.pos or ges), self.document.tool)
-    if self.on_changed then self.on_changed(false, region) end
+    self:_notifyChanged(false, region)
     return true
 end
 
@@ -334,7 +352,7 @@ function Canvas:onStylus(input, slot)
     local region = self:_extend(point, self:_toolFor(input, slot))
     self._stylus_active = true
     self._stylus_id = slot.id
-    if self.on_changed then self.on_changed(false, region) end
+    self:_notifyChanged(false, region)
     return true
 end
 
@@ -473,7 +491,7 @@ end
 
 return {
     id = "draw",
-    version = "1.1.0",
+    version = "1.2.0",
     title = "Draw",
     subtitle = "Multi-page E-Ink sketchbook",
     symbol = "D",
@@ -491,13 +509,13 @@ return {
         local canvas_y = slider_y + slider_h + scale(8)
         local canvas_h = math.max(scale(72), height - canvas_y - scale(22))
         local canvas_w = width - 2 * margin
-        local canvas = Canvas:new{ document = document, width = canvas_w, height = canvas_h, on_changed = function(final, region)
+        local canvas = Canvas:new{ document = document, width = canvas_w, height = canvas_h, on_changed = function(final, region, directly_repainted)
             if final then state.status = _("Stroke added") end
-            -- Every sampled drawing movement redraws only its changed canvas area
-            -- with KOReader's E-Ink fast mode. This must never trigger a full refresh.
-            if context.requestRefresh then
+            -- Modern KOReader explicitly repaints the Canvas before its fast
+            -- region update. Keep a host-level fallback for older runtimes only.
+            if not directly_repainted and context.requestRefresh then
                 context.requestRefresh("fast", region)
-            elseif context.requestRebuild then
+            elseif not directly_repainted and context.requestRebuild then
                 context.requestRebuild("ui")
             end
         end }
