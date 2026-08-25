@@ -13,5 +13,6 @@ calendar.lua | 1.0.1 | calendar
 rss_reader.lua | 1.0.1 | rss
 dock_update.lua | 1.0.3 | download
 2048.lua | 1.0.3 | other
+status_message.lua | 1.0.0 | help
 quote_widget.lua | 1.0.0 | help | widget
 weather_widget.lua | 1.0.1 | weather | widget
