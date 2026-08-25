@@ -172,22 +172,23 @@ local function translateRequest(config, text)
     return decoded.translatedText
 end
 
-local function translatePlainText(content, config)
+local function translatePlainText(content, config, request_fn)
     local output = {}
+    request_fn = request_fn or translateRequest
     for _, chunk in ipairs(splitText(content)) do
-        local translated, err = translateRequest(config, chunk)
+        local translated, err = request_fn(config, chunk)
         if not translated then return nil, err end
         output[#output + 1] = translated
     end
     return table.concat(output)
 end
 
-local function translateMarkup(content, config)
+local function translateMarkup(content, config, request_fn)
     local output, position, protected = {}, 1, nil
     while position <= #content do
         local tag_start = content:find("<", position, true)
         if not tag_start then
-            local translated, err = translatePlainText(content:sub(position), config)
+            local translated, err = translatePlainText(content:sub(position), config, request_fn)
             if not translated then return nil, err end
             output[#output + 1] = translated
             break
@@ -197,7 +198,7 @@ local function translateMarkup(content, config)
             if protected then
                 output[#output + 1] = text
             else
-                local translated, err = translatePlainText(text, config)
+                local translated, err = translatePlainText(text, config, request_fn)
                 if not translated then return nil, err end
                 output[#output + 1] = translated
             end
@@ -218,7 +219,7 @@ local function translateMarkup(content, config)
     return table.concat(output)
 end
 
-local function translateBook(path, config)
+local function translateBook(path, config, request_fn)
     local extension = fileExtension(path)
     if not SUPPORTED[extension] then
         return nil, _("Supported formats are TXT, HTML, XHTML and FB2."), nil
@@ -227,9 +228,9 @@ local function translateBook(path, config)
     if not source then return nil, read_err, nil end
     local translated, translate_err
     if extension == "txt" then
-        translated, translate_err = translatePlainText(source, config)
+        translated, translate_err = translatePlainText(source, config, request_fn)
     else
-        translated, translate_err = translateMarkup(source, config)
+        translated, translate_err = translateMarkup(source, config, request_fn)
     end
     if not translated then return nil, translate_err, nil end
     local destination = outputPath(path, config.target)
@@ -399,5 +400,7 @@ return {
         supported = SUPPORTED,
         outputPath = outputPath,
         splitText = splitText,
+        translateMarkup = translateMarkup,
+        translateBook = translateBook,
     },
 }
