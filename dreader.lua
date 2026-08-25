@@ -17,6 +17,7 @@ local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
+local ImageWidget = require("ui/widget/imagewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
@@ -39,6 +40,7 @@ local MAX_ARCHIVE_ENTRIES = 5000
 local MAX_ENTRY_BYTES = 3 * 1024 * 1024
 local MAX_SPINE_ITEMS = 1600
 local MAX_CHAPTER_CACHE = 5
+local MAX_CHAPTER_IMAGES = 3
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
@@ -48,6 +50,21 @@ local function dirname(path) return (path or ""):match("^(.*)/[^/]*$") or "" end
 local function empty(width, height) return CenterContainer:new{ dimen = Geom:new{ w = width, h = height }, HorizontalSpan:new{ width = 0 } } end
 local function readableColor() return Blitbuffer.COLOR_BLACK end
 local function mutedColor() return Blitbuffer.COLOR_DARK_GRAY end
+local function cssColor(value)
+    if type(value) ~= "string" then return readableColor() end
+    local hex = value:match("#([%da-fA-F][%da-fA-F][%da-fA-F][%da-fA-F][%da-fA-F][%da-fA-F])%s*$")
+    if not hex then return readableColor() end
+    local r, g, b = tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
+    if Blitbuffer.ColorRGB32 then return Blitbuffer.ColorRGB32(r, g, b, 0xFF) end
+    return readableColor()
+end
+local function safeFace(family, size)
+    if family and family ~= "" then
+        local ok, face = pcall(Font.getFace, Font, family, size)
+        if ok and face then return face end
+    end
+    return Font:getFace("cfont", size)
+end
 local function surfaceColor() return Blitbuffer.COLOR_LIGHT_GRAY end
 
 -- Store -----------------------------------------------------------------------
@@ -98,6 +115,27 @@ function Store.load()
     return data
 end
 
+local function sidecarPath(book_path)
+    local directory, name = dirname(book_path), basename(book_path):gsub("%.[^.]+$", "")
+    return directory .. "/" .. name .. ".lz"
+end
+
+local function loadSidecar(book_path)
+    local file = sidecarPath(book_path)
+    local chunk = loadfile(file)
+    if not chunk then return {} end
+    setfenv(chunk, {})
+    local ok, value = pcall(chunk)
+    return ok and type(value) == "table" and value or {}
+end
+
+local function saveSidecar(book_path, value)
+    local file, err = io.open(sidecarPath(book_path) .. ".tmp", "wb")
+    if not file then return nil, err end
+    file:write("return " .. serialize(value) .. "\n"); file:close()
+    return os.rename(sidecarPath(book_path) .. ".tmp", sidecarPath(book_path))
+end
+
 function Store.save(data)
     if not Store.ensure() then return nil, _("DReader could not create its storage folder.") end
     local temporary = STORE_FILE .. ".tmp"
@@ -113,6 +151,7 @@ end
 
 -- HTML ------------------------------------------------------------------------
 local HTML = {}
+local attributes
 
 local function decodeEntities(text)
     if ok_util and Util.htmlEntitiesToUtf8 then text = Util.htmlEntitiesToUtf8(text) end
@@ -124,6 +163,30 @@ function HTML.title(source, fallback)
     local found = source:match("<[Tt][Ii][Tt][Ll][Ee][^>]*>(.-)</[Tt][Ii][Tt][Ll][Ee]>")
     found = found and decodeEntities(found:gsub("<[^>]->", "")) or nil
     return trim(found or "") ~= "" and trim(found) or fallback
+end
+
+function HTML.style(source)
+    local body = (source or ""):match("<[Bb][Oo][Dd][Yy][^>]*[Ss][Tt][Yy][Ll][Ee]%s*=%s*[\"'](.-)[\"']") or ""
+    local css = (source or ""):match("<[Ss][Tt][Yy][Ll][Ee][^>]*>(.-)</[Ss][Tt][Yy][Ll][Ee]>") or ""
+    local rules = body .. ";" .. css
+    local family = rules:match("font%-family%s*:%s*([^;}{]+)")
+    local size = tonumber((rules:match("font%-size%s*:%s*(%d+)") or ""))
+    local color = rules:match("color%s*:%s*(#[%da-fA-F]+)")
+    local heading_size = tonumber((rules:match("h1[^}]-font%-size%s*:%s*(%d+)") or ""))
+    return { family = family and trim(family:gsub("^[\"']", ""):gsub("[\"']$", "")) or nil, base_font = size, color = color, heading_ratio = (heading_size and size and heading_size / size) or 1.35 }
+end
+
+function HTML.images(source)
+    local images = {}
+    for fragment in (source or ""):gmatch("<[Ii][Mm][Gg][^>]*>") do
+        local item = attributes(fragment)
+        local source_path = item.src
+        if source_path and not source_path:match("^[%a]+:") and not source_path:match("^/") then
+            local suffix = source_path:lower():match("%.([%w]+)$")
+            if suffix == "png" or suffix == "jpg" or suffix == "jpeg" or suffix == "gif" or suffix == "webp" then images[#images + 1] = source_path end
+        end
+    end
+    return images
 end
 
 function HTML.text(source)
@@ -178,7 +241,7 @@ end
 -- EPUB ------------------------------------------------------------------------
 local EPUB = {}
 
-local function attributes(fragment)
+attributes = function(fragment)
     local values = {}
     for name, quote, value in fragment:gmatch("([%w:_%-]+)%s*=%s*([\"'])(.-)%2") do values[name:lower()] = value end
     return values
@@ -272,7 +335,7 @@ function EPUB.open(path)
         if target and entries[target] and media:match("ncx") then readNav(target, true) end
     end
     for index, chapter in ipairs(spine) do chapter.title = title_by_path[chapter.path] or (_("Chapter ") .. index) end
-    return { format = "epub", path = path, title = title, chapters = spine, archive = archive, entries = entries, cache = {}, cache_order = {} }
+    return { format = "epub", path = path, title = title, chapters = spine, archive = archive, entries = entries, cache = {}, cache_order = {}, image_cache = {}, style = { heading_ratio = 1.35 } }
 end
 
 -- Book ------------------------------------------------------------------------
@@ -295,9 +358,44 @@ function Book.open(path)
     local title = HTML.title(source, basename(path):gsub("%.[^.]+$", ""))
     local html_chapters = HTML.sections(source, title)
     if #html_chapters == 0 or trim(html_chapters[1].text or "") == "" then return nil, _("The HTML document has no readable text.") end
+    local html_images = {}
+    for index, relative in ipairs(HTML.images(source)) do
+        if index > MAX_CHAPTER_IMAGES then break end
+        local target = resolvePath("", relative)
+        if target then html_images[#html_images + 1] = dirname(path) .. "/" .. target end
+    end
     local chapters = {}
     for index, section in ipairs(html_chapters) do chapters[index] = { title = section.title, start = index } end
-    return { format = "html", path = path, title = title, chapters = chapters, html_chapters = html_chapters, cache = {}, cache_order = {} }
+    return { format = "html", path = path, title = title, chapters = chapters, html_chapters = html_chapters, image_cache = { [1] = html_images }, cache = {}, cache_order = {}, style = HTML.style(source) }
+end
+
+function Book.chapterImages(book, index)
+    if book.format == "html" then return book.image_cache and book.image_cache[index] or {} end
+    if book.format ~= "epub" then return {} end
+    if book.image_cache[index] then return book.image_cache[index] end
+    local chapter = book.chapters[index]
+    if not chapter then return {} end
+    local source = readArchive(book.archive, book.entries, chapter.path)
+    if not source then return {} end
+    local paths, base = {}, dirname(chapter.path)
+    Store.ensure()
+    lfs.mkdir(STORE_DIR .. "/images")
+    for image_index, relative in ipairs(HTML.images(source)) do
+        if image_index > MAX_CHAPTER_IMAGES then break end
+        local target = resolvePath(base, relative)
+        local entry = target and book.entries[target]
+        if entry then
+            local suffix = target:lower():match("%.([%w]+)$") or "png"
+            local output = STORE_DIR .. "/images/" .. tostring(math.abs(string.byte(target, 1) or 1)) .. "_" .. tostring(index) .. "_" .. tostring(image_index) .. "." .. suffix
+            local bytes = readArchive(book.archive, book.entries, target)
+            if bytes then
+                local file = io.open(output, "wb")
+                if file then file:write(bytes); file:close(); paths[#paths + 1] = output end
+            end
+        end
+    end
+    book.image_cache[index] = paths
+    return paths
 end
 
 function Book.chapterText(book, index)
@@ -383,8 +481,11 @@ function TapZone:paintTo(bb, x, y) local range = self.ges_events.TapDReaderZone[
 function TapZone:onTapDReaderZone() if self.callback then self.callback() end; return true end
 
 local function stateFor(instance)
-    instance.dreader = instance.dreader or { store = Store.load(), book = nil, view = "library", chapter = 1, page = 1, pages = nil, layout_key = nil, controls = true, chapter_offset = 1, notice = nil }
-    return instance.dreader
+    instance.dreader = instance.dreader or { store = Store.load(), book = nil, view = "library", chapter = 1, page = 1, pages = nil, images = {}, layout_key = nil, controls = true, chapter_offset = 1, page_offset = 1, notice = nil, bookmarks = {} }
+    local state = instance.dreader
+    state.bookmarks = state.bookmarks or {}
+    state.page_offset = state.page_offset or 1
+    return state
 end
 
 local function saveProgress(state)
@@ -399,6 +500,22 @@ local function saveProgress(state)
     Store.save(state.store)
 end
 
+local function bookmarkKey(state)
+    return tostring(state.chapter) .. ":" .. tostring(state.page)
+end
+
+local function saveBookmark(state, note)
+    local key = bookmarkKey(state)
+    state.bookmarks[key] = { chapter = state.chapter, page = state.page, note = trim(note or ""), created = os.time() }
+    saveSidecar(state.book.path, state.bookmarks)
+end
+
+local function showBookmarkDialog(instance, context)
+    local state, dialog = stateFor(instance), nil
+    dialog = InputDialog:new{ title = _("Add bookmark"), input_hint = _("Optional annotation"), input = "", buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Save"), is_enter_default = true, callback = function() saveBookmark(state, dialog:getInputText()); UIManager:close(dialog); context.requestRebuild("ui") end } } } }
+    UIManager:show(dialog); dialog:onShowKeyboard()
+end
+
 local function closeBook(state)
     saveProgress(state); Book.close(state.book); state.book, state.pages, state.layout_key = nil, nil, nil
 end
@@ -409,9 +526,11 @@ local function formatChapter(state, context, keep_ratio)
     local text, err = Book.chapterText(state.book, state.chapter)
     if not text then state.notice = err; state.pages = { "" }; return end
     local content_h = math.max(scale(70), context.dimen.h - scale(104))
-    local key = table.concat({ context.dimen.w, content_h, state.store.settings.font, state.store.settings.padding, state.chapter }, ":")
+    local style = state.book.style or {}
+    local key = table.concat({ context.dimen.w, content_h, state.store.settings.font, state.store.settings.padding, state.chapter, style.family or "", style.base_font or "", style.color or "" }, ":")
     if key == state.layout_key and state.pages then return end
     state.pages = Paginator.make(text, context.dimen.w, content_h, scale(state.store.settings.font), scale(state.store.settings.padding))
+    state.images = Book.chapterImages(state.book, state.chapter)
     state.layout_key = key
     if keep_ratio then state.page = clamp(math.floor((old_page - 1) / math.max(1, old_count - 1) * math.max(0, #state.pages - 1) + 1), 1, #state.pages) else state.page = clamp(state.page, 1, #state.pages) end
 end
@@ -421,7 +540,8 @@ local function openBook(instance, context, path)
     closeBook(state)
     local book, err = Book.open(trim(path))
     if not book then state.notice = err; state.view = "library"; if context then context.requestRebuild("ui") end; return false, err end
-    state.book, state.view, state.notice, state.pages, state.layout_key = book, "reader", nil, nil, nil
+    state.book, state.view, state.notice, state.pages, state.images, state.layout_key = book, "reader", nil, nil, {}, nil
+    state.bookmarks = loadSidecar(book.path)
     local progress = state.store.progress[book.path] or {}
     state.chapter, state.page = clamp(tonumber(progress.chapter) or 1, 1, #book.chapters), math.max(1, tonumber(progress.page) or 1)
     if context then formatChapter(state, context); context.requestRebuild("ui") end
@@ -445,6 +565,9 @@ local function readerAction(instance, context, action)
     elseif action == "controls" then state.controls = not state.controls
     elseif action == "library" then state.view = "library"; saveProgress(state)
     elseif action == "chapters" then state.view, state.chapter_offset = "chapters", math.max(1, state.chapter - 3)
+    elseif action == "pages" then state.view, state.page_offset = "pages", math.max(1, state.page - 4)
+    elseif action == "bookmark" then showBookmarkDialog(instance, context)
+    elseif action == "bookmarks" then state.view = "bookmarks"
     elseif action == "settings" then state.view = "settings"
     elseif action == "font_minus" then state.store.settings.font = clamp(state.store.settings.font - 1, 12, 30); state.layout_key = nil; formatChapter(state, context, true); Store.save(state.store)
     elseif action == "font_plus" then state.store.settings.font = clamp(state.store.settings.font + 1, 12, 30); state.layout_key = nil; formatChapter(state, context, true); Store.save(state.store)
@@ -489,10 +612,15 @@ local function readerPane(instance, context)
     local content_h = state.controls and height - content_y - bottom_h - scale(7) or height - content_y - scale(6)
     local chapter = state.book.chapters[state.chapter]
     local page_text = state.pages and state.pages[state.page] or ""
-    local elements = { background(width, height), TextBoxWidget:new{ text = page_text, face = Font:getFace("cfont", scale(state.store.settings.font)), width = width - 2 * scale(state.store.settings.padding), height = content_h, line_height = 0.32, alignment = "left", fgcolor = readableColor(), overlap_offset = { scale(state.store.settings.padding), content_y } } }
+    local image_height = state.images and state.images[1] and math.min(scale(130), math.floor(content_h * 0.30)) or 0
+    local text_y = content_y + (image_height > 0 and image_height + scale(8) or 0)
+    local text_h = math.max(scale(60), content_h - (text_y - content_y))
+    local elements = { background(width, height) }
+    if image_height > 0 then elements[#elements + 1] = ImageWidget:new{ file = state.images[1], width = width - 2 * scale(state.store.settings.padding), height = image_height, scale_factor = 0, overlap_offset = { scale(state.store.settings.padding), content_y } } end
+    elements[#elements + 1] =         TextBoxWidget:new{ text = page_text, face = safeFace(state.book.style and state.book.style.family, scale(state.store.settings.font)), width = width - 2 * scale(state.store.settings.padding), height = text_h, line_height = 0.32, alignment = "left", fgcolor = cssColor(state.book.style and state.book.style.color), overlap_offset = { scale(state.store.settings.padding), text_y } }
     if state.controls then
-        local button_w = math.floor((width - 2 * margin - 4 * scale(4)) / 5)
-        local labels = { { _("Library"), "library" }, { _("Chapters"), "chapters" }, { _("A−"), "font_minus" }, { _("A+"), "font_plus" }, { _("Settings"), "settings" } }
+        local button_w = math.floor((width - 2 * margin - 5 * scale(4)) / 6)
+            local labels = { { _("Library"), "library" }, { _("Pages"), "pages" }, { _("Mark"), "bookmark" }, { _("A−"), "font_minus" }, { _("A+"), "font_plus" }, { _("Settings"), "settings" } }
         for index, item in ipairs(labels) do elements[#elements + 1] = Action:new{ title = item[1], width = button_w, height = top_h, callback = function() readerAction(instance, context, item[2]) end, overlap_offset = { margin + (index - 1) * (button_w + scale(4)), scale(3) } } end
         local nav_w = math.floor((width - 2 * margin - scale(8)) / 2)
         elements[#elements + 1] = Action:new{ title = _("‹ Previous"), width = nav_w, height = bottom_h, callback = function() readerAction(instance, context, "prev") end, overlap_offset = { margin, height - bottom_h - scale(3) } }
@@ -509,18 +637,38 @@ end
 local function chaptersPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
     local margin, row_h, gap, per_page = scale(10), scale(37), scale(5), 9
-    local elements = { background(width, height), TextWidget:new{ text = _("Contents"), face = Font:getFace("cfont", scale(19)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, scale(9) } }, Action:new{ title = _("Back to reader"), width = width - 2 * margin, height = scale(28), callback = function() state.view = "reader"; context.requestRebuild("ui") end, overlap_offset = { margin, scale(36) } } }
-    local start = clamp(state.chapter_offset, 1, math.max(1, #state.book.chapters))
+    local nav_w = math.floor((width - 2 * margin - gap) / 2)
+    local elements = { background(width, height), TextWidget:new{ text = _("Pages"), face = Font:getFace("cfont", scale(19)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, scale(9) } }, Action:new{ title = _("Back to reader"), width = nav_w, height = scale(28), callback = function() state.view = "reader"; context.requestRebuild("ui") end, overlap_offset = { margin, scale(36) } }, Action:new{ title = _("Bookmarks"), width = nav_w, height = scale(28), callback = function() state.view = "bookmarks"; context.requestRebuild("ui") end, overlap_offset = { margin + nav_w + gap, scale(36) } } }
+    local total_pages = #state.pages
+    local start = clamp(state.page_offset or 1, 1, math.max(1, total_pages))
     local y = scale(70)
-    for index = start, math.min(#state.book.chapters, start + per_page - 1) do
-        local chapter = state.book.chapters[index]
-        elements[#elements + 1] = Action:new{ title = (index == state.chapter and "• " or "") .. index .. "  " .. chapter.title, width = width - 2 * margin, height = row_h, shade = index == state.chapter and Blitbuffer.COLOR_GRAY_8 or surfaceColor(), callback = function() state.chapter, state.page, state.layout_key, state.view = index, 1, nil, "reader"; formatChapter(state, context); saveProgress(state); context.requestRebuild("ui") end, overlap_offset = { margin, y } }
+    for index = start, math.min(total_pages, start + per_page - 1) do
+        elements[#elements + 1] = Action:new{ title = (index == state.page and "• " or "") .. _("Page ") .. index, width = width - 2 * margin, height = row_h, shade = index == state.page and Blitbuffer.COLOR_GRAY_8 or surfaceColor(), callback = function() state.page, state.view = index, "reader"; saveProgress(state); context.requestRebuild("ui") end, overlap_offset = { margin, y } }
         y = y + row_h + gap
     end
-    if #state.book.chapters > per_page then
+    if total_pages > per_page then
         local nav_w = math.floor((width - 2 * margin - gap) / 2)
-        elements[#elements + 1] = Action:new{ title = _("Earlier"), width = nav_w, height = scale(28), callback = function() state.chapter_offset = clamp(start - per_page, 1, #state.book.chapters); context.requestRebuild("ui") end, overlap_offset = { margin, height - scale(32) } }
-        elements[#elements + 1] = Action:new{ title = _("Later"), width = nav_w, height = scale(28), callback = function() state.chapter_offset = clamp(start + per_page, 1, #state.book.chapters); context.requestRebuild("ui") end, overlap_offset = { margin + nav_w + gap, height - scale(32) } }
+            elements[#elements + 1] = Action:new{ title = _("Earlier"), width = nav_w, height = scale(28), callback = function() state.page_offset = clamp(start - per_page, 1, total_pages); context.requestRebuild("ui") end, overlap_offset = { margin, height - scale(32) } }
+        elements[#elements + 1] = Action:new{ title = _("Later"), width = nav_w, height = scale(28), callback = function() state.page_offset = clamp(start + per_page, 1, total_pages); context.requestRebuild("ui") end, overlap_offset = { margin + nav_w + gap, height - scale(32) } }
+    end
+    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
+end
+
+local function bookmarksPane(instance, context)
+    local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
+    local margin, row_h, gap = scale(10), scale(42), scale(6)
+    local entries = {}
+    for key, mark in pairs(state.bookmarks or {}) do entries[#entries + 1] = { key = key, mark = mark } end
+    table.sort(entries, function(left, right) return (left.mark.created or 0) > (right.mark.created or 0) end)
+    local elements = { background(width, height), TextWidget:new{ text = _("Bookmarks"), face = Font:getFace("cfont", scale(19)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, scale(9) } }, Action:new{ title = _("Back to pages"), width = width - 2 * margin, height = scale(28), callback = function() state.view = "pages"; context.requestRebuild("ui") end, overlap_offset = { margin, scale(36) } } }
+    local y = scale(70)
+    if #entries == 0 then elements[#elements + 1] = TextWidget:new{ text = _("No bookmarks yet."), face = Font:getFace("smallinfofont", scale(11)), fgcolor = mutedColor(), overlap_offset = { margin, y } } end
+    for index = 1, math.min(#entries, 10) do
+        local entry = entries[index]
+        local chapter = state.book.chapters[entry.mark.chapter]
+        local note = entry.mark.note ~= "" and (" · " .. entry.mark.note) or ""
+        elements[#elements + 1] = Action:new{ title = _("Page ") .. entry.mark.page .. " · " .. (chapter and chapter.title or _("Chapter")), subtitle = note, width = width - 2 * margin, height = row_h, callback = function() state.chapter, state.page, state.view, state.layout_key = entry.mark.chapter, entry.mark.page, "reader", nil; formatChapter(state, context); context.requestRebuild("ui") end, overlap_offset = { margin, y } }
+        y = y + row_h + gap
     end
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
@@ -535,7 +683,7 @@ end
 
 return {
     id = "dreader",
-    version = "1.0.2",
+    version = "2.0.0",
     title = "DReader",
     subtitle = "A calm EPUB and HTML reader",
     symbol = "R",
@@ -551,6 +699,8 @@ return {
         local state = stateFor(instance)
         if state.view == "reader" and state.book then return persistentPane(readerPane(instance, context), state) end
         if state.view == "chapters" and state.book then return persistentPane(chaptersPane(instance, context), state) end
+        if state.view == "pages" and state.book then return persistentPane(chaptersPane(instance, context), state) end
+        if state.view == "bookmarks" and state.book then return persistentPane(bookmarksPane(instance, context), state) end
         if state.view == "settings" and state.book then return persistentPane(settingsPane(instance, context), state) end
         return persistentPane(libraryPane(instance, context), state)
     end,
