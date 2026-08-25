@@ -412,7 +412,7 @@ end
 
 return {
     id = "video_player",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "VideoPlayer",
     subtitle = "BWR1 E-Ink video with system and Bluetooth audio",
     symbol = "V",
@@ -441,21 +441,20 @@ return {
         local button_w = math.max(scale(44), math.floor((view_w - 3 * gap) / 4))
         local canvas = VideoCanvas:new{ player = state.player, width = view_w, height = view_h }
         if state.player then state.player:setCanvas(canvas) end
-        local palette = require("appdock_theme").getPalette(context.manager.appdock)
         local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
         pane[1] = OverlapGroup:new{
             dimen = pane.dimen, allow_mirroring = false,
-            FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("VideoPlayer"), face = Font:getFace("cfont", scale(18)), bold = true, fgcolor = palette.on_surface, overlap_offset = { margin, scale(7) } },
-            TextWidget:new{ text = state.video_path and basename(state.video_path) or _("BWR1 pre-dithered local video"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = palette.on_variant, max_width = view_w, overlap_offset = { margin, scale(31) } },
-            PlayerButton:new{ title = _("Open video"), width = math.floor((view_w - gap) / 2), height = action_h, background = palette.secondary, foreground = palette.on_secondary, callback = function() editPath(instance, context, "video") end, overlap_offset = { margin, first_y } },
-            PlayerButton:new{ title = state.audio_path and _("Audio WAV") or _("Add audio"), width = math.floor((view_w - gap) / 2), height = action_h, background = palette.secondary, foreground = palette.on_secondary, callback = function() editPath(instance, context, "audio") end, overlap_offset = { margin + math.floor((view_w - gap) / 2) + gap, first_y } },
-            PlayerButton:new{ title = _("-5 s"), width = button_w, height = action_h, background = palette.surface, foreground = palette.on_surface, callback = function() act(instance, context, "back") end, overlap_offset = { margin, second_y } },
-            PlayerButton:new{ title = state.player and not state.player.paused and _("Pause") or _("Play"), width = button_w, height = action_h, background = palette.primary, foreground = palette.on_primary, callback = function() act(instance, context, "toggle") end, overlap_offset = { margin + button_w + gap, second_y } },
-            PlayerButton:new{ title = _("+5 s"), width = button_w, height = action_h, background = palette.surface, foreground = palette.on_surface, callback = function() act(instance, context, "forward") end, overlap_offset = { margin + (button_w + gap) * 2, second_y } },
-            PlayerButton:new{ title = _("Stop"), width = button_w, height = action_h, background = palette.tertiary, foreground = palette.on_tertiary, callback = function() act(instance, context, "stop") end, overlap_offset = { margin + (button_w + gap) * 3, second_y } },
+            FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
+            TextWidget:new{ text = _("VideoPlayer"), face = Font:getFace("cfont", scale(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, scale(7) } },
+            TextWidget:new{ text = state.video_path and basename(state.video_path) or _("BWR1 pre-dithered local video"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = view_w, overlap_offset = { margin, scale(31) } },
+            PlayerButton:new{ title = _("Open video"), width = math.floor((view_w - gap) / 2), height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() editPath(instance, context, "video") end, overlap_offset = { margin, first_y } },
+            PlayerButton:new{ title = state.audio_path and _("Audio WAV") or _("Add audio"), width = math.floor((view_w - gap) / 2), height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() editPath(instance, context, "audio") end, overlap_offset = { margin + math.floor((view_w - gap) / 2) + gap, first_y } },
+            PlayerButton:new{ title = _("-5 s"), width = button_w, height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "back") end, overlap_offset = { margin, second_y } },
+            PlayerButton:new{ title = state.player and not state.player.paused and _("Pause") or _("Play"), width = button_w, height = action_h, background = Blitbuffer.COLOR_GRAY_8, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "toggle") end, overlap_offset = { margin + button_w + gap, second_y } },
+            PlayerButton:new{ title = _("+5 s"), width = button_w, height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "forward") end, overlap_offset = { margin + (button_w + gap) * 2, second_y } },
+            PlayerButton:new{ title = _("Stop"), width = button_w, height = action_h, background = Blitbuffer.COLOR_GRAY_7, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "stop") end, overlap_offset = { margin + (button_w + gap) * 3, second_y } },
             canvas,
-            TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", scale(9)), fgcolor = palette.on_variant, max_width = view_w, overlap_offset = { margin, height - scale(16) } },
+            TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = view_w, overlap_offset = { margin, height - scale(16) } },
         }
         canvas.overlap_offset = { margin, view_y }
         function pane:onDeactivate()
