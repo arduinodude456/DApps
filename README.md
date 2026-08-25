@@ -52,6 +52,14 @@ Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^
 
 > **Sicherheitsgrenze:** Ausdruckslänge, Tokenanzahl, Namen, Funktionen und Wertebereich sind begrenzt. Unbekannte Namen, Lua-Syntax, Dateizugriffe, Anweisungen und Division durch null werden abgewiesen.
 
+## VideoPlayer
+
+[`video_player.lua`](video_player.lua) spielt lokale, für E-Ink vorbereitete **BWR1**-Dateien (`.bwr`) ab. BWR1 ist ein vorab gedithertes, 1-Bit-schwarzweißes Rohvideoformat: Die DApp decodiert bewusst **keine** komprimierten Container wie MP4, WebM oder MKV. Dadurch bleiben Framedaten, Speicherbedarf und regionale E-Ink-Updates vorhersehbar.
+
+Über **Open video** wird ein lokaler absoluter `.bwr`-Pfad gewählt. Eine gleichnamige `.wav`-Datei wird automatisch als Begleitton erkannt; über **Audio WAV** lässt sich ein anderer lokaler WAV-Pfad wählen oder die Wiedergabe stummschalten. Die Wiedergabeoberfläche bietet Play/Pause, ±5 Sekunden und Stop, behält die Dateiauswahl als DApp-Zustand und beendet aktive Prozesse beim Verlassen der DApp. Jedes neue Bild wird ausschließlich regional mit `fast` aktualisiert.
+
+> **Bluetooth-Audio:** VideoPlayer verwaltet keine Bluetooth-Paarung. Wenn ein Headset bereits im Betriebssystem verbunden ist und der gerätespezifische Audio-Backend-Pfad verfügbar ist, sendet die DApp den WAV-Ton an genau diese Systemaudio-Ausgabe. Auf Kobo kann dies abhängig von Firmware und Modell GStreamer mit MediaTek-Audioausgabe oder ALSA/aplay sein; andere Geräte benötigen ein verfügbares `aplay` oder `tinyplay`. Bluetooth-Verhalten wurde nicht auf konkreter Hardware getestet.
+
 ## Draw
 
 [`draw.lua`](draw.lua) ist ein mehrseitiges E-Ink-Skizzenbuch für AppDock. Es speichert Striche als bearbeitbare Vektorpunkte in einem eigenen lokalen `.draw.lua`-Format und kann gespeicherte Zeichnungen wieder laden. Jede Zeichnung besitzt mehrere Seiten mit den Hintergrundtypen **blank**, **lined**, **grid** oder einem optionalen Bildhintergrund über einen vom Nutzer eingegebenen PNG-, JPG-, GIF- oder WEBP-Pfad.
