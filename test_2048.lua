@@ -24,6 +24,7 @@ package.preload["device"] = function()
 end
 package.preload["ui/font"] = function() return { getFace = function(_, name, size) return { name = name, size = size } end } end
 package.preload["ui/widget/container/framecontainer"] = function() return generic() end
+package.preload["ui/widget/container/centercontainer"] = function() return generic() end
 package.preload["ui/geometry"] = function() return { new = function(_, a) return a end } end
 package.preload["ui/gesturerange"] = function() return { new = function(_, a) return a end } end
 package.preload["ui/widget/container/inputcontainer"] = function() return InputContainer end
@@ -38,8 +39,9 @@ package.preload["appdock_theme"] = function()
 end
 
 local app = dofile("2048.lua")
-assert(app.id == "game_2048" and app.version == "1.0.2" and app.logo == "other")
+assert(app.id == "game_2048" and app.version == "1.0.3" and app.logo == "other")
 local instance = {}
+local rebuilds = 0
 local context = { dimen = { w = 600, h = 900 }, manager = { appdock = {} }, requestRebuild = function(kind) assert(kind == "ui"); rebuilds = rebuilds + 1 end }
 local pane = app.buildPane(instance, context)
 assert(instance.game_2048.board[1] == 2 and instance.game_2048.board[6] == 2, "new games need two tiles")
@@ -58,6 +60,14 @@ local function scan(widget)
 end
 scan(pane)
 assert(found_theme_color, "tile colors must come from the active theme palette")
+local board = pane[1][4]
+assert(#board == 16, "the board must contain all sixteen tile widgets")
+assert(board[1].overlap_offset[1] == 0 and board[1].overlap_offset[2] == 0, "the first tile must start at the board origin")
+assert(board[2].overlap_offset[1] > 0 and board[5].overlap_offset[2] > 0, "each board tile must own its grid offset")
+local before_swipe = rebuilds
+pane:onSwipe2048(nil, { direction = "west" })
+assert(rebuilds == before_swipe + 1, "a west swipe must move the board through the standard move path")
+assert(pane:onSwipe2048(nil, { direction = "unknown" }) == false, "unknown swipes must not consume a move")
 instance.game_2048.over = true
 local before = rebuilds
 local pane_over = app.buildPane(instance, context)
