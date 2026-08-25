@@ -6,19 +6,20 @@ Dieses Repository ist der **vertrauenswürdige AppStore-Katalog** für die AppDo
 
 ## Katalog
 
-`dapps.txt` enthält **eine sichere relative `.lua`-Datei pro Zeile**. Nach dem Pfad können eine numerische Version und ein AppDock-Logo stehen. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
+`dapps.txt` enthält **eine sichere relative `.lua`-Datei pro Zeile**. Nach dem Pfad können eine numerische Version, ein AppDock-Logo und optional der Typ `widget` stehen. Ohne Typ ist der Eintrag eine DApp. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
 
 ```text
 # Example catalog
 examples/quote_card.lua | 1.0.0 | help
 examples/reading_timer.lua | 1.2.0 | timer
+quote_widget.lua | 1.0.0 | help | widget
 ```
 
 Der AppStore vergleicht numerische Versionen komponentenweise. Ist die Repository-Version höher als die installierte Version, wird **Update** statt einer Installationssperre angeboten. Die Logo-Spalte akzeptiert ausschließlich Namen aus AppDocks Logo-Bibliothek, etwa `calculator`, `code`, `help`, `notes`, `timer` oder `translate`; ungültige Logoangaben werden ignoriert. Doppelte Pfade werden weiterhin ignoriert; die Reihenfolge im Katalog beeinflusst die Installationslogik nicht.
 
 ## DApp-Modulformat
 
-Jede gelistete Lua-Datei muss eine Tabelle mit mindestens `id`, `title` und `buildPane` zurückgeben. Für aktualisierbare Store-DApps gehört außerdem eine numerische `version` wie `1.0.0` in die Tabelle.
+Jede gelistete DApp-Lua-Datei muss eine Tabelle mit mindestens `id`, `title` und `buildPane` zurückgeben. Ein Store-Widget verwendet stattdessen `buildWidget(instance, context)`. Für aktualisierbare Store-Einträge gehört außerdem eine numerische `version` wie `1.0.0` in die Tabelle.
 
 ```lua
 return {
@@ -35,6 +36,12 @@ return {
 ```
 
 Die `id` darf nur Buchstaben, Ziffern, `_` und `-` enthalten. Sie muss im gesamten AppDock-Katalog eindeutig sein. DApps müssen ihren gesamten sichtbaren Inhalt innerhalb von `context.dimen` aufbauen, damit sie mit Open Apps und Splitscreen funktionieren.
+
+## Store-Widgets
+
+Store-Widgets sind kleine, passive Homescreen-Karten. Sie werden mit dem vierten Manifestfeld `widget` gekennzeichnet und nach der Installation automatisch auf dem Homescreen aktiviert. Unter **Manage apps and widgets → Store widgets** können sie ausgeblendet werden. Der Widget-Vertrag erhält eine lokale `context.dimen`-Geometrie und muss ein KOReader-Widget zurückgeben; Netzwerkzugriffe, Hintergrundprozesse und aktive Inhalte gehören nicht in ein Widget. AppDock baut sichtbare Widgets bei Bedarf neu auf und aktualisiert sie E-Ink-gerecht im Drei-Minuten-Takt.
+
+Das Beispiel [`quote_widget.lua`](quote_widget.lua) enthält drei lokale Zitate und zeigt jeweils eines auf einer kontrastreichen Karte. Es verwendet keinen Netzwerkdienst und speichert keine persönlichen Daten.
 
 ## DockUpdate
 
