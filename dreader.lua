@@ -131,7 +131,7 @@ function HTML.text(source)
     source = source:gsub("<!%-%-.-%-%->", "")
     source = source:gsub("<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*>.-</[Ss][Cc][Rr][Ii][Pp][Tt]>", "")
     source = source:gsub("<[Ss][Tt][Yy][Ll][Ee][^>]*>.-</[Ss][Tt][Yy][Ll][Ee]>", "")
-    source = source:gsub("<[Hh][Ee][Aa][Dd][^>]*>.-</[Hh][Ee][Aa][Dd][Ee]>", "")
+    source = source:gsub("<[Hh][Ee][Aa][Dd][^>]*>.-</[Hh][Ee][Aa][Dd]>", "")
     source = source:gsub("<[Bb][Rr]%s*/?>", "\n")
     source = source:gsub("</?[Pp][^>]*>", "\n\n")
     source = source:gsub("</?[Dd][Ii][Vv][^>]*>", "\n")
@@ -151,6 +151,28 @@ function HTML.headings(source)
         if title ~= "" then result[#result + 1] = { level = tonumber(level), title = title } end
     end
     return result
+end
+
+function HTML.sections(source, fallback_title)
+    local marker = "@@DREADER_HEADING@@"
+    local marked = source:gsub("<[Hh][1-3][^>]*>(.-)</[Hh][1-3]>", function(content)
+        return "\n\n" .. marker .. trim(HTML.text(content)) .. "\n"
+    end)
+    local plain = HTML.text(marked)
+    local positions = {}
+    for position in plain:gmatch("()@@DREADER_HEADING@@") do positions[#positions + 1] = position end
+    if #positions == 0 then return { { title = fallback_title, text = plain } } end
+    local chapters = {}
+    local intro = trim(plain:sub(1, positions[1] - 1))
+    if intro ~= "" then chapters[#chapters + 1] = { title = fallback_title, text = intro } end
+    for index, position in ipairs(positions) do
+        local finish = positions[index + 1] and positions[index + 1] - 1 or #plain
+        local section = plain:sub(position + #marker, finish)
+        local title, body = section:match("^([^\n]+)\n?(.*)$")
+        title, body = trim(title or ""), trim(body or "")
+        if title ~= "" and body ~= "" then chapters[#chapters + 1] = { title = title, text = body } end
+    end
+    return #chapters > 0 and chapters or { { title = fallback_title, text = plain } }
 end
 
 -- EPUB ------------------------------------------------------------------------
@@ -270,19 +292,12 @@ function Book.open(path)
     local file, err = io.open(path, "rb")
     if not file then return nil, err or _("HTML document cannot be opened.") end
     local source = file:read("*a"); file:close()
-    local headings = HTML.headings(source)
-    local text = HTML.text(source)
-    if text == "" then return nil, _("The HTML document has no readable text.") end
     local title = HTML.title(source, basename(path):gsub("%.[^.]+$", ""))
+    local html_chapters = HTML.sections(source, title)
+    if #html_chapters == 0 or trim(html_chapters[1].text or "") == "" then return nil, _("The HTML document has no readable text.") end
     local chapters = {}
-    if #headings > 0 then
-        local cursor = 1
-        for index, heading in ipairs(headings) do
-            chapters[index] = { title = heading.title, start = cursor }
-            cursor = cursor + 1
-        end
-    else chapters[1] = { title = title, start = 1 } end
-    return { format = "html", path = path, title = title, chapters = chapters, html_text = text, cache = {}, cache_order = {} }
+    for index, section in ipairs(html_chapters) do chapters[index] = { title = section.title, start = index } end
+    return { format = "html", path = path, title = title, chapters = chapters, html_chapters = html_chapters, cache = {}, cache_order = {} }
 end
 
 function Book.chapterText(book, index)
@@ -290,7 +305,7 @@ function Book.chapterText(book, index)
     local chapter = book.chapters[index]
     if not chapter then return nil, _("Chapter does not exist.") end
     local text, err
-    if book.format == "html" then text = book.html_text
+    if book.format == "html" then text = book.html_chapters[index] and book.html_chapters[index].text
     else
         local source
         source, err = readArchive(book.archive, book.entries, chapter.path)
@@ -520,7 +535,7 @@ end
 
 return {
     id = "dreader",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "DReader",
     subtitle = "A calm EPUB and HTML reader",
     symbol = "R",
