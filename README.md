@@ -52,6 +52,14 @@ Für den Plotter wird die Variable `x` verwendet, zum Beispiel `sin(x)` oder `x^
 
 > **Sicherheitsgrenze:** Ausdruckslänge, Tokenanzahl, Namen, Funktionen und Wertebereich sind begrenzt. Unbekannte Namen, Lua-Syntax, Dateizugriffe, Anweisungen und Division durch null werden abgewiesen.
 
+## Calendar
+
+[`calendar.lua`](calendar.lua) ist ein **lokaler Monatsplaner** für AppDock. Die DApp zeigt eine E-Ink-geeignete Sechszeilen-Monatsansicht mit Montag als Wochenbeginn, hebt Heute sowie den ausgewählten Tag hervor und markiert Tage mit Terminen. Pfeiltasten wechseln den Monat; **Today** kehrt zum aktuellen Monat zurück.
+
+Ein Antippen eines Tages aktualisiert die Detailkarte. Über **+ Event** wird ein kurzer Termin für den ausgewählten Tag angelegt. Die Tagesdetails zeigen vorhandene Termine; das Antippen eines Termins verlangt eine ausdrückliche Bestätigung vor dem Entfernen. Termine, ausgewählter Monat und Datenbestand werden lokal und atomar im KOReader-Datenverzeichnis gespeichert.
+
+> **Datenschutz und Grenzen:** Calendar synchronisiert nicht mit Systemkalendern, Konten oder ICS-Dateien und erstellt keine Hintergrund-Erinnerungen. Die DApp nutzt weder Netzwerk noch Hintergrundprozesse; alle Termine bleiben ausschließlich lokal in Calendar.
+
 ## DReader
 
 [`dreader.lua`](dreader.lua) ist ein ruhiger, **stateful** AppDock-Reader für lokale EPUB-, HTML-, HTM- und XHTML-Dokumente. Er enthält eine eigene Bibliothek der zuletzt geöffneten Bücher, einen Kapitelbrowser, seitenorientiertes Blättern, ein-/ausblendbare Bedienelemente, Schriftstufen, anpassbare Ränder und einen persistent gespeicherten Lesefortschritt.
