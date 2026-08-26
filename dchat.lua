@@ -165,10 +165,13 @@ local function httpJson(store, method, suffix, payload, include_identity)
         headers["x-dchat-device-id"] = store.device_id
         headers["x-dchat-device-secret"] = store.device_secret
     end
-    local request = { url = url, method = method, sink = sink, verify = "peer", options = "all", headers = headers }
+    -- Match AppDock's established KOReader HTTPS transport. KOReader's LuaSec
+    -- bundle owns TLS/SNI behavior; forcing a separate CA mode here can fail on
+    -- readers that do not ship a system CA bundle.
+    local request = { url = url, method = method, sink = sink, headers = headers }
     if body then request.source = ltn12.source.string(body) end
     socketutil:set_timeout(CONNECT_TIMEOUT, REQUEST_MAX_TIME)
-    local ok, code = pcall(function() return socket.skip(1, https.request(request)) end)
+    local ok, code, response_headers, status = pcall(function() return socket.skip(1, https.request(request)) end)
     socketutil:reset_timeout()
     code = tonumber(code)
     local response_body = table.concat(chunks)
@@ -177,7 +180,13 @@ local function httpJson(store, method, suffix, payload, include_identity)
         local decoded_ok, result = pcall(JSON.decode, response_body, JSON.decode.simple)
         if decoded_ok and type(result) == "table" then decoded = result end
     end
-    if not ok or not code then return nil, nil, _("DChat could not reach the service. Your saved messages remain on this reader.") end
+    if not ok or not response_headers then
+        local detail = safeText(tostring(status or code or ""), 160)
+        local message = _("DChat could not reach the service. Your saved messages remain on this reader.")
+        if detail and detail ~= "" then message = message .. " " .. detail end
+        return nil, nil, message
+    end
+    if not code then return nil, nil, _("DChat could not reach the service. Your saved messages remain on this reader.") end
     if code < 200 or code > 299 then
         local message = decoded and decoded.error and safeText(decoded.error.message, 240)
         return nil, code, message or _("The DChat service refused the request.")
@@ -442,7 +451,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "DChat",
     subtitle = "Public AppDock Lounge, manual refresh",
     symbol = "D",
@@ -453,5 +462,5 @@ return {
         if state.view == "message" then return messagePane(instance, context) end
         return timelinePane(instance, context)
     end,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, httpJson = httpJson },
 }
