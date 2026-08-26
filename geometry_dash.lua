@@ -33,7 +33,9 @@ local GRAVITY = 1090
 local JUMP_VELOCITY = -410
 local PAD_VELOCITY = -510
 local RUN_SPEED = 225
-local FRAME_SECONDS = 0.08
+-- 20 Hz is a practical fast-waveform cadence: it is visibly smoother than the
+-- original 12.5 Hz while remaining confined to the small game arena.
+local FRAME_SECONDS = 0.05
 local LEVEL_LENGTH = 5350
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -319,7 +321,7 @@ end
 
 return {
     id = "geometry_dash",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Geometry Dash",
     subtitle = "Fast-refresh obstacle runner",
     symbol = "G",
