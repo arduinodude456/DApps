@@ -247,6 +247,11 @@ function ArenaCanvas:_spike(bb, x, y, width, height)
 end
 
 function ArenaCanvas:paintTo(bb, x, y)
+    -- OverlapGroup positions the arena below the host chrome. Keep the tap
+    -- hitbox in that same local rectangle; otherwise its default 0,0 range
+    -- overlaps AppDock's close control and turns Close into a jump.
+    local range = self.ges_events.TapGeometryDashJump[1].range
+    range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
     self._origin_x, self._origin_y = x, y
     self:_layout(x, y)
     bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_WHITE)
@@ -321,7 +326,7 @@ end
 
 return {
     id = "geometry_dash",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "Geometry Dash",
     subtitle = "Fast-refresh obstacle runner",
     symbol = "G",
