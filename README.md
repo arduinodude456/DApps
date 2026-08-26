@@ -43,6 +43,12 @@ Store-Widgets sind kleine, passive Homescreen-Karten. Sie werden mit dem vierten
 
 Das Beispiel [`quote_widget.lua`](quote_widget.lua) enthält drei lokale Zitate und zeigt jeweils eines auf einer kontrastreichen Karte. Es verwendet keinen Netzwerkdienst und speichert keine persönlichen Daten.
 
+## Random Book Covers Widget
+
+[`random_book_covers_widget.lua`](random_book_covers_widget.lua) zeigt bis zu drei zufällig ausgewählte Bücher aus der **lokalen KOReader-Lesehistorie**. Wenn KOReaders BookInfo-Schnittstelle ein echtes lokales Cover bereitstellt, wird dieses Cover auf einer E-Ink-tauglichen Dreierkarte gerendert. Fehlt ein Cover, bleibt der echte lokale Buchtitel sichtbar und der Slot zeigt **No local cover**; bei leerer Historie zeigt das Widget keinen erfundenen Buchtitel oder ein Platzhaltercover.
+
+Das Widget verwendet weder Netzwerk noch Hintergrundaufgaben, externe Metadaten oder generierte Bilder. Es betrachtet höchstens 24 lokale Verlaufseinträge und stellt höchstens drei Coveranfragen. Die von KOReader bereitgestellten Cover-Blitbuffer werden an den regulären `ImageWidget`-Lebenszyklus übergeben und beim Schließen freigegeben.
+
 ## Weather Widget
 
 [`weather_widget.lua`](weather_widget.lua) zeigt aktuelle Wetterbedingungen von der öffentlichen [Open-Meteo Forecast API](https://open-meteo.com/en/docs). Die Beispielkonfiguration verwendet Berlin; Entwickler oder Nutzer können Name, Breitengrad und Längengrad in der Datei vor der Installation anpassen. Das Widget fragt nur aktuelle Temperatur, Luftfeuchtigkeit, Wettercode, Windgeschwindigkeit und Tag/Nacht-Status ab und zeigt die Daten in einer kontrastreichen Homescreen-Karte.
