@@ -282,6 +282,12 @@ function SnakePane:onSnakeLeft() return self:_direction("left") end
 function SnakePane:onSnakeRight() return self:_direction("right") end
 function SnakePane:onSnakeUp() return self:_direction("up") end
 function SnakePane:onSnakeDown() return self:_direction("down") end
+function SnakePane:onSwipeSnake(_, gesture)
+    local directions = { west = "left", east = "right", north = "up", south = "down" }
+    local direction = gesture and directions[gesture.direction]
+    if direction then return self:_direction(direction) end
+    return false
+end
 function SnakePane:onSnakeToggle()
     if self.session then
         if self.session.paused then self.session:start() else self.session:pause() end
@@ -305,7 +311,7 @@ end
 
 return {
     id = "snake",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Snake",
     subtitle = "Fast-refresh grid runner",
     symbol = "S",
@@ -324,6 +330,7 @@ return {
         function pane:onDeactivate()
             if self.session then self.session:pause() end
         end
+        pane.ges_events = { SwipeSnake = { GestureRange:new{ ges = "swipe", range = pane.dimen } } }
         pane.key_events = {}
         local groups = Device.input and Device.input.group or {}
         if groups.Left then pane.key_events.SnakeLeft = { { groups.Left }, event = "SnakeLeft" } end
@@ -352,7 +359,7 @@ return {
             GameButton:new{ title = _("UP"), width = direction_w, height = direction_h, callback = function() state.session:inputDirection("up") end, overlap_offset = { margin + direction_w + gap, direction_y } },
             GameButton:new{ title = _("DOWN"), width = direction_w, height = direction_h, callback = function() state.session:inputDirection("down") end, overlap_offset = { margin + 2 * (direction_w + gap), direction_y } },
             GameButton:new{ title = _("RIGHT"), width = direction_w, height = direction_h, callback = function() state.session:inputDirection("right") end, overlap_offset = { margin + 3 * (direction_w + gap), direction_y } },
-            TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - footer_h } },
+            TextWidget:new{ text = state.status .. " " .. _("Swipe or use arrows to steer."), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - footer_h } },
         }
         arena.overlap_offset = { margin, arena_y }
         pane[1] = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false, unpack(layers) }

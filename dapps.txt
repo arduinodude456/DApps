@@ -16,7 +16,7 @@ dpdf.lua | 1.0.0 | document
 widget_generator.lua | 1.0.0 | settings
 2048.lua | 1.0.4 | other
 geometry_dash.lua | 1.0.2 | other
-snake.lua | 1.0.0 | other
+snake.lua | 1.0.1 | other
 status_message.lua | 1.0.0 | help
 gmail_notifications.lua | 1.0.1 | mail
 quote_widget.lua | 1.0.0 | help | widget
