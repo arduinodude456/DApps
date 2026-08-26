@@ -11,6 +11,7 @@ dreader.lua | 2.1.1 | document
 calendar.lua | 1.0.2 | calendar
 rss_reader.lua | 1.0.2 | rss
 dock_update.lua | 1.1.1 | download
+appdock_guide.lua | 1.0.0 | help
 2048.lua | 1.0.4 | other
 status_message.lua | 1.0.0 | help
 gmail_notifications.lua | 1.0.1 | mail
