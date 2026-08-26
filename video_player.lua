@@ -412,7 +412,7 @@ end
 
 return {
     id = "video_player",
-    version = "1.0.2",
+    version = "1.0.3",
     title = "VideoPlayer",
     subtitle = "BWR1 E-Ink video with system and Bluetooth audio",
     symbol = "V",
@@ -432,21 +432,22 @@ return {
     buildPane = function(instance, context)
         local state = stateFor(instance)
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap = scale(10), scale(5)
-        local action_h = scale(30)
-        local first_y, second_y = scale(54), scale(89)
-        local view_y = second_y + action_h + scale(8)
-        local view_h = math.max(scale(60), height - view_y - scale(24))
+        local px = context.px or scale
+        local margin, gap = px(10), px(5)
+        local action_h = px(30)
+        local first_y, second_y = px(54), px(89)
+        local view_y = second_y + action_h + px(8)
+        local view_h = math.max(px(48), height - view_y - px(24))
         local view_w = width - 2 * margin
-        local button_w = math.max(scale(44), math.floor((view_w - 3 * gap) / 4))
+        local button_w = math.max(px(34), math.floor((view_w - 3 * gap) / 4))
         local canvas = VideoCanvas:new{ player = state.player, width = view_w, height = view_h }
         if state.player then state.player:setCanvas(canvas) end
         local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
         pane[1] = OverlapGroup:new{
             dimen = pane.dimen, allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("VideoPlayer"), face = Font:getFace("cfont", scale(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, scale(7) } },
-            TextWidget:new{ text = state.video_path and basename(state.video_path) or _("BWR1 pre-dithered local video"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = view_w, overlap_offset = { margin, scale(31) } },
+            TextWidget:new{ text = _("VideoPlayer"), face = Font:getFace("cfont", px(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, px(7) } },
+            TextWidget:new{ text = state.video_path and basename(state.video_path) or _("BWR1 pre-dithered local video"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = view_w, overlap_offset = { margin, px(31) } },
             PlayerButton:new{ title = _("Open video"), width = math.floor((view_w - gap) / 2), height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() editPath(instance, context, "video") end, overlap_offset = { margin, first_y } },
             PlayerButton:new{ title = state.audio_path and _("Audio WAV") or _("Add audio"), width = math.floor((view_w - gap) / 2), height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() editPath(instance, context, "audio") end, overlap_offset = { margin + math.floor((view_w - gap) / 2) + gap, first_y } },
             PlayerButton:new{ title = _("-5 s"), width = button_w, height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "back") end, overlap_offset = { margin, second_y } },
@@ -454,7 +455,7 @@ return {
             PlayerButton:new{ title = _("+5 s"), width = button_w, height = action_h, background = Blitbuffer.COLOR_LIGHT_GRAY, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "forward") end, overlap_offset = { margin + (button_w + gap) * 2, second_y } },
             PlayerButton:new{ title = _("Stop"), width = button_w, height = action_h, background = Blitbuffer.COLOR_GRAY_7, foreground = Blitbuffer.COLOR_BLACK, callback = function() act(instance, context, "stop") end, overlap_offset = { margin + (button_w + gap) * 3, second_y } },
             canvas,
-            TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = view_w, overlap_offset = { margin, height - scale(16) } },
+            TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = view_w, overlap_offset = { margin, height - px(16) } },
         }
         canvas.overlap_offset = { margin, view_y }
         function pane:onDeactivate()

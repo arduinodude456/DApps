@@ -188,13 +188,14 @@ local function drawLine(bb, x0, y0, x1, y1, thickness, ink)
     for step = 0, steps do bb:paintRect(math.floor(x0 + dx * step / steps), math.floor(y0 + dy * step / steps), thickness, thickness, ink) end
 end
 
-local PlotCanvas = Widget:extend{ expression = nil, x_min = -10, x_max = 10, width = nil, height = nil }
+local PlotCanvas = Widget:extend{ expression = nil, x_min = -10, x_max = 10, width = nil, height = nil, grid_size = nil }
 function PlotCanvas:getSize() return Geom:new{ w = self.width, h = self.height } end
 function PlotCanvas:paintTo(bb, x, y)
     bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_WHITE)
     local grid = Blitbuffer.COLOR_LIGHT_GRAY
-    for grid_x = x + scale(30), x + self.width, scale(30) do bb:paintRect(grid_x, y, 1, self.height, grid) end
-    for grid_y = y + scale(30), y + self.height, scale(30) do bb:paintRect(x, grid_y, self.width, 1, grid) end
+    local grid_size = self.grid_size or scale(30)
+    for grid_x = x + grid_size, x + self.width, grid_size do bb:paintRect(grid_x, y, 1, self.height, grid) end
+    for grid_y = y + grid_size, y + self.height, grid_size do bb:paintRect(x, grid_y, self.width, 1, grid) end
     local x_span = self.x_max - self.x_min
     if x_span <= 0 then return end
     local y_min, y_max = -10, 10
@@ -216,11 +217,12 @@ function PlotCanvas:paintTo(bb, x, y)
     end
 end
 
-local CalcButton = InputContainer:extend{ title = nil, callback = nil, width = nil, height = nil, dimen = nil, highlight = false }
+local CalcButton = InputContainer:extend{ title = nil, callback = nil, width = nil, height = nil, dimen = nil, highlight = false, px = nil }
 function CalcButton:init()
+    local px = self.px or scale
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.floor(self.height * .28), background = self.highlight and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY,
-        CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", scale(10)), bold = true, max_width = self.width - scale(5) } } }
+        CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", px(10)), bold = true, max_width = self.width - px(5) } } }
     self.ges_events = { TapCalcButton = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function CalcButton:paintTo(bb, x, y)
@@ -289,7 +291,7 @@ end
 
 return {
     id = "calc",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Calc",
     subtitle = "Scientific calculator and function plotter",
     symbol = "∑",
@@ -297,29 +299,30 @@ return {
     buildPane = function(instance, context)
         local state = stateFor(instance)
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap = scale(10), scale(5)
-        local row_y, button_h = scale(78), scale(28)
-        local button_w = math.max(scale(42), math.floor((width - 2 * margin - 4 * gap) / 5))
-        local key_y = row_y + button_h + scale(5)
-        local plot_y = key_y + button_h + scale(8)
-        local plot_h = math.max(scale(75), height - plot_y - scale(20))
-        local plot = PlotCanvas:new{ expression = state.expression, x_min = state.x_min, x_max = state.x_max, width = width - 2 * margin, height = plot_h }
+        local px = context.px or scale
+        local margin, gap = px(10), px(5)
+        local row_y, button_h = px(78), px(28)
+        local button_w = math.max(px(32), math.floor((width - 2 * margin - 4 * gap) / 5))
+        local key_y = row_y + button_h + px(5)
+        local plot_y = key_y + button_h + px(8)
+        local plot_h = math.max(px(55), height - plot_y - px(20))
+        local plot = PlotCanvas:new{ expression = state.expression, x_min = state.x_min, x_max = state.x_max, width = width - 2 * margin, height = plot_h, grid_size = px(30) }
         local layers = {
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("Calc"), face = Font:getFace("cfont", scale(19)), bold = true, overlap_offset = { margin, scale(7) } },
-            TextWidget:new{ text = state.expression, face = Font:getFace("infont", scale(13)), max_width = width - 2 * margin, overlap_offset = { margin, scale(32) } },
-            TextWidget:new{ text = "= " .. (state.result or ""), face = Font:getFace("cfont", scale(18)), bold = true, max_width = width - 2 * margin, overlap_offset = { margin, scale(53) } },
-            CalcButton:new{ title = _("Expr"), width = button_w, height = button_h, callback = function() editExpression(instance, context) end, overlap_offset = { margin, row_y } },
-            CalcButton:new{ title = _("="), width = button_w, height = button_h, highlight = true, callback = function() calculate(state); context.requestRebuild("ui") end, overlap_offset = { margin + (button_w + gap), row_y } },
-            CalcButton:new{ title = _("History"), width = button_w, height = button_h, callback = function() historyDialog(instance, context) end, overlap_offset = { margin + (button_w + gap) * 2, row_y } },
-            CalcButton:new{ title = _("Range"), width = button_w, height = button_h, callback = function() editRange(instance, context) end, overlap_offset = { margin + (button_w + gap) * 3, row_y } },
-            CalcButton:new{ title = _("Plot"), width = button_w, height = button_h, highlight = true, callback = function() state.status = _("Plot refreshed"); context.requestRebuild("ui") end, overlap_offset = { margin + (button_w + gap) * 4, row_y } },
+            TextWidget:new{ text = _("Calc"), face = Font:getFace("cfont", px(19)), bold = true, overlap_offset = { margin, px(7) } },
+            TextWidget:new{ text = state.expression, face = Font:getFace("infont", px(13)), max_width = width - 2 * margin, overlap_offset = { margin, px(32) } },
+            TextWidget:new{ text = "= " .. (state.result or ""), face = Font:getFace("cfont", px(18)), bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(53) } },
+            CalcButton:new{ title = _("Expr"), width = button_w, height = button_h, px = px, callback = function() editExpression(instance, context) end, overlap_offset = { margin, row_y } },
+            CalcButton:new{ title = _("="), width = button_w, height = button_h, px = px, highlight = true, callback = function() calculate(state); context.requestRebuild("ui") end, overlap_offset = { margin + (button_w + gap), row_y } },
+            CalcButton:new{ title = _("History"), width = button_w, height = button_h, px = px, callback = function() historyDialog(instance, context) end, overlap_offset = { margin + (button_w + gap) * 2, row_y } },
+            CalcButton:new{ title = _("Range"), width = button_w, height = button_h, px = px, callback = function() editRange(instance, context) end, overlap_offset = { margin + (button_w + gap) * 3, row_y } },
+            CalcButton:new{ title = _("Plot"), width = button_w, height = button_h, px = px, highlight = true, callback = function() state.status = _("Plot refreshed"); context.requestRebuild("ui") end, overlap_offset = { margin + (button_w + gap) * 4, row_y } },
         }
         local keys = { "sin(", "cos(", "sqrt(", "pi", "x" }
-        for index, token in ipairs(keys) do layers[#layers + 1] = CalcButton:new{ title = token, width = button_w, height = button_h, callback = function() state.expression = (state.expression or "") .. token; context.requestRebuild("ui") end, overlap_offset = { margin + (index - 1) * (button_w + gap), key_y } } end
+        for index, token in ipairs(keys) do layers[#layers + 1] = CalcButton:new{ title = token, width = button_w, height = button_h, px = px, callback = function() state.expression = (state.expression or "") .. token; context.requestRebuild("ui") end, overlap_offset = { margin + (index - 1) * (button_w + gap), key_y } } end
         plot.overlap_offset = { margin, plot_y }
         layers[#layers + 1] = plot
-        layers[#layers + 1] = TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", scale(9)), max_width = width - 2 * margin, overlap_offset = { margin, height - scale(14) } }
+        layers[#layers + 1] = TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", px(9)), max_width = width - 2 * margin, overlap_offset = { margin, height - px(14) } }
         local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
         pane[1] = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false, unpack(layers) }
         return pane

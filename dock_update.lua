@@ -440,12 +440,13 @@ end
 local function buildPane(instance, context)
     local state = stateFor(instance)
     local width, height = context.dimen.w, context.dimen.h
-    local margin, gap = scale(8), scale(5)
-    local title_h = math.max(scale(24), math.floor(height * .09))
-    local button_h = math.max(scale(34), math.floor(height * .13))
+    local px = context.px or scale
+    local margin, gap = px(8), px(5)
+    local title_h = math.max(px(24), math.floor(height * .09))
+    local button_h = math.max(px(30), math.floor(height * .13))
     local footer_y = height - margin - button_h
-    local notes_y = margin + title_h + gap + math.max(scale(46), math.floor(height * .17)) + gap
-    local notes_h = math.max(scale(30), footer_y - notes_y - gap)
+    local notes_y = margin + title_h + gap + math.max(px(42), math.floor(height * .17)) + gap
+    local notes_h = math.max(px(26), footer_y - notes_y - gap)
     local current_version = (context.manager and context.manager.appdock and context.manager.appdock.version) or "?"
     local release = state.release
     local latest = release and release.version or _("Not checked")
@@ -464,9 +465,9 @@ local function buildPane(instance, context)
     local install_subtitle = relation == 1 and (_("AppDock ") .. latest) or _("Confirmation required")
     local elements = {
         background(width, height),
-        TextWidget:new{ text = _("DockUpdate"), face = Font:getFace("cfont", scale(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
-        TextWidget:new{ text = _("Installed: ") .. tostring(current_version) .. "    " .. _("Latest: ") .. latest, face = Font:getFace("smallinfofont", scale(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + title_h } },
-        TextBoxWidget:new{ text = status .. "\n\n" .. notes, face = Font:getFace("smallinfofont", scale(9)), width = width - 2 * margin, height = notes_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, notes_y } },
+        TextWidget:new{ text = _("DockUpdate"), face = Font:getFace("cfont", px(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = _("Installed: ") .. tostring(current_version) .. "    " .. _("Latest: ") .. latest, face = Font:getFace("smallinfofont", px(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + title_h } },
+        TextBoxWidget:new{ text = status .. "\n\n" .. notes, face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = notes_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, notes_y } },
         Action:new{ title = _("Check updates"), subtitle = _("GitHub release"), width = third, height = button_h, callback = function() checkForRelease(instance, context) end, overlap_offset = { margin, footer_y } },
         Action:new{ title = _("Release Notes"), subtitle = release and release.tag or _("Check first"), width = third, height = button_h, callback = function() showNotes(instance, context) end, overlap_offset = { margin + third + gap, footer_y } },
         Action:new{ title = install_title, subtitle = install_subtitle, width = third, height = button_h, background = relation == 1 and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY, callback = function() confirmInstall(instance, context) end, overlap_offset = { margin + 2 * (third + gap), footer_y } },
@@ -476,7 +477,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.0",
+    version = "1.1.1",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

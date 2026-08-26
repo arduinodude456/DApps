@@ -245,12 +245,13 @@ end
 
 local function monthPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
-    local margin, gap = math.max(5, math.floor(width / 70)), math.max(3, math.floor(width / 150))
-    local header_h, nav_h, weekday_h = math.max(24, math.floor(height / 17)), math.max(24, math.floor(height / 18)), math.max(16, math.floor(height / 28))
-    local detail_h = math.max(52, math.floor(height / 6))
+    local px = context.px or function(value) return value end
+    local margin, gap = math.max(px(5), math.floor(width / 70)), math.max(px(3), math.floor(width / 150))
+    local header_h, nav_h, weekday_h = math.max(px(24), math.floor(height / 17)), math.max(px(24), math.floor(height / 18)), math.max(px(16), math.floor(height / 28))
+    local detail_h = math.max(px(52), math.floor(height / 6))
     local grid_y = margin + header_h + gap + nav_h + gap + weekday_h
-    local cell_w = math.max(18, math.floor((width - 2 * margin - 6 * gap) / 7))
-    local cell_h = math.max(22, math.floor((height - grid_y - detail_h - 3 * gap) / 6))
+    local cell_w = math.max(px(18), math.floor((width - 2 * margin - 6 * gap) / 7))
+    local cell_h = math.max(px(22), math.floor((height - grid_y - detail_h - 3 * gap) / 6))
     local grid_h = 6 * cell_h + 5 * gap
     local today_y, today_m, today_d = Date.today()
     local elements = { background(width, height), TextWidget:new{ text = MONTHS[state.month] .. " " .. state.year, face = titleFace(width), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin } } }
@@ -284,7 +285,8 @@ end
 
 local function dayPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
-    local margin, gap, head_h, action_h = math.max(7, math.floor(width / 65)), math.max(4, math.floor(width / 140)), math.max(30, math.floor(height / 14)), math.max(30, math.floor(height / 15))
+    local px = context.px or function(value) return value end
+    local margin, gap, head_h, action_h = math.max(px(7), math.floor(width / 65)), math.max(px(4), math.floor(width / 140)), math.max(px(30), math.floor(height / 14)), math.max(px(30), math.floor(height / 15))
     local elements = { background(width, height), TextWidget:new{ text = Date.long(state.selected), face = titleFace(width), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin } } }
     local half = math.floor((width - 2 * margin - gap) / 2)
     elements[#elements + 1] = Action:new{ title = _("‹ Month"), width = half, height = action_h, callback = function() state.view = "month"; refresh(context) end, overlap_offset = { margin, margin + head_h } }
@@ -307,7 +309,7 @@ end
 
 return {
     id = "calendar",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "Calendar",
     subtitle = "Local monthly planner",
     symbol = "C",

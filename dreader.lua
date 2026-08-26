@@ -634,14 +634,15 @@ end
 
 local function formatChapter(state, context, keep_ratio)
     if not state.book then return end
+    local px = context.px or scale
     local old_count, old_page = state.pages and #state.pages or 1, state.page
     local text, err = Book.chapterText(state.book, state.chapter)
     if not text then state.notice = err; state.pages = { "" }; return end
-    local content_h = math.max(scale(70), context.dimen.h - scale(104))
+    local content_h = math.max(px(70), context.dimen.h - px(104))
     local style = state.book.style or {}
-    local key = table.concat({ context.dimen.w, content_h, state.store.settings.font, state.store.settings.padding, state.chapter, style.family or "", style.base_font or "", style.color or "" }, ":")
+    local key = table.concat({ context.dimen.w, content_h, context.ui_scale or 1, state.store.settings.font, state.store.settings.padding, state.chapter, style.family or "", style.base_font or "", style.color or "" }, ":")
     if key == state.layout_key and state.pages then return end
-    state.pages = Paginator.make(text, context.dimen.w, content_h, scale(state.store.settings.font), scale(state.store.settings.padding))
+    state.pages = Paginator.make(text, context.dimen.w, content_h, px(state.store.settings.font), px(state.store.settings.padding))
     state.images = Book.chapterImages(state.book, state.chapter)
     state.layout_key = key
     if keep_ratio then state.page = clamp(math.floor((old_page - 1) / math.max(1, old_count - 1) * math.max(0, #state.pages - 1) + 1), 1, #state.pages) else state.page = clamp(state.page, 1, #state.pages) end
@@ -702,12 +703,13 @@ end
 
 local function libraryPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
-    local margin, row_h, gap = scale(12), scale(48), scale(7)
-    local elements = { background(width, height), TextWidget:new{ text = _("DReader"), face = Font:getFace("cfont", scale(20)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, scale(10) } }, TextWidget:new{ text = _("My books · local EPUB, HTML, and Markdown"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = mutedColor(), overlap_offset = { margin, scale(35) } }, Action:new{ title = _("Open document"), subtitle = _("EPUB, HTML, or Markdown"), width = width - 2 * margin, height = row_h, shade = Blitbuffer.COLOR_GRAY_8, callback = function() selectBook(instance, context) end, overlap_offset = { margin, scale(54) } } }
-    local y = scale(54) + row_h + gap
-    if #state.store.books == 0 then elements[#elements + 1] = TextWidget:new{ text = state.notice or _("No books yet. Open a local EPUB or HTML document to begin."), face = Font:getFace("smallinfofont", scale(10)), fgcolor = mutedColor(), max_width = width - 2 * margin, overlap_offset = { margin, y + scale(10) } } end
+    local px = context.px or scale
+    local margin, row_h, gap = px(12), px(48), px(7)
+    local elements = { background(width, height), TextWidget:new{ text = _("DReader"), face = Font:getFace("cfont", px(20)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, px(10) } }, TextWidget:new{ text = _("My books · local EPUB, HTML, and Markdown"), face = Font:getFace("smallinfofont", px(9)), fgcolor = mutedColor(), overlap_offset = { margin, px(35) } }, Action:new{ title = _("Open document"), subtitle = _("EPUB, HTML, or Markdown"), width = width - 2 * margin, height = row_h, shade = Blitbuffer.COLOR_GRAY_8, callback = function() selectBook(instance, context) end, overlap_offset = { margin, px(54) } } }
+    local y = px(54) + row_h + gap
+    if #state.store.books == 0 then elements[#elements + 1] = TextWidget:new{ text = state.notice or _("No books yet. Open a local EPUB or HTML document to begin."), face = Font:getFace("smallinfofont", px(10)), fgcolor = mutedColor(), max_width = width - 2 * margin, overlap_offset = { margin, y + px(10) } } end
     for index, item in ipairs(state.store.books) do
-        if index > 8 or y + row_h > height - scale(8) then break end
+        if index > 8 or y + row_h > height - px(8) then break end
         local progress = state.store.progress[item.path] or {}
         local subtitle = (item.format or ""):upper() .. " · " .. ((progress.chapter and _("Continue at chapter ") .. progress.chapter) or _("Not started"))
         elements[#elements + 1] = Action:new{ title = item.title or basename(item.path), subtitle = subtitle, width = width - 2 * margin, height = row_h, callback = function() openBook(instance, context, item.path) end, overlap_offset = { margin, y } }
@@ -719,9 +721,10 @@ end
 local function readerPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
     formatChapter(state, context)
-    local margin, top_h, bottom_h = scale(10), scale(29), scale(30)
-    local content_y = state.controls and top_h + scale(8) or scale(6)
-    local content_h = state.controls and height - content_y - bottom_h - scale(7) or height - content_y - scale(6)
+    local px = context.px or scale
+    local margin, top_h, bottom_h = px(10), px(29), px(30)
+    local content_y = state.controls and top_h + px(8) or px(6)
+    local content_h = state.controls and height - content_y - bottom_h - px(7) or height - content_y - px(6)
     local chapter = state.book.chapters[state.chapter]
     local page_text = state.pages and state.pages[state.page] or ""
     local page_images = {}
@@ -730,24 +733,24 @@ local function readerPane(instance, context)
         if image_index and state.images and state.images[image_index] and #page_images < MAX_CHAPTER_IMAGES then page_images[#page_images + 1] = state.images[image_index] end
     end
     page_text = page_text:gsub("@@DREADER_IMAGE_%d+@@", "")
-    local image_height = #page_images > 0 and math.min(scale(116), math.floor(content_h * 0.24)) or 0
-    local image_gap = #page_images > 0 and scale(5) or 0
+    local image_height = #page_images > 0 and math.min(px(116), math.floor(content_h * 0.24)) or 0
+    local image_gap = #page_images > 0 and px(5) or 0
     local image_total = #page_images * image_height + math.max(0, #page_images - 1) * image_gap
-    local text_y = content_y + (image_total > 0 and image_total + scale(8) or 0)
-    local text_h = math.max(scale(60), content_h - (text_y - content_y))
+    local text_y = content_y + (image_total > 0 and image_total + px(8) or 0)
+    local text_h = math.max(px(60), content_h - (text_y - content_y))
     local elements = { background(width, height) }
     for image_index, page_image in ipairs(page_images) do
-        elements[#elements + 1] = ImageWidget:new{ file = page_image, width = width - 2 * scale(state.store.settings.padding), height = image_height, scale_factor = 0, overlap_offset = { scale(state.store.settings.padding), content_y + (image_index - 1) * (image_height + image_gap) } }
+        elements[#elements + 1] = ImageWidget:new{ file = page_image, width = width - 2 * px(state.store.settings.padding), height = image_height, scale_factor = 0, overlap_offset = { px(state.store.settings.padding), content_y + (image_index - 1) * (image_height + image_gap) } }
     end
-    elements[#elements + 1] =         TextBoxWidget:new{ text = page_text, face = safeFace(state.book.style and state.book.style.family, scale(state.store.settings.font)), width = width - 2 * scale(state.store.settings.padding), height = text_h, line_height = 0.32, alignment = "left", fgcolor = cssColor(state.book.style and state.book.style.color), overlap_offset = { scale(state.store.settings.padding), text_y } }
+    elements[#elements + 1] =         TextBoxWidget:new{ text = page_text, face = safeFace(state.book.style and state.book.style.family, px(state.store.settings.font)), width = width - 2 * px(state.store.settings.padding), height = text_h, line_height = 0.32, alignment = "left", fgcolor = cssColor(state.book.style and state.book.style.color), overlap_offset = { px(state.store.settings.padding), text_y } }
     if state.controls then
-        local button_w = math.floor((width - 2 * margin - 5 * scale(4)) / 6)
+        local button_w = math.floor((width - 2 * margin - 5 * px(4)) / 6)
             local labels = { { _("Library"), "library" }, { _("Pages"), "pages" }, { _("Mark"), "bookmark" }, { _("A−"), "font_minus" }, { _("A+"), "font_plus" }, { _("Settings"), "settings" } }
-        for index, item in ipairs(labels) do elements[#elements + 1] = Action:new{ title = item[1], width = button_w, height = top_h, callback = function() readerAction(instance, context, item[2]) end, overlap_offset = { margin + (index - 1) * (button_w + scale(4)), scale(3) } } end
-        local nav_w = math.floor((width - 2 * margin - scale(8)) / 2)
-        elements[#elements + 1] = Action:new{ title = _("‹ Previous"), width = nav_w, height = bottom_h, callback = function() readerAction(instance, context, "prev") end, overlap_offset = { margin, height - bottom_h - scale(3) } }
-        elements[#elements + 1] = Action:new{ title = _("Next ›"), width = nav_w, height = bottom_h, shade = Blitbuffer.COLOR_GRAY_8, callback = function() readerAction(instance, context, "next") end, overlap_offset = { margin + nav_w + scale(8), height - bottom_h - scale(3) } }
-        elements[#elements + 1] = TextWidget:new{ text = (chapter and chapter.title or "") .. " · " .. state.page .. "/" .. #state.pages, face = Font:getFace("smallinfofont", scale(8)), fgcolor = mutedColor(), max_width = width - 2 * margin, overlap_offset = { margin, top_h + scale(2) } }
+        for index, item in ipairs(labels) do elements[#elements + 1] = Action:new{ title = item[1], width = button_w, height = top_h, callback = function() readerAction(instance, context, item[2]) end, overlap_offset = { margin + (index - 1) * (button_w + px(4)), px(3) } } end
+        local nav_w = math.floor((width - 2 * margin - px(8)) / 2)
+        elements[#elements + 1] = Action:new{ title = _("‹ Previous"), width = nav_w, height = bottom_h, callback = function() readerAction(instance, context, "prev") end, overlap_offset = { margin, height - bottom_h - px(3) } }
+        elements[#elements + 1] = Action:new{ title = _("Next ›"), width = nav_w, height = bottom_h, shade = Blitbuffer.COLOR_GRAY_8, callback = function() readerAction(instance, context, "next") end, overlap_offset = { margin + nav_w + px(8), height - bottom_h - px(3) } }
+        elements[#elements + 1] = TextWidget:new{ text = (chapter and chapter.title or "") .. " · " .. state.page .. "/" .. #state.pages, face = Font:getFace("smallinfofont", px(8)), fgcolor = mutedColor(), max_width = width - 2 * margin, overlap_offset = { margin, top_h + px(2) } }
     end
     local zone_w = math.floor(width / 3)
     elements[#elements + 1] = TapZone:new{ width = zone_w, height = content_h, callback = function() readerAction(instance, context, "prev") end, overlap_offset = { 0, content_y } }
@@ -805,7 +808,7 @@ end
 
 return {
     id = "dreader",
-    version = "2.1.0",
+    version = "2.1.1",
     title = "DReader",
     subtitle = "A calm EPUB, HTML, and Markdown reader",
     symbol = "R",

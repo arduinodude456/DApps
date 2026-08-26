@@ -157,15 +157,16 @@ local function tileColors(palette, value)
     return unpack(colors[value] or { palette.primary, palette.on_primary })
 end
 
-local DirectionButton = InputContainer:extend{ title = nil, callback = nil, width = 0, height = 0, background = nil, foreground = nil }
+local DirectionButton = InputContainer:extend{ title = nil, callback = nil, width = 0, height = 0, background = nil, foreground = nil, px = nil }
 function DirectionButton:init()
+    local px = self.px or scale
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self[1] = FrameContainer:new{
         width = self.width, height = self.height, padding = 0, bordersize = 0,
-        radius = scale(8), background = self.background,
+        radius = px(8), background = self.background,
         OverlapGroup:new{ dimen = self.dimen, allow_mirroring = false,
-            TextWidget:new{ text = self.title, face = Font:getFace("cfont", scale(18)), fgcolor = self.foreground, bold = true,
-                max_width = self.width - scale(6), overlap_offset = { 0, math.max(0, math.floor((self.height - scale(20)) / 2)) } },
+            TextWidget:new{ text = self.title, face = Font:getFace("cfont", px(18)), fgcolor = self.foreground, bold = true,
+                max_width = self.width - px(6), overlap_offset = { 0, math.max(0, math.floor((self.height - px(20)) / 2)) } },
         },
     }
     self.ges_events = { TapDirection = { GestureRange:new{ ges = "tap", range = self.dimen } } }
@@ -193,7 +194,7 @@ function GamePane:onSwipe2048(_, gesture)
     return false
 end
 
-local function buildBoard(state, palette, x, y, size, gap)
+local function buildBoard(state, palette, x, y, size, gap, px)
     local board = OverlapGroup:new{ dimen = Geom:new{ w = size, h = size }, allow_mirroring = false }
     local tile = math.floor((size - 3 * gap) / 4)
     for row = 1, 4 do for col = 1, 4 do
@@ -201,10 +202,10 @@ local function buildBoard(state, palette, x, y, size, gap)
         local background, foreground = tileColors(palette, value)
         local text = value == 0 and "" or tostring(value)
         board[#board + 1] = FrameContainer:new{
-            width = tile, height = tile, padding = 0, bordersize = 0, radius = scale(6), background = background,
+            width = tile, height = tile, padding = 0, bordersize = 0, radius = px(6), background = background,
             CenterContainer:new{
                 dimen = Geom:new{ w = tile, h = tile },
-                TextWidget:new{ text = text, face = Font:getFace("cfont", value >= 1000 and scale(14) or scale(19)), fgcolor = foreground, bold = true, max_width = tile - scale(4) },
+                TextWidget:new{ text = text, face = Font:getFace("cfont", value >= 1000 and px(14) or px(19)), fgcolor = foreground, bold = true, max_width = tile - px(4) },
             },
             overlap_offset = { (col - 1) * (tile + gap), (row - 1) * (tile + gap) },
         }
@@ -215,7 +216,7 @@ end
 
 return {
     id = "game_2048",
-    version = "1.0.3",
+    version = "1.0.4",
     title = "2048",
     subtitle = "Merge tiles and reach 2048",
     symbol = "2",
@@ -225,7 +226,8 @@ return {
         if not state.board[1] then reset(state) end
         local palette = paletteFor(context)
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap = scale(12), scale(7)
+        local px = context.px or scale
+        local margin, gap = px(12), px(7)
         local pane = GamePane:new{ dimen = Geom:new{ w = width, h = height } }
         pane.on_move = function(direction) if move(state, direction) then context.requestRebuild("ui") end end
         pane.ges_events = {
@@ -238,10 +240,10 @@ return {
         if groups.Up then pane.key_events.MoveUp = { { groups.Up }, event = "2048Up" } end
         if groups.Down then pane.key_events.MoveDown = { { groups.Down }, event = "2048Down" } end
 
-        local header_h = scale(48)
-        local button_h = scale(34)
-        local board_size = math.min(width - 2 * margin, height - header_h - button_h - scale(42))
-        board_size = math.max(scale(120), board_size)
+        local header_h = px(48)
+        local button_h = px(34)
+        local board_size = math.min(width - 2 * margin, height - header_h - button_h - px(42))
+        board_size = math.max(px(96), board_size)
         local board_x = math.floor((width - board_size) / 2)
         local board_y = header_h
         local layers = {
@@ -249,24 +251,24 @@ return {
                 width = width, height = height, padding = 0, bordersize = 0, background = palette.background,
                 WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } },
             },
-            TextWidget:new{ text = "2048", face = Font:getFace("cfont", scale(22)), fgcolor = palette.on_surface, bold = true, overlap_offset = { margin, scale(8) } },
-            TextWidget:new{ text = (_("Score") .. ": " .. tostring(state.score)), face = Font:getFace("smallinfofont", scale(11)), fgcolor = palette.on_variant, overlap_offset = { width - margin - scale(105), scale(15) }, max_width = scale(105) },
-            buildBoard(state, palette, board_x, board_y, board_size, gap),
+            TextWidget:new{ text = "2048", face = Font:getFace("cfont", px(22)), fgcolor = palette.on_surface, bold = true, overlap_offset = { margin, px(8) } },
+            TextWidget:new{ text = (_("Score") .. ": " .. tostring(state.score)), face = Font:getFace("smallinfofont", px(11)), fgcolor = palette.on_variant, overlap_offset = { width - margin - px(105), px(15) }, max_width = px(105) },
+            buildBoard(state, palette, board_x, board_y, board_size, gap, px),
         }
-        local control_y = math.min(height - button_h - margin, board_y + board_size + scale(8))
-        local control_w = math.min(scale(52), math.floor((width - 2 * margin - 3 * gap) / 4))
+        local control_y = math.min(height - button_h - margin, board_y + board_size + px(8))
+        local control_w = math.min(px(52), math.floor((width - 2 * margin - 3 * gap) / 4))
         local arrows = { { "←", "left" }, { "↑", "up" }, { "↓", "down" }, { "→", "right" } }
         for i, item in ipairs(arrows) do
-            layers[#layers + 1] = DirectionButton:new{ title = item[1], width = control_w, height = button_h, background = palette.primary, foreground = palette.on_primary,
+            layers[#layers + 1] = DirectionButton:new{ title = item[1], width = control_w, height = button_h, px = px, background = palette.primary, foreground = palette.on_primary,
                 callback = function() if move(state, item[2]) then context.requestRebuild("ui") end end,
                 overlap_offset = { margin + (i - 1) * (control_w + gap), control_y } }
         end
         local status = state.over and _("Game over — press New game to restart") or (state.won and _("2048 reached — keep playing") or _("Swipe to move · arrows are a fallback"))
         if state.over then
-            layers[#layers + 1] = DirectionButton:new{ title = _("New game"), width = math.min(scale(100), width - 2 * margin), height = button_h, background = palette.secondary, foreground = palette.on_secondary,
-                callback = function() reset(state); context.requestRebuild("ui") end, overlap_offset = { width - margin - math.min(scale(100), width - 2 * margin), control_y } }
+            layers[#layers + 1] = DirectionButton:new{ title = _("New game"), width = math.min(px(100), width - 2 * margin), height = button_h, px = px, background = palette.secondary, foreground = palette.on_secondary,
+                callback = function() reset(state); context.requestRebuild("ui") end, overlap_offset = { width - margin - math.min(px(100), width - 2 * margin), control_y } }
         end
-        layers[#layers + 1] = TextWidget:new{ text = status, face = Font:getFace("smallinfofont", scale(10)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - scale(16) } }
+        layers[#layers + 1] = TextWidget:new{ text = status, face = Font:getFace("smallinfofont", px(10)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - px(16) } }
         pane[1] = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false, unpack(layers) }
         return pane
     end,

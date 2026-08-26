@@ -400,11 +400,12 @@ function Canvas:finishStylus()
     if self._stylus_active then self._stylus_active = false; self._stylus_id = nil; self:_finish() end
 end
 
-local ToolButton = InputContainer:extend{ title = nil, callback = nil, width = nil, height = nil, background = nil, dimen = nil }
+local ToolButton = InputContainer:extend{ title = nil, callback = nil, width = nil, height = nil, background = nil, dimen = nil, px = nil }
 function ToolButton:init()
+    local px = self.px or scale
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.floor(self.height * 0.32), background = self.background or Blitbuffer.COLOR_LIGHT_GRAY,
-        CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", scale(10)), bold = true, max_width = self.width - scale(6) } } }
+        CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", px(10)), bold = true, max_width = self.width - px(6) } } }
     self.ges_events = { TapDrawTool = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function ToolButton:paintTo(bb, x, y)
@@ -414,21 +415,23 @@ function ToolButton:paintTo(bb, x, y)
 end
 function ToolButton:onTapDrawTool() if self.callback then self.callback() end return true end
 
-local ThicknessSlider = InputContainer:extend{ document = nil, width = nil, height = nil, callback = nil, dimen = nil }
+local ThicknessSlider = InputContainer:extend{ document = nil, width = nil, height = nil, callback = nil, dimen = nil, px = nil }
 function ThicknessSlider:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.ges_events = { TapThickness = { GestureRange:new{ ges = "tap", range = self.dimen } }, PanThickness = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } }, PanReleaseThickness = { GestureRange:new{ ges = "pan_release", range = self.dimen } } }
 end
 function ThicknessSlider:paintTo(bb, x, y)
+    local px = self.px or scale
     self._x, self._y = x, y
-    bb:paintRect(x, y + math.floor(self.height / 2) - 1, self.width, scale(2), Blitbuffer.COLOR_GRAY)
+    bb:paintRect(x, y + math.floor(self.height / 2) - 1, self.width, px(2), Blitbuffer.COLOR_GRAY)
     local ratio = ((self.document.width or 3) - 1) / 13
-    local knob_x = x + math.floor(ratio * (self.width - scale(14)))
-    bb:paintRect(knob_x, y + math.floor(self.height / 2) - scale(6), scale(14), scale(12), inkFor(self.document.color))
+    local knob_x = x + math.floor(ratio * (self.width - px(14)))
+    bb:paintRect(knob_x, y + math.floor(self.height / 2) - px(6), px(14), px(12), inkFor(self.document.color))
 end
 function ThicknessSlider:_set(ges)
+    local px = self.px or scale
     local position = (ges.pos or ges).x or self._x
-    local ratio = clamp((position - self._x) / math.max(1, self.width - scale(14)), 0, 1)
+    local ratio = clamp((position - self._x) / math.max(1, self.width - px(14)), 0, 1)
     self.document.width = clamp(math.floor(1 + ratio * 13 + 0.5), 1, 14)
     if self.callback then self.callback() end
     return true
@@ -531,7 +534,7 @@ end
 
 return {
     id = "draw",
-    version = "1.2.1",
+    version = "1.2.2",
     title = "Draw",
     subtitle = "Multi-page E-Ink sketchbook",
     symbol = "D",
@@ -540,14 +543,15 @@ return {
         local state = stateFor(instance)
         local document = state.document
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap = scale(10), scale(5)
-        local actions_y, button_h = scale(48), scale(31)
-        local button_w = math.max(scale(42), math.floor((width - 2 * margin - 4 * gap) / 5))
-        local color_y, color_h = actions_y + button_h + scale(5), scale(24)
-        local color_w = math.max(scale(28), math.floor((width - 2 * margin - 6 * gap) / 7))
-        local slider_y, slider_h = color_y + color_h + scale(5), scale(24)
-        local canvas_y = slider_y + slider_h + scale(8)
-        local canvas_h = math.max(scale(72), height - canvas_y - scale(22))
+        local px = context.px or scale
+        local margin, gap = px(10), px(5)
+        local actions_y, button_h = px(48), px(31)
+        local button_w = math.max(px(34), math.floor((width - 2 * margin - 4 * gap) / 5))
+        local color_y, color_h = actions_y + button_h + px(5), px(24)
+        local color_w = math.max(px(22), math.floor((width - 2 * margin - 6 * gap) / 7))
+        local slider_y, slider_h = color_y + color_h + px(5), px(24)
+        local canvas_y = slider_y + slider_h + px(8)
+        local canvas_h = math.max(px(56), height - canvas_y - px(22))
         local canvas_w = width - 2 * margin
         local canvas = Canvas:new{ document = document, width = canvas_w, height = canvas_h, on_changed = function(final, region, directly_repainted)
             if final then state.status = _("Stroke added") end
@@ -563,27 +567,27 @@ return {
         local page = currentPage(document)
         local layers = {
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("Draw") .. " · " .. _("Page ") .. document.selected_page .. "/" .. #document.pages, face = Font:getFace("cfont", scale(18)), bold = true, overlap_offset = { margin, scale(7) } },
-            ToolButton:new{ title = _("Save"), width = button_w, height = button_h, callback = function() saveDialog(instance, context) end, overlap_offset = { margin, actions_y } },
-            ToolButton:new{ title = _("Load"), width = button_w, height = button_h, callback = function() loadDialog(instance, context) end, overlap_offset = { margin + (button_w + gap), actions_y } },
-            ToolButton:new{ title = _("Pg-"), width = button_w, height = button_h, callback = function() movePage(instance, context, -1) end, overlap_offset = { margin + (button_w + gap) * 2, actions_y } },
-            ToolButton:new{ title = _("Pg+"), width = button_w, height = button_h, callback = function() movePage(instance, context, 1) end, overlap_offset = { margin + (button_w + gap) * 3, actions_y } },
-            ToolButton:new{ title = _("New"), width = button_w, height = button_h, callback = function() newPage(instance, context) end, overlap_offset = { margin + (button_w + gap) * 4, actions_y } },
+            TextWidget:new{ text = _("Draw") .. " · " .. _("Page ") .. document.selected_page .. "/" .. #document.pages, face = Font:getFace("cfont", px(18)), bold = true, overlap_offset = { margin, px(7) } },
+            ToolButton:new{ title = _("Save"), width = button_w, height = button_h, px = px, callback = function() saveDialog(instance, context) end, overlap_offset = { margin, actions_y } },
+            ToolButton:new{ title = _("Load"), width = button_w, height = button_h, px = px, callback = function() loadDialog(instance, context) end, overlap_offset = { margin + (button_w + gap), actions_y } },
+            ToolButton:new{ title = _("Pg-"), width = button_w, height = button_h, px = px, callback = function() movePage(instance, context, -1) end, overlap_offset = { margin + (button_w + gap) * 2, actions_y } },
+            ToolButton:new{ title = _("Pg+"), width = button_w, height = button_h, px = px, callback = function() movePage(instance, context, 1) end, overlap_offset = { margin + (button_w + gap) * 3, actions_y } },
+            ToolButton:new{ title = _("New"), width = button_w, height = button_h, px = px, callback = function() newPage(instance, context) end, overlap_offset = { margin + (button_w + gap) * 4, actions_y } },
         }
         for index, preset in ipairs(QUICK_COLORS) do
-            layers[#layers + 1] = ToolButton:new{ title = "", width = color_w, height = color_h, background = inkFor(preset.hex), callback = function() document.color = preset.hex; document.tool = "pen"; state.status = preset.name; rebuild(context) end, overlap_offset = { margin + (index - 1) * (color_w + gap), color_y } }
+            layers[#layers + 1] = ToolButton:new{ title = "", width = color_w, height = color_h, px = px, background = inkFor(preset.hex), callback = function() document.color = preset.hex; document.tool = "pen"; state.status = preset.name; rebuild(context) end, overlap_offset = { margin + (index - 1) * (color_w + gap), color_y } }
         end
-        layers[#layers + 1] = ThicknessSlider:new{ document = document, width = math.floor(canvas_w * 0.40), height = slider_h, callback = function() state.status = _("Thickness: ") .. document.width; context.requestRefresh("fast") end, overlap_offset = { margin, slider_y } }
-        layers[#layers + 1] = ToolButton:new{ title = _("Color"), width = math.floor(canvas_w * 0.18), height = slider_h, callback = function() customColorDialog(instance, context) end, overlap_offset = { margin + math.floor(canvas_w * 0.42), slider_y } }
-        layers[#layers + 1] = ToolButton:new{ title = document.tool == "eraser" and _("Eraser") or _("Erase"), width = math.floor(canvas_w * 0.18), height = slider_h, callback = function() document.tool = document.tool == "eraser" and "pen" or "eraser"; rebuild(context) end, overlap_offset = { margin + math.floor(canvas_w * 0.61), slider_y } }
-        layers[#layers + 1] = ToolButton:new{ title = _("Bg"), width = math.floor(canvas_w * 0.18), height = slider_h, callback = function() nextBackground(instance, context) end, overlap_offset = { margin + math.floor(canvas_w * 0.80), slider_y } }
+        layers[#layers + 1] = ThicknessSlider:new{ document = document, width = math.floor(canvas_w * 0.40), height = slider_h, px = px, callback = function() state.status = _("Thickness: ") .. document.width; context.requestRefresh("fast") end, overlap_offset = { margin, slider_y } }
+        layers[#layers + 1] = ToolButton:new{ title = _("Color"), width = math.floor(canvas_w * 0.18), height = slider_h, px = px, callback = function() customColorDialog(instance, context) end, overlap_offset = { margin + math.floor(canvas_w * 0.42), slider_y } }
+        layers[#layers + 1] = ToolButton:new{ title = document.tool == "eraser" and _("Eraser") or _("Erase"), width = math.floor(canvas_w * 0.18), height = slider_h, px = px, callback = function() document.tool = document.tool == "eraser" and "pen" or "eraser"; rebuild(context) end, overlap_offset = { margin + math.floor(canvas_w * 0.61), slider_y } }
+        layers[#layers + 1] = ToolButton:new{ title = _("Bg"), width = math.floor(canvas_w * 0.18), height = slider_h, px = px, callback = function() nextBackground(instance, context) end, overlap_offset = { margin + math.floor(canvas_w * 0.80), slider_y } }
         if page.background == "image" and isImagePath(page.image_path) then
             local ok, image = pcall(ImageWidget.new, ImageWidget, { file = page.image_path, width = canvas_w, height = canvas_h, stretch_limit_percentage = 8 })
             if ok and image then image.overlap_offset = { margin, canvas_y }; layers[#layers + 1] = image else state.status = _("Image background could not be loaded.") end
         end
         canvas.overlap_offset = { margin, canvas_y }
         layers[#layers + 1] = canvas
-        layers[#layers + 1] = TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", scale(9)), max_width = canvas_w, overlap_offset = { margin, height - scale(15) } }
+        layers[#layers + 1] = TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", px(9)), max_width = canvas_w, overlap_offset = { margin, height - px(15) } }
         local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
         pane[1] = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false, unpack(layers) }
         function pane:onDeactivate()

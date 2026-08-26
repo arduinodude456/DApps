@@ -39,11 +39,13 @@ package.preload["appdock_theme"] = function()
 end
 
 local app = dofile("2048.lua")
-assert(app.id == "game_2048" and app.version == "1.0.3" and app.logo == "other")
+assert(app.id == "game_2048" and app.version == "1.0.4" and app.logo == "other")
 local instance = {}
 local rebuilds = 0
-local context = { dimen = { w = 600, h = 900 }, manager = { appdock = {} }, requestRebuild = function(kind) assert(kind == "ui"); rebuilds = rebuilds + 1 end }
+local px_calls = 0
+local context = { dimen = { w = 600, h = 340 }, manager = { appdock = {} }, px = function(value) px_calls = px_calls + 1; return math.max(1, math.floor(value * .6 + .5)) end, requestRebuild = function(kind) assert(kind == "ui"); rebuilds = rebuilds + 1 end }
 local pane = app.buildPane(instance, context)
+assert(px_calls > 0 and pane.dimen.h == 340, "2048 must derive compact split-pane geometry from context.px")
 assert(instance.game_2048.board[1] == 2 and instance.game_2048.board[6] == 2, "new games need two tiles")
 pane.on_move("left")
 assert(rebuilds == 1, "a changed move must rebuild")
@@ -64,6 +66,8 @@ local board = pane[1][4]
 assert(#board == 16, "the board must contain all sixteen tile widgets")
 assert(board[1].overlap_offset[1] == 0 and board[1].overlap_offset[2] == 0, "the first tile must start at the board origin")
 assert(board[2].overlap_offset[1] > 0 and board[5].overlap_offset[2] > 0, "each board tile must own its grid offset")
+instance.game_2048.board = { 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+instance.game_2048.over = false
 local before_swipe = rebuilds
 pane:onSwipe2048(nil, { direction = "west" })
 assert(rebuilds == before_swipe + 1, "a west swipe must move the board through the standard move path")

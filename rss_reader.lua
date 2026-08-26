@@ -341,10 +341,11 @@ end
 
 local function feedPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
-    local margin, gap, row_h = math.max(7, math.floor(width / 65)), math.max(4, math.floor(width / 140)), math.max(39, math.floor(height / 12))
-    local elements = { background(width, height), TextWidget:new{ text = _("RSS Reader"), face = titleFace(width), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin } }, TextWidget:new{ text = _("Local feeds · HTTPS only"), face = smallFace(width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + math.max(22, math.floor(height / 20)) } } }
+    local px = context.px or function(value) return value end
+    local margin, gap, row_h = math.max(px(7), math.floor(width / 65)), math.max(px(4), math.floor(width / 140)), math.max(px(39), math.floor(height / 12))
+    local elements = { background(width, height), TextWidget:new{ text = _("RSS Reader"), face = titleFace(width), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin } }, TextWidget:new{ text = _("Local feeds · HTTPS only"), face = smallFace(width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + math.max(px(22), math.floor(height / 20)) } } }
     local half = math.floor((width - 2 * margin - gap) / 2)
-    local toolbar_y = margin + math.max(36, math.floor(height / 13))
+    local toolbar_y = margin + math.max(px(36), math.floor(height / 13))
     elements[#elements + 1] = Action:new{ title = _("+ Feed"), width = half, height = row_h, background = Blitbuffer.COLOR_GRAY_8, callback = function() addFeed(instance, context) end, overlap_offset = { margin, toolbar_y } }
     elements[#elements + 1] = Action:new{ title = _("Refresh all"), width = half, height = row_h, callback = function() local failures = refreshAll(state); state.notice = failures > 0 and (failures .. " " .. _("feed refreshes failed.")) or _("Feeds updated."); refresh(context) end, overlap_offset = { margin + half + gap, toolbar_y } }
     local y = toolbar_y + row_h + gap
@@ -355,7 +356,7 @@ local function feedPane(instance, context)
         elements[#elements + 1] = Action:new{ title = feed.title, subtitle = subtitle, width = width - 2 * margin, height = row_h, callback = function() state.selected_feed, state.view, state.article_list_page = feed.id, "articles", 1; refresh(context) end, overlap_offset = { margin, y } }
         y = y + row_h + gap
     end
-    if state.notice then elements[#elements + 1] = TextWidget:new{ text = state.notice, face = smallFace(width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - math.max(14, math.floor(width / 45)) } } end
+    if state.notice then elements[#elements + 1] = TextWidget:new{ text = state.notice, face = smallFace(width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - math.max(px(14), math.floor(width / 45)) } } end
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
@@ -363,10 +364,11 @@ local function articleListPane(instance, context)
     local state, feed, width, height = stateFor(instance), nil, context.dimen.w, context.dimen.h
     feed = getFeed(state, state.selected_feed)
     if not feed then state.view = "feeds"; return feedPane(instance, context) end
-    local margin, gap, row_h = math.max(7, math.floor(width / 65)), math.max(4, math.floor(width / 140)), math.max(42, math.floor(height / 11))
+    local px = context.px or function(value) return value end
+    local margin, gap, row_h = math.max(px(7), math.floor(width / 65)), math.max(px(4), math.floor(width / 140)), math.max(px(42), math.floor(height / 11))
     local elements = { background(width, height), TextWidget:new{ text = feed.title, face = titleFace(width), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin } } }
     local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    local toolbar_y = margin + math.max(33, math.floor(height / 13))
+    local toolbar_y = margin + math.max(px(33), math.floor(height / 13))
     elements[#elements + 1] = Action:new{ title = _("‹ Feeds"), width = third, height = row_h, callback = function() state.view = "feeds"; refresh(context) end, overlap_offset = { margin, toolbar_y } }
     elements[#elements + 1] = Action:new{ title = _("Refresh"), width = third, height = row_h, background = Blitbuffer.COLOR_GRAY_8, callback = function() local ok, err = refreshFeed(state, feed); state.notice = ok and _("Feed updated.") or err; refresh(context) end, overlap_offset = { margin + third + gap, toolbar_y } }
     elements[#elements + 1] = Action:new{ title = _("Remove"), width = third, height = row_h, callback = function() deleteFeed(state, context, feed) end, overlap_offset = { margin + 2 * (third + gap), toolbar_y } }
@@ -393,8 +395,10 @@ local function readerPane(instance, context)
     feed = getFeed(state, state.selected_feed)
     local entry = feed and feed.articles[state.selected_article]
     if not entry then state.view = "articles"; return articleListPane(instance, context) end
-    local margin, gap, toolbar_h = math.max(7, math.floor(width / 65)), math.max(4, math.floor(width / 140)), math.max(29, math.floor(height / 17))
-    local content_y, content_h = margin + toolbar_h + gap + math.max(19, math.floor(height / 28)), height - (margin + toolbar_h + gap + math.max(19, math.floor(height / 28))) - toolbar_h - 2 * gap
+    local px = context.px or function(value) return value end
+    local margin, gap, toolbar_h = math.max(px(7), math.floor(width / 65)), math.max(px(4), math.floor(width / 140)), math.max(px(29), math.floor(height / 17))
+    local metadata_h = math.max(px(19), math.floor(height / 28))
+    local content_y, content_h = margin + toolbar_h + gap + metadata_h, height - (margin + toolbar_h + gap + metadata_h) - toolbar_h - 2 * gap
     local text = entry.title .. "\n\n" .. (entry.date ~= "" and entry.date .. "\n\n" or "") .. (entry.summary ~= "" and entry.summary or _("This feed item has no readable summary."))
     local key = table.concat({ width, height, state.selected_feed or 0, state.selected_article or 0 }, ":")
     if state.article_layout_key ~= key then state.article_pages, state.article_page, state.article_layout_key = paginate(text, width - 2 * margin, content_h), 1, key end
@@ -408,7 +412,7 @@ local function readerPane(instance, context)
     local nav_w = math.floor((width - 2 * margin - gap) / 2)
     elements[#elements + 1] = Action:new{ title = _("‹ Previous"), width = nav_w, height = toolbar_h, callback = function() state.article_page = clamp(state.article_page - 1, 1, #pages); refresh(context) end, overlap_offset = { margin, height - margin - toolbar_h } }
     elements[#elements + 1] = Action:new{ title = _("Next ›"), width = nav_w, height = toolbar_h, background = Blitbuffer.COLOR_GRAY_8, callback = function() state.article_page = clamp(state.article_page + 1, 1, #pages); refresh(context) end, overlap_offset = { margin + nav_w + gap, height - margin - toolbar_h } }
-    if entry.link ~= "" then elements[#elements + 1] = TextWidget:new{ text = _("Original: ") .. entry.link, face = smallFace(width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, content_y - math.max(16, math.floor(height / 28)) } } end
+    if entry.link ~= "" then elements[#elements + 1] = TextWidget:new{ text = _("Original: ") .. entry.link, face = smallFace(width), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, content_y - math.max(px(16), math.floor(height / 28)) } } end
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
@@ -419,7 +423,7 @@ end
 
 return {
     id = "rss_reader",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "RSS Reader",
     subtitle = "Local RSS and Atom feeds",
     symbol = "R",

@@ -168,9 +168,11 @@ local EditorButton = InputContainer:extend{
     width = nil,
     height = nil,
     dimen = nil,
+    px = nil,
 }
 
 function EditorButton:init()
+    local px = self.px or scale
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self[1] = FrameContainer:new{
         width = self.width, height = self.height, padding = 0, bordersize = 0,
@@ -178,7 +180,7 @@ function EditorButton:init()
         background = require("ffi/blitbuffer").COLOR_LIGHT_GRAY,
         CenterContainer:new{
             dimen = self.dimen,
-            TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", scale(11)), bold = true, max_width = self.width - scale(8) },
+            TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", px(11)), bold = true, max_width = self.width - px(8) },
         },
     }
     self.ges_events = { TapNightLuaButton = { GestureRange:new{ ges = "tap", range = self.dimen } } }
@@ -259,7 +261,7 @@ end
 
 return {
     id = "night_lua",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "NightLua",
     subtitle = "Lua editor with E-Ink syntax preview",
     symbol = "L",
@@ -270,11 +272,12 @@ return {
     buildPane = function(instance, context)
         local state = ensureState(instance)
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap, action_height = scale(14), scale(8), scale(38)
-        local action_y = scale(58)
-        local button_width = math.max(scale(56), math.floor((width - 2 * margin - 2 * gap) / 3))
-        local preview_y = action_y + action_height + scale(10)
-        local preview_height = math.max(scale(72), height - preview_y - margin)
+        local px = context.px or scale
+        local margin, gap, action_height = px(14), px(8), px(38)
+        local action_y = px(58)
+        local button_width = math.max(px(44), math.floor((width - 2 * margin - 2 * gap) / 3))
+        local preview_y = action_y + action_height + px(10)
+        local preview_height = math.max(px(56), height - preview_y - margin)
         local html = '<pre>' .. highlightLua(state.content) .. '</pre>'
         local css = [[
             body { background: #ffffff; color: #171717; font-family: monospace; font-size: 0.88em; line-height: 1.22; }
@@ -288,7 +291,7 @@ return {
         local preview = ScrollHtmlWidget:new{
             html_body = html, css = css,
             width = width - 2 * margin, height = preview_height,
-            default_font_size = scale(13), dialog = context.host,
+            default_font_size = px(13), dialog = context.host,
         }
         preview.overlap_offset = { margin, preview_y }
         local valid, syntax_err = syntaxStatus(state.content)
@@ -301,18 +304,18 @@ return {
             dimen = pane.dimen,
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = require("ffi/blitbuffer").COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("NightLua"), face = Font:getFace("cfont", scale(20)), bold = true, overlap_offset = { margin, scale(10) } },
-            TextWidget:new{ text = state.path or _("Open .lua from Files"), face = Font:getFace("smallinfofont", scale(10)), max_width = width - 2 * margin, overlap_offset = { margin, scale(38) } },
-            EditorButton:new{ title = _("Edit"), width = button_width, height = action_height, callback = function() openEditor(instance, context) end, overlap_offset = { margin, action_y } },
-            EditorButton:new{ title = _("Check"), width = button_width, height = action_height, callback = function()
+            TextWidget:new{ text = _("NightLua"), face = Font:getFace("cfont", px(20)), bold = true, overlap_offset = { margin, px(10) } },
+            TextWidget:new{ text = state.path or _("Open .lua from Files"), face = Font:getFace("smallinfofont", px(10)), max_width = width - 2 * margin, overlap_offset = { margin, px(38) } },
+            EditorButton:new{ title = _("Edit"), width = button_width, height = action_height, px = px, callback = function() openEditor(instance, context) end, overlap_offset = { margin, action_y } },
+            EditorButton:new{ title = _("Check"), width = button_width, height = action_height, px = px, callback = function()
                 local ok, err = syntaxStatus(state.content)
                 state.syntax_ok = ok
                 state.status = ok and _("Lua syntax OK.") or (_("Lua syntax error: ") .. tostring(err))
                 context.requestRebuild("ui")
             end, overlap_offset = { margin + button_width + gap, action_y } },
-            EditorButton:new{ title = _("Reload"), width = button_width, height = action_height, callback = function() reloadFile(instance, context) end, overlap_offset = { margin + (button_width + gap) * 2, action_y } },
+            EditorButton:new{ title = _("Reload"), width = button_width, height = action_height, px = px, callback = function() reloadFile(instance, context) end, overlap_offset = { margin + (button_width + gap) * 2, action_y } },
             preview,
-            TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", scale(10)), max_width = width - 2 * margin, overlap_offset = { margin, height - scale(18) } },
+            TextWidget:new{ text = state.status or "", face = Font:getFace("smallinfofont", px(10)), max_width = width - 2 * margin, overlap_offset = { margin, height - px(18) } },
         }
         return pane
     end,

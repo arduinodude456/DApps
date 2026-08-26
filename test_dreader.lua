@@ -76,9 +76,22 @@ local epub_path = root .. "/fixture.epub"
 local epub = assert(io.open(epub_path, "wb")); epub:write("fixture"); epub:close()
 local bad_epub_path = root .. "/bad.epub"
 local bad_epub = assert(io.open(bad_epub_path, "wb")); bad_epub:write("broken"); bad_epub:close()
+local markdown_path = root .. "/guide.md"
+local markdown = assert(io.open(markdown_path, "wb"))
+markdown:write([[# Calm *Reader*
+
+This is **local** Markdown with a [safe label](https://example.invalid) and ![diagram](https://example.invalid/diagram.png).
+
+## Notes
+
+- first item
+- second `code` item
+> quoted text
+]])
+markdown:close()
 
 local app = dofile("/home/ubuntu/dapps-store-repo/dreader.lua")
-assert(app.id == "dreader" and app.version == "2.0.3" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
+assert(app.id == "dreader" and app.version == "2.1.1" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
 local context = { dimen = { w = 600, h = 760 }, requestRebuild = function() end, requestRefresh = function() end }
 local html_instance = {}
 assert(app.openFile(html_instance, html_path), "DReader must open supported HTML")
@@ -95,7 +108,8 @@ assert(html_pane and html_pane.dimen and html_pane.dimen.w == 600, "DReader must
 local font_minus
 for _, child in ipairs(html_pane) do if child.title == "A−" then font_minus = child; break end end
 assert(font_minus and font_minus[1] and font_minus[1][1] and font_minus[1][1][1] and font_minus[1][1][1][1] and font_minus[1][1][1][1].text == "A−", "DReader button labels must be direct VerticalGroup children")
-local split_context = { dimen = { w = 600, h = 360 }, requestRebuild = function() end, requestRefresh = function() end }
+local px_calls = 0
+local split_context = { dimen = { w = 600, h = 360 }, px = function(value) px_calls = px_calls + 1; return math.max(1, math.floor(value * .65 + .5)) end, ui_scale = .65, requestRebuild = function() end, requestRefresh = function() end }
 local split_pane = app.buildPane(html_instance, split_context)
 assert(split_pane and split_pane.dimen.h == 360, "DReader must build the reader pane in a split height")
 html_pane:onDeactivate()
@@ -107,6 +121,14 @@ local book = epub_instance.dreader.book
 assert(book.title == "Fixture EPUB" and #book.chapters == 2 and book.chapters[1].title == "Opening", "DReader must parse EPUB metadata, navigation and spine")
 local epub_pane = app.buildPane(epub_instance, context)
 assert(epub_pane and epub_instance.dreader.pages and #epub_instance.dreader.pages >= 1, "DReader must paginate EPUB chapter text")
+local markdown_instance = {}
+assert(app.openFile(markdown_instance, markdown_path), "DReader must open local Markdown")
+local markdown_book = markdown_instance.dreader.book
+assert(markdown_book.format == "markdown" and markdown_book.title == "Calm Reader" and #markdown_book.chapters == 2 and markdown_book.chapters[2].title == "Notes", "DReader must turn Markdown headings into reader chapters")
+assert(markdown_book.markdown_chapters[1].text:find("local Markdown with a safe label and diagram.", 1, true), "DReader Markdown must retain labels but never dereference links or images")
+assert(markdown_book.markdown_chapters[2].text:find("• first item", 1, true) and markdown_book.markdown_chapters[2].text:find("second code item", 1, true) and markdown_book.markdown_chapters[2].text:find("› quoted text", 1, true), "DReader Markdown must keep lists, inline code, and block quotes legible")
+assert(#app._test.Book.chapterImages(markdown_book, 1) == 0, "DReader Markdown must not enqueue remote or embedded images")
+assert(app._test.Book.supports(root .. "/guide.markdown") and not app._test.Book.supports(root .. "/guide.txt"), "DReader must recognize only declared Markdown extensions")
 assert(app.openFile({}, bad_epub_path) == false, "DReader must reject a damaged EPUB without crashing")
 assert(app.openFile({}, root .. "/unsupported.pdf") == false, "DReader must reject unsupported formats")
 Book = nil

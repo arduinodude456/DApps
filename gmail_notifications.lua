@@ -266,7 +266,7 @@ end
 
 return {
     id = "gmail_notifications",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Gmail Notifications",
     subtitle = "Manual inbox checks through your local adapter",
     symbol = "M",
@@ -274,9 +274,10 @@ return {
     buildPane = function(instance, context)
         local state = stateFor(instance)
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap = scale(16), scale(8)
+        local px = context.px or scale
+        local margin, gap = px(16), px(8)
         local button_width = math.floor((width - 2 * margin - gap) / 2)
-        local clear_width = math.min(scale(132), math.floor((width - 2 * margin - gap) / 2))
+        local clear_width = math.min(px(132), math.floor((width - 2 * margin - gap) / 2))
         local check_width = width - 2 * margin - gap - clear_width
         local endpoint_status = state.store.endpoint ~= "" and _("Adapter address configured") or _("Adapter address missing")
         local token_status = state.store.pairing_token ~= "" and _("Pairing token configured") or _("Pairing token missing")
@@ -285,17 +286,17 @@ return {
         pane[1] = OverlapGroup:new{
             dimen = pane.dimen, allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("Gmail Notifications"), face = Font:getFace("cfont", scale(21)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { margin, margin } },
-            TextWidget:new{ text = _("Manual checks only. Gmail tokens remain on your local adapter."), face = Font:getFace("smallinfofont", scale(11)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + scale(31) } },
-            FrameContainer:new{ width = width - 2 * margin, height = scale(90), padding = 0, bordersize = 0, radius = scale(12), background = Blitbuffer.COLOR_LIGHT_GRAY, emptySizedWidget(width - 2 * margin, scale(90)), overlap_offset = { margin, margin + scale(59) } },
-            TextWidget:new{ text = endpoint_status .. "\n" .. token_status .. "\n" .. trust_status, face = Font:getFace("smallinfofont", scale(10)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 4 * margin, overlap_offset = { 2 * margin, margin + scale(76) } },
-            ActionButton:new{ width = button_width, height = scale(45), title = _("Adapter address"), callback = function() editField(state, context, "endpoint", _("Local adapter address"), "https://gmail-adapter.example:8443", false) end, overlap_offset = { margin, margin + scale(162) } },
-            ActionButton:new{ width = button_width, height = scale(45), title = _("Pairing token"), callback = function() editField(state, context, "pairing_token", _("Adapter pairing token"), _("Paste the token from your computer"), true) end, overlap_offset = { margin + button_width + gap, margin + scale(162) } },
-            ActionButton:new{ width = width - 2 * margin, height = scale(42), title = _("Trusted CA certificate"), callback = function() editField(state, context, "ca_cert_path", _("Local CA certificate"), _("/mnt/onboard/.adds/appdock/gmail-local-ca.pem (optional)"), false) end, overlap_offset = { margin, margin + scale(215) } },
-            ActionButton:new{ width = check_width, height = scale(49), title = _("Check Gmail"), primary = true, callback = function() checkMailbox(instance, context) end, overlap_offset = { margin, margin + scale(268) } },
-            ActionButton:new{ width = clear_width, height = scale(49), title = _("Forget local data"), callback = function() forgetLocalData(instance, context) end, overlap_offset = { margin + check_width + gap, margin + scale(268) } },
-            TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", scale(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + scale(331) } },
-            TextWidget:new{ text = _("The first successful scan is a quiet baseline. Later scans only notify for new message IDs."), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - scale(28) } },
+            TextWidget:new{ text = _("Gmail Notifications"), face = Font:getFace("cfont", px(21)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { margin, margin } },
+            TextWidget:new{ text = _("Manual checks only. Gmail tokens remain on your local adapter."), face = Font:getFace("smallinfofont", px(11)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(31) } },
+            FrameContainer:new{ width = width - 2 * margin, height = px(90), padding = 0, bordersize = 0, radius = px(12), background = Blitbuffer.COLOR_LIGHT_GRAY, emptySizedWidget(width - 2 * margin, px(90)), overlap_offset = { margin, margin + px(59) } },
+            TextWidget:new{ text = endpoint_status .. "\n" .. token_status .. "\n" .. trust_status, face = Font:getFace("smallinfofont", px(10)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 4 * margin, overlap_offset = { 2 * margin, margin + px(76) } },
+            ActionButton:new{ width = button_width, height = px(45), title = _("Adapter address"), callback = function() editField(state, context, "endpoint", _("Local adapter address"), "https://gmail-adapter.example:8443", false) end, overlap_offset = { margin, margin + px(162) } },
+            ActionButton:new{ width = button_width, height = px(45), title = _("Pairing token"), callback = function() editField(state, context, "pairing_token", _("Adapter pairing token"), _("Paste the token from your computer"), true) end, overlap_offset = { margin + button_width + gap, margin + px(162) } },
+            ActionButton:new{ width = width - 2 * margin, height = px(42), title = _("Trusted CA certificate"), callback = function() editField(state, context, "ca_cert_path", _("Local CA certificate"), _("/mnt/onboard/.adds/appdock/gmail-local-ca.pem (optional)"), false) end, overlap_offset = { margin, margin + px(215) } },
+            ActionButton:new{ width = check_width, height = px(49), title = _("Check Gmail"), primary = true, callback = function() checkMailbox(instance, context) end, overlap_offset = { margin, margin + px(268) } },
+            ActionButton:new{ width = clear_width, height = px(49), title = _("Forget local data"), callback = function() forgetLocalData(instance, context) end, overlap_offset = { margin + check_width + gap, margin + px(268) } },
+            TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(331) } },
+            TextWidget:new{ text = _("The first successful scan is a quiet baseline. Later scans only notify for new message IDs."), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - px(28) } },
         }
         return pane
     end,

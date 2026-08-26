@@ -416,7 +416,7 @@ end
 
 return {
     id = "book_translator",
-    version = "1.1.0",
+    version = "1.1.1",
     title = "BookTranslator",
     subtitle = "Translate supported books with DeepL or LibreTranslate",
     symbol = "T",
@@ -425,16 +425,17 @@ return {
         instance.book_translator = instance.book_translator or { config = loadConfig(), status = nil }
         local state = instance.book_translator
         local width, height = context.dimen.w, context.dimen.h
-        local margin, gap = scale(14), scale(8)
-        local card_h = math.max(scale(38), math.min(scale(54), math.floor((height - 2 * margin - scale(48) - 5 * gap) / 6)))
+        local px = context.px or scale
+        local margin, gap = px(14), px(8)
+        local card_h = math.max(px(32), math.min(px(54), math.floor((height - 2 * margin - px(48) - 5 * gap) / 6)))
         local book = currentBookPath(context)
         local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
         local content = OverlapGroup:new{
             dimen = pane.dimen,
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = require("ffi/blitbuffer").COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = _("BookTranslator"), face = Font:getFace("cfont", scale(20)), bold = true, overlap_offset = { margin, scale(12) } },
-            TextWidget:new{ text = _("TXT · HTML/XHTML · FB2 · original file stays unchanged"), face = Font:getFace("smallinfofont", scale(10)), max_width = width - 2 * margin, overlap_offset = { margin, scale(40) } },
+            TextWidget:new{ text = _("BookTranslator"), face = Font:getFace("cfont", px(20)), bold = true, overlap_offset = { margin, px(12) } },
+            TextWidget:new{ text = _("TXT · HTML/XHTML · FB2 · original file stays unchanged"), face = Font:getFace("smallinfofont", px(10)), max_width = width - 2 * margin, overlap_offset = { margin, px(40) } },
         }
         local cards = {
             { title = _("Current book"), subtitle = book or _("No reader document open"), callback = function() end },
@@ -444,7 +445,7 @@ return {
             { title = state.config.provider == "deepl" and _("DeepL API Free key") or _("LibreTranslate service"), subtitle = trim(state.config.api_key) == "" and _("Not set · tap to configure") or _("Configured locally · tap to edit"), callback = function() editServiceConfig(instance, context) end },
             { title = _("Translate current book"), subtitle = _("Confirm before text leaves this device"), callback = function() startTranslation(instance, context) end },
         }
-        local first_y = scale(60)
+        local first_y = px(60)
         for index, card in ipairs(cards) do
             if first_y + (index - 1) * (card_h + gap) + card_h > height - margin then break end
             content[#content + 1] = ActionCard:new{
@@ -455,7 +456,7 @@ return {
             }
         end
         if state.status then
-            content[#content + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", scale(10)), max_width = width - 2 * margin, overlap_offset = { margin, height - scale(24) } }
+            content[#content + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(10)), max_width = width - 2 * margin, overlap_offset = { margin, height - px(24) } }
         end
         pane[1] = content
         return pane
