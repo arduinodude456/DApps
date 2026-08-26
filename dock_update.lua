@@ -47,6 +47,7 @@ local REQUIRED_FILES = {
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
+    "appdock_wallpaper.lua", "appdock_lockscreen.lua",
 }
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -343,6 +344,28 @@ local function checkForRelease(instance, context)
     requestRebuild(context)
 end
 
+local function backgroundTick(instance, context)
+    local state = stateFor(instance)
+    local body = fetch(RELEASE_URL, MAX_METADATA_BYTES, "application/vnd.github+json")
+    if not body then return false end
+    local release = releaseFromJSON(body)
+    if not release then return false end
+    state.background_checked_at = os.time()
+    local installed = context and context.appdock and context.appdock.version
+    local relation = compareVersions(release.version, tostring(installed or ""))
+    if relation == 1 and state.background_notified_tag ~= release.tag then
+        state.background_notified_tag = release.tag
+        if context.notify then
+            context.notify({
+                title = _("AppDock update available"),
+                message = _("Version ") .. release.version .. _(" is ready. Open DockUpdate to review notes and confirm installation."),
+                priority = "normal",
+            })
+        end
+    end
+    return true
+end
+
 local function prepareRelease(state)
     if not state.release then return nil, _("Check for an AppDock release first.") end
     if state.files then return state.files end
@@ -453,10 +476,12 @@ end
 
 return {
     id = "dock_update",
-    version = "1.0.5",
+    version = "1.1.0",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
     logo = "download",
     buildPane = buildPane,
+    backgroundTick = backgroundTick,
+    onAutostart = backgroundTick,
 }

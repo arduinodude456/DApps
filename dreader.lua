@@ -265,6 +265,66 @@ function HTML.sections(source, fallback_title)
     return #chapters > 0 and chapters or { { title = fallback_title, text = plain } }
 end
 
+-- Markdown --------------------------------------------------------------------
+-- Markdown is rendered as local readable text. It never loads remote images,
+-- executes HTML, or follows links; markup is reduced for the E-Ink paginator.
+local Markdown = {}
+
+local function markdownInline(text)
+    text = text or ""
+    text = text:gsub("!%[([^%]]*)%]%([^)]*%)", "%1")
+    text = text:gsub("%[([^%]]+)%]%([^)]*%)", "%1")
+    text = text:gsub("%*%*(.-)%*%*", "%1"):gsub("__(.-)__", "%1")
+    text = text:gsub("%*(.-)%*", "%1"):gsub("`(.-)`", "%1")
+    return text
+end
+
+function Markdown.title(source, fallback)
+    local heading = (source or ""):match("\r?\n?%s*#%s+([^\r\n]+)")
+    heading = trim(markdownInline(heading or ""))
+    return heading ~= "" and heading or fallback
+end
+
+function Markdown.sections(source, fallback_title)
+    local chapters, lines = {}, {}
+    local current_title = fallback_title
+    local in_fence = false
+    local function flush()
+        local text = trim(table.concat(lines, "\n"))
+        if text ~= "" then chapters[#chapters + 1] = { title = current_title, text = text } end
+        lines = {}
+    end
+    source = (source or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+    for raw in (source .. "\n"):gmatch("(.-)\n") do
+        if raw:match("^%s*```") or raw:match("^%s*~~~") then
+            in_fence = not in_fence
+            lines[#lines + 1] = ""
+        else
+            local hashes, heading = raw:match("^%s*(#+)%s+(.+)%s*$")
+            if hashes and #hashes <= 3 and not in_fence then
+                flush()
+                current_title = trim(markdownInline(heading))
+                if current_title == "" then current_title = fallback_title end
+                lines[#lines + 1] = current_title
+                lines[#lines + 1] = ""
+            else
+                local line = raw
+                if not in_fence then
+                    if line:match("^%s*[-*_][-%*_][-%*_]+%s*$") then line = ""
+                    else
+                        line = line:gsub("^%s*[-+*]%s+", "• ")
+                        line = line:gsub("^%s*>%s?", "› ")
+                        line = markdownInline(line)
+                    end
+                end
+                lines[#lines + 1] = line
+            end
+        end
+    end
+    flush()
+    return #chapters > 0 and chapters or { { title = fallback_title, text = "" } }
+end
+
 -- EPUB ------------------------------------------------------------------------
 local EPUB = {}
 
@@ -384,18 +444,26 @@ local Book = {}
 
 function Book.supports(path)
     local extension = (path or ""):lower():match("%.([%w]+)$")
-    return extension == "epub" or extension == "html" or extension == "htm" or extension == "xhtml"
+    return extension == "epub" or extension == "html" or extension == "htm" or extension == "xhtml" or extension == "md" or extension == "markdown"
 end
 
 function Book.open(path)
-    if type(path) ~= "string" or #path == 0 or #path > 1024 or not Book.supports(path) then return nil, _("DReader supports local EPUB, HTML, HTM, and XHTML files only.") end
+    if type(path) ~= "string" or #path == 0 or #path > 1024 or not Book.supports(path) then return nil, _("DReader supports local EPUB, HTML, HTM, XHTML, and Markdown files only.") end
     local attr = lfs.attributes(path)
     if not attr or attr.mode ~= "file" then return nil, _("The document cannot be opened.") end
     if attr.size and attr.size > MAX_FILE_BYTES then return nil, _("The document is too large for DReader.") end
     if path:lower():match("%.epub$") then return EPUB.open(path) end
     local file, err = io.open(path, "rb")
-    if not file then return nil, err or _("HTML document cannot be opened.") end
+    if not file then return nil, err or _("Document cannot be opened.") end
     local source = file:read("*a"); file:close()
+    if path:lower():match("%.md$") or path:lower():match("%.markdown$") then
+        local title = Markdown.title(source, basename(path):gsub("%.[^.]+$", ""))
+        local markdown_chapters = Markdown.sections(source, title)
+        if #markdown_chapters == 0 or trim(markdown_chapters[1].text or "") == "" then return nil, _("The Markdown document has no readable text.") end
+        local chapters = {}
+        for index, section in ipairs(markdown_chapters) do chapters[index] = { title = section.title, start = index } end
+        return { format = "markdown", path = path, title = title, chapters = chapters, markdown_chapters = markdown_chapters, image_cache = {}, cache = {}, cache_order = {}, style = { heading_ratio = 1.35 } }
+    end
     local title = HTML.title(source, basename(path):gsub("%.[^.]+$", ""))
     local html_chapters = HTML.sections(source, title)
     if #html_chapters == 0 or trim(html_chapters[1].text or "") == "" then return nil, _("The HTML document has no readable text.") end
@@ -447,6 +515,7 @@ function Book.chapterText(book, index)
     if not chapter then return nil, _("Chapter does not exist.") end
     local text, err
     if book.format == "html" then text = book.html_chapters[index] and book.html_chapters[index].text
+    elseif book.format == "markdown" then text = book.markdown_chapters[index] and book.markdown_chapters[index].text
     else
         local source
         source, err = readArchive(book.archive, book.entries, chapter.path)
@@ -593,7 +662,7 @@ end
 
 local function selectBook(instance, context)
     local state, dialog = stateFor(instance), nil
-    dialog = InputDialog:new{ title = _("Open EPUB or HTML"), input = "", input_hint = _("Absolute path to .epub, .html, .htm, or .xhtml"), buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Open"), is_enter_default = true, callback = function() local path = dialog:getInputText(); UIManager:close(dialog); openBook(instance, context, path) end } } } }
+    dialog = InputDialog:new{ title = _("Open EPUB, HTML, or Markdown"), input = "", input_hint = _("Absolute path to .epub, .html, .htm, .xhtml, .md, or .markdown"), buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Open"), is_enter_default = true, callback = function() local path = dialog:getInputText(); UIManager:close(dialog); openBook(instance, context, path) end } } } }
     UIManager:show(dialog); dialog:onShowKeyboard()
 end
 
@@ -634,7 +703,7 @@ end
 local function libraryPane(instance, context)
     local state, width, height = stateFor(instance), context.dimen.w, context.dimen.h
     local margin, row_h, gap = scale(12), scale(48), scale(7)
-    local elements = { background(width, height), TextWidget:new{ text = _("DReader"), face = Font:getFace("cfont", scale(20)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, scale(10) } }, TextWidget:new{ text = _("My books · local EPUB and HTML"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = mutedColor(), overlap_offset = { margin, scale(35) } }, Action:new{ title = _("Open document"), subtitle = _("EPUB, HTML, HTM, or XHTML"), width = width - 2 * margin, height = row_h, shade = Blitbuffer.COLOR_GRAY_8, callback = function() selectBook(instance, context) end, overlap_offset = { margin, scale(54) } } }
+    local elements = { background(width, height), TextWidget:new{ text = _("DReader"), face = Font:getFace("cfont", scale(20)), bold = true, fgcolor = readableColor(), overlap_offset = { margin, scale(10) } }, TextWidget:new{ text = _("My books · local EPUB, HTML, and Markdown"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = mutedColor(), overlap_offset = { margin, scale(35) } }, Action:new{ title = _("Open document"), subtitle = _("EPUB, HTML, or Markdown"), width = width - 2 * margin, height = row_h, shade = Blitbuffer.COLOR_GRAY_8, callback = function() selectBook(instance, context) end, overlap_offset = { margin, scale(54) } } }
     local y = scale(54) + row_h + gap
     if #state.store.books == 0 then elements[#elements + 1] = TextWidget:new{ text = state.notice or _("No books yet. Open a local EPUB or HTML document to begin."), face = Font:getFace("smallinfofont", scale(10)), fgcolor = mutedColor(), max_width = width - 2 * margin, overlap_offset = { margin, y + scale(10) } } end
     for index, item in ipairs(state.store.books) do
@@ -736,9 +805,9 @@ end
 
 return {
     id = "dreader",
-    version = "2.0.3",
+    version = "2.1.0",
     title = "DReader",
-    subtitle = "A calm EPUB and HTML reader",
+    subtitle = "A calm EPUB, HTML, and Markdown reader",
     symbol = "R",
     logo = "document",
     openFile = function(instance, path)
@@ -757,4 +826,5 @@ return {
         if state.view == "settings" and state.book then return persistentPane(settingsPane(instance, context), state) end
         return persistentPane(libraryPane(instance, context), state)
     end,
+    _test = { Markdown = Markdown, Book = Book },
 }

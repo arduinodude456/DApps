@@ -1,13 +1,13 @@
 # AppDock DApp DeveloperManual
 
-**Version:** 1.0  
+**Version:** 3.0
 **Zielplattform:** AppDock innerhalb von KOReader  
-**Referenzkern:** AppDock 1.8.0
+**Referenzkern:** AppDock 3.0.0 „Cappuccino“
 **Sprache:** Lua 5.1 beziehungsweise LuaJIT-kompatibles Lua
 
 Dieses Manual beschreibt, wie eigenständige **DApps** und passive **Homescreen-Widgets** für AppDock entwickelt, lokal getestet und über den öffentlichen AppStore-Katalog veröffentlicht werden. Eine DApp ist kein Android-Paket und kein eigenständiges KOReader-Plugin. Sie ist eine einzelne vertrauenswürdige Lua-Datei, die innerhalb des AppDock-Hosts läuft und eine begrenzte, lokale Pane-Fläche erhält.
 
-> **Grundprinzip:** Eine gute DApp kennt nur ihre übergebene `context.dimen`, verwaltet ihren Zustand über `instance`, aktualisiert E-Ink sparsam und führt niemals ungeprüften Lua-Code aus Benutzereingaben aus.
+> **Grundprinzip:** Eine gute DApp kennt nur ihre übergebene `context.dimen`, skaliert neue Oberflächen über `context.ui_scale`, verwaltet ihren Zustand über `instance`, aktualisiert E-Ink sparsam und führt niemals ungeprüften Lua-Code aus Benutzereingaben aus.
 
 ## 1. Schnellstart
 
@@ -176,6 +176,9 @@ AppDock erzeugt für jedes aktive Pane einen eigenen Kontext. Die aktuell verlä
 | Feld/Funktion | Zweck | Typischer Einsatz |
 |---|---|---|
 | `context.dimen` | Zugewiesene lokale Pane-Geometrie | `context.dimen.w`, `context.dimen.h` lesen |
+| `context.scale` / `context.ui_scale` | Relative Skala einer 600 × 748-Inhaltspanel-Basis | Neue Schrift-, Abstand- und Kontrollgrößen skalieren |
+| `context.px(value)` | Abgerundete relative Größe mit mindestens einem Pixel | `local margin = context.px(14)` |
+| `context.relative(w, h)` | Proportionale lokale Geometrie | `local half = context.relative(0.5, 0.42)` |
 | `context.manager` | AppDock-DApp-Manager | `context.manager:openDAppFile(...)` |
 | `context.host` | Aktiver DApp-Host | Nur für fortgeschrittene Hostprüfungen |
 | `context.requestRebuild(kind)` | Pane neu aufbauen und danach aktualisieren | `context.requestRebuild("ui")` |
@@ -184,7 +187,21 @@ AppDock erzeugt für jedes aktive Pane einen eigenen Kontext. Die aktuell verlä
 
 Die Funktionen sind bereits an den aktiven Host gebunden. Rufe deshalb in einer DApp **nicht** direkt auf interne Host-Stacks zu und verwende nicht die globale Fensterverwaltung als Ersatz für den Kontext. Die konkrete Kontextbildung sowie die Weiterleitung an KOReaders `UIManager` liegen im AppDock-Kern [2].
 
-### 4.1 UI-Neuaufbau
+### 4.1 Skalierbare neue Oberflächen
+
+AppDock 3.0.0 ergänzt den unveränderten `context.dimen`-Vertrag um eine begrenzte relative UI-Skala. Neue oder umfassend überarbeitete DApps sollen `context.px(...)` für Schriftgrößen, Innenabstände, Radien und Mindestgrößen verwenden und ihre Spaltenbreiten weiterhin aus der lokalen Pane-Breite ableiten. Bestehende DApps mit `Device.screen:scaleBySize(...)` bleiben kompatibel, werden aber im Splitscreen nicht automatisch umgerechnet.
+
+```lua
+buildPane = function(instance, context)
+    local width, height = context.dimen.w, context.dimen.h
+    local margin = context.px(14)
+    local title_size = context.px(20)
+    local half = context.relative(0.5, 0.42)
+    -- half.w und half.h bleiben innerhalb der zugewiesenen lokalen Pane-Fläche.
+end
+```
+
+### 4.2 UI-Neuaufbau
 
 Für normale Aktionen wie Seitenwechsel, Dialogabschluss, geänderte Einstellungen oder neue Daten verwende:
 
@@ -194,7 +211,7 @@ context.requestRebuild("ui")
 
 Ein Neuaufbau darf den Status einer DApp nicht verlieren. `buildPane` muss jederzeit aus `instance` denselben logischen Zustand wieder darstellen können.
 
-### 4.2 Regionaler Fast-Refresh
+### 4.3 Regionaler Fast-Refresh
 
 Für bereits direkt gezeichnete Pixel, zum Beispiel eine Zeichenlinie oder einen Slider-Knopf, verwende eine absolute Region:
 
@@ -209,7 +226,7 @@ context.requestRefresh("fast", Geom:new{
 
 `fast` ist für kleine, kurzfristige Änderungen gedacht. Es ersetzt keinen UI-Neuaufbau. Wenn sich Widgets, Text, Layout oder ein Dialog ändern, ist `requestRebuild("ui")` die richtige Wahl. Fordere keinen Fullscreen-Refresh bei jeder Eingabe an.
 
-### 4.3 Lokale Benachrichtigungen
+### 4.4 Lokale Benachrichtigungen
 
 Ab AppDock 2.1.0 kann eine DApp eine lokale Benachrichtigung erzeugen. AppDock speichert sie in einer begrenzten Inbox, zeigt eine kurze nicht animierte E-Ink-Karte an und führt sie im Quick-Settings-Dropdown auf. Es gibt keine Remote-Push-Infrastruktur, keine Hintergrundschleife und kein Aufwecken des Geräts.
 
@@ -223,6 +240,19 @@ local ok, notification = context.notify({
 
 `title` und `message` sind Pflichtfelder. Titel werden auf 72 Zeichen, Nachrichten auf 240 Zeichen begrenzt. `source` ist optional; ohne Angabe setzt AppDock automatisch den Titel der aufrufenden DApp. Die Inbox hält maximal 50 Einträge. DApps dürfen keine Funktions-Callbacks, externe Push-Token oder eigene Timer in den Payload schreiben. Benachrichtige nur bei einem echten Ergebnis oder Fehler, nicht bei jedem Repaint oder Seitenwechsel.
 
+### 4.5 Erlaubte lokale Hintergrundhooks
+
+Eine Store-DApp kann optional `backgroundTick(instance, context)` und/oder `onAutostart(instance, context)` deklarieren. Diese Funktionen werden **nicht** automatisch berechtigt: Der Nutzer muss die jeweilige Berechtigung in AppDocks DApp-Einstellungen setzen. Der Hintergrundkontext ist nur innerhalb einer aktiven KOReader-/AppDock-Sitzung verfügbar; er besitzt keine Pane-Geometrie, keine UI-Rebuild-Funktion und keine Berechtigung zur automatischen Installation oder zum Aufwecken des Geräts. `backgroundTick` kann in der aktiven Sitzung etwa alle zwei Minuten aufgerufen werden und wird im Energiesparmodus übersprungen.
+
+```lua
+backgroundTick = function(instance, context)
+    -- Nur nach expliziter Nutzerberechtigung aufgerufen.
+    -- Kontext enthält `background = true`, `now` und `notify`.
+    context.notify({ title = "Status", message = "A real local result is available." })
+end
+```
+
+Netzwerkzugriffe bleiben HTTPS-only, größen- und zeitbegrenzt. Ein Hintergrundhook darf keine Quellen installieren, keine UI öffnen und keine Benachrichtigungen für unveränderte Ergebnisse wiederholen.
 ## 5. E-Ink- und UI-Regeln
 
 AppDock ist ein E-Ink-Homescreen. Eine Oberfläche, die auf einem schnellen LCD gut aussieht, kann auf E-Ink flackern, überlagert wirken oder erst verspätet erscheinen. Baue daher ruhig, kontrastreich und geometrisch deterministisch.

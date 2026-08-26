@@ -8,10 +8,10 @@ draw.lua | 1.2.1 | notes
 calc.lua | 1.0.0 | calculator
 video_player.lua | 1.0.2 | gallery
 bwr_video.lua | 1.0.0 | gallery
-dreader.lua | 2.0.3 | document
+dreader.lua | 2.1.0 | document
 calendar.lua | 1.0.1 | calendar
 rss_reader.lua | 1.0.1 | rss
-dock_update.lua | 1.0.5 | download
+dock_update.lua | 1.1.0 | download
 2048.lua | 1.0.3 | other
 status_message.lua | 1.0.0 | help
 gmail_notifications.lua | 1.0.0 | mail
