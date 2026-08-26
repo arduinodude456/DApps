@@ -89,6 +89,7 @@ local function cloneStore(raw)
         last_refresh = tonumber(raw.last_refresh) or 0,
         last_background_check = math.max(0, math.floor(tonumber(raw.last_background_check) or 0)),
         last_seen_message_id = trim(raw.last_seen_message_id):match("^%d+$") and trim(raw.last_seen_message_id) or "",
+        background_baseline_ready = raw.background_baseline_ready == true,
     }
 end
 
@@ -225,6 +226,7 @@ end
 local function markMessagesSeen(store)
     local newest_id = newestMessageId(store.messages)
     if newest_id ~= "" then store.last_seen_message_id = newest_id end
+    store.background_baseline_ready = true
 end
 
 local function countNewMessages(messages, last_seen_message_id)
@@ -262,7 +264,7 @@ local function setEndpoint(state, context)
             local endpoint, err = validEndpoint(dialog:getInputText())
             if not endpoint then state.status = err; UIManager:close(dialog); refresh(context); return end
             state.store.endpoint = endpoint
-            state.store.last_background_check, state.store.last_seen_message_id = 0, ""
+            state.store.last_background_check, state.store.last_seen_message_id, state.store.background_baseline_ready = 0, "", false
             saveStore(state.store)
             state.status = _("Public service address saved locally. Create an identity before posting or reporting.")
             UIManager:close(dialog)
@@ -349,12 +351,13 @@ local function backgroundCheck(instance, context)
     local previous_seen = state.store.last_seen_message_id
     replaceMessages(state.store, response.messages)
     local newest_id = newestMessageId(state.store.messages)
-    if previous_seen == "" then
+    if not state.store.background_baseline_ready then
         state.store.last_seen_message_id = newest_id
+        state.store.background_baseline_ready = true
         saveStore(state.store)
         return true, "baseline"
     end
-    local new_count = countNewMessages(state.store.messages, previous_seen)
+    local new_count = previous_seen == "" and #state.store.messages or countNewMessages(state.store.messages, previous_seen)
     state.store.last_seen_message_id = newest_id ~= "" and newest_id or previous_seen
     saveStore(state.store)
     if new_count > 0 and context and type(context.notify) == "function" then
@@ -527,7 +530,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.1.0",
+    version = "1.1.1",
     title = "DChat",
     subtitle = "Public AppDock Lounge, optional 15-minute alerts",
     symbol = "D",
