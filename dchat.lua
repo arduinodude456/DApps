@@ -2,7 +2,9 @@
 DChat for AppDock.
 
 One public, text-only room. This DApp deliberately has no private messages,
-no end-to-end encryption claim, no background refresh, and no account recovery.
+no end-to-end encryption claim, and no account recovery. Its optional
+background check is disabled by default and only runs through AppDock's
+explicit background-notification permission.
 The reader keeps a local opaque device secret; the server only receives it in
 an HTTPS request and stores a one-way hash.
 --]]--
@@ -37,6 +39,7 @@ local MAX_CACHE_MESSAGES = 60
 local MAX_VISIBLE_PER_PAGE = 5
 local CONNECT_TIMEOUT = 10
 local REQUEST_MAX_TIME = 25
+local BACKGROUND_CHECK_SECONDS = 15 * 60
 
 local function scale(value)
     return Device.screen:scaleBySize(value)
@@ -84,6 +87,8 @@ local function cloneStore(raw)
         display_name = safeText(raw.display_name, MAX_NAME_BYTES) or "",
         messages = messages,
         last_refresh = tonumber(raw.last_refresh) or 0,
+        last_background_check = math.max(0, math.floor(tonumber(raw.last_background_check) or 0)),
+        last_seen_message_id = trim(raw.last_seen_message_id):match("^%d+$") and trim(raw.last_seen_message_id) or "",
     }
 end
 
@@ -151,7 +156,7 @@ local function httpJson(store, method, suffix, payload, include_identity)
         end
         return 1
     end
-    local headers = { ["accept"] = "application/json", ["user-agent"] = "AppDock-DChat/1.0" }
+    local headers = { ["accept"] = "application/json", ["user-agent"] = "AppDock-DChat/1.1" }
     local body = nil
     if payload then
         local encoded_ok, encoded = pcall(JSON.encode, payload)
@@ -208,6 +213,38 @@ local function replaceMessages(store, raw_messages)
     store.last_refresh = os.time()
 end
 
+local function newestMessageId(messages)
+    local newest_id, newest_number = "", -1
+    for _, message in ipairs(messages or {}) do
+        local numeric_id = tonumber(message.id)
+        if numeric_id and numeric_id > newest_number then newest_id, newest_number = message.id, numeric_id end
+    end
+    return newest_id, newest_number
+end
+
+local function markMessagesSeen(store)
+    local newest_id = newestMessageId(store.messages)
+    if newest_id ~= "" then store.last_seen_message_id = newest_id end
+end
+
+local function countNewMessages(messages, last_seen_message_id)
+    local seen_number = tonumber(last_seen_message_id)
+    if not seen_number then return 0 end
+    local count = 0
+    for _, message in ipairs(messages or {}) do
+        local numeric_id = tonumber(message.id)
+        if numeric_id and numeric_id > seen_number then count = count + 1 end
+    end
+    return count
+end
+
+local function wifiIsOn()
+    local loaded, NetworkMgr = pcall(require, "ui/network/manager")
+    if not loaded or not NetworkMgr or type(NetworkMgr.isWifiOn) ~= "function" then return false end
+    local state_ok, wifi_on = pcall(NetworkMgr.isWifiOn, NetworkMgr)
+    return state_ok and wifi_on == true
+end
+
 local function stateFor(instance)
     instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, selected_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false }
     return instance.dchat
@@ -225,6 +262,7 @@ local function setEndpoint(state, context)
             local endpoint, err = validEndpoint(dialog:getInputText())
             if not endpoint then state.status = err; UIManager:close(dialog); refresh(context); return end
             state.store.endpoint = endpoint
+            state.store.last_background_check, state.store.last_seen_message_id = 0, ""
             saveStore(state.store)
             state.status = _("Public service address saved locally. Create an identity before posting or reporting.")
             UIManager:close(dialog)
@@ -290,10 +328,45 @@ local function fetchMessages(state, context)
         return
     end
     replaceMessages(state.store, response.messages)
+    markMessagesSeen(state.store)
     state.page = 1
     saveStore(state.store)
     state.status = #state.store.messages == 0 and _("No public messages yet.") or _("Public messages refreshed manually.")
     refresh(context)
+end
+
+local function backgroundCheck(instance, context)
+    local state = stateFor(instance)
+    local now = math.max(0, math.floor(tonumber(context and context.now) or os.time()))
+    if now - state.store.last_background_check < BACKGROUND_CHECK_SECONDS then return false, "interval" end
+    if not wifiIsOn() then return false, "wifi" end
+    state.store.last_background_check = now
+    local response = httpJson(state.store, "GET", "/messages?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, false)
+    if type(response) ~= "table" or type(response.messages) ~= "table" then
+        saveStore(state.store)
+        return false, "network"
+    end
+    local previous_seen = state.store.last_seen_message_id
+    replaceMessages(state.store, response.messages)
+    local newest_id = newestMessageId(state.store.messages)
+    if previous_seen == "" then
+        state.store.last_seen_message_id = newest_id
+        saveStore(state.store)
+        return true, "baseline"
+    end
+    local new_count = countNewMessages(state.store.messages, previous_seen)
+    state.store.last_seen_message_id = newest_id ~= "" and newest_id or previous_seen
+    saveStore(state.store)
+    if new_count > 0 and context and type(context.notify) == "function" then
+        pcall(context.notify, {
+            title = _("DChat"),
+            message = new_count == 1 and _("1 new public message in AppDock Lounge.") or string.format(_("%d new public messages in AppDock Lounge."), new_count),
+            source = "DChat",
+            priority = "normal",
+        })
+        return true, "notified"
+    end
+    return true, "current"
 end
 
 local function sendMessage(state, context, text)
@@ -385,7 +458,7 @@ local function timelinePane(instance, context)
     local elements = {
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
         TextWidget:new{ text = _("AppDock Lounge"), face = Font:getFace("cfont", px(21)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { margin, margin } },
-        TextWidget:new{ text = _("Public text room · no private messages · no encryption · manual refresh"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(28) } },
+        TextWidget:new{ text = _("Public text room · no private messages · no encryption · optional background alerts"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(28) } },
         ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchMessages(state, context) end, overlap_offset = { margin, margin + px(62) } },
         ActionButton:new{ width = third, height = button_height, title = _("Send"), callback = function() promptMessage(state, context) end, overlap_offset = { margin + third + gap, margin + px(62) } },
         ActionButton:new{ width = third, height = button_height, title = _("Settings"), callback = function() state.view = "settings"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(62) } },
@@ -416,6 +489,8 @@ local function settingsPane(instance, context)
     local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(38), math.floor(height / 13))
     local endpoint_status = state.store.endpoint ~= "" and state.store.endpoint or _("Public service address missing")
     local identity_status = hasIdentity(state.store) and (_("Identity: ") .. state.store.display_name) or _("No local identity")
+    local permissions = context.appdock and context.appdock.getDAppPermissions and context.appdock:getDAppPermissions("dchat") or {}
+    local background_status = permissions.background and _("Background checks: on · Wi-Fi only · every 15 minutes") or _("Background checks: off · enable in DApp permissions")
     return OverlapGroup:new{
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
@@ -423,8 +498,9 @@ local function settingsPane(instance, context)
         TextBoxWidget:new{ text = _("DChat is a public room. Do not share sensitive data. It does not provide private messages, end-to-end encryption, real-time delivery, account recovery or identity transfer."), face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = px(67), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + px(31) } },
         TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(108) } },
         TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(126) } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Public service address"), callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(151) } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(151) + button_height + gap } },
+        TextWidget:new{ text = background_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(143) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Public service address"), callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(166) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(166) + button_height + gap } },
         ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(24) } },
     }
@@ -451,9 +527,9 @@ end
 
 return {
     id = "dchat",
-    version = "1.0.1",
+    version = "1.1.0",
     title = "DChat",
-    subtitle = "Public AppDock Lounge, manual refresh",
+    subtitle = "Public AppDock Lounge, optional 15-minute alerts",
     symbol = "D",
     logo = "rss",
     buildPane = function(instance, context)
@@ -462,5 +538,6 @@ return {
         if state.view == "message" then return messagePane(instance, context) end
         return timelinePane(instance, context)
     end,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, httpJson = httpJson },
+    backgroundTick = backgroundCheck,
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }

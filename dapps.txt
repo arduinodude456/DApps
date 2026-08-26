@@ -23,4 +23,4 @@ reading_stats_widget.lua | 1.0.0 | reading | widget
 analog_clock_widget.lua | 1.0.0 | analog_clock | widget
 calendar_widget.lua | 1.0.0 | calendar | widget
 random_book_covers_widget.lua | 1.0.0 | reading | widget
-dchat.lua | 1.0.1 | rss
+dchat.lua | 1.1.0 | rss
