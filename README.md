@@ -153,6 +153,14 @@ NightLua zeigt im DApp-Pane eine scrollbar Syntaxhervorhebung für Schlüsselwö
 
 > **Hinweis:** Die Live-Eingabe verwendet bewusst KOReaders bewährtes natives Texteingabefeld. Die farbige beziehungsweise kontrastverstärkte Syntaxansicht ist die separate, nach dem Speichern oder Aktualisieren angezeigte Vorschau im NightLua-Pane.
 
+## DBASIC
+
+[`dbasic.lua`](dbasic.lua) ist ein kleiner, vollständig lokaler BASIC-Editor und -Interpreter für AppDock. Programme bestehen aus nummerierten Zeilen. DBASIC unterstützt `PRINT`, Zuweisungen mit und ohne `LET`, `IF … THEN`, `GOTO`, `FOR … TO … STEP … NEXT`, `CLS`, `COLOR`, `PSET`, `LINE`, `RECT`, `ON TOUCH GOTO` sowie `END` und `STOP`. Numerische Ausdrücke bieten Klammern, `+`, `-`, `*`, `/`, `^`, Vergleiche und die Funktionen `RND`, `ABS`, `INT`, `MIN` und `MAX`.
+
+Die Grafikfläche arbeitet mit einem festen virtuellen Koordinatensystem von **160 × 100**. `PSET`, `LINE` und `RECT` werden darauf skaliert; `COLOR` akzeptiert drei kontrastreiche E-Ink-Stufen. Mit `ON TOUCH GOTO 100` kann ein Programm den nächsten Tipp auf die Grafikfläche abfangen. Die bereitgestellte Touch-Demo zeigt diesen Ablauf direkt.
+
+> **Sicherheitsgrenze:** DBASIC wertet niemals Lua aus und akzeptiert keine Dateizugriffe, Shellbefehle, Netzwerkzugriffe, dynamischen Code, `POST`-Anfragen oder unbegrenzte Schleifen. Programmgröße, Variablen, Schleifentiefe, Grafikanweisungen, Ausgabetext und maximale Ausführungsschritte sind fest begrenzt. Fehler nennen stets die betreffende BASIC-Zeilennummer.
+
 ## Beispiel
 
 [`examples/quote_card.lua`](examples/quote_card.lua) ist eine kleine offline DApp und ein minimaler Ausgangspunkt für neue DApps.

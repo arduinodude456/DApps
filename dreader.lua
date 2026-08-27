@@ -40,7 +40,7 @@ local MAX_ARCHIVE_ENTRIES = 5000
 local MAX_ENTRY_BYTES = 3 * 1024 * 1024
 local MAX_SPINE_ITEMS = 1600
 local MAX_CHAPTER_CACHE = 5
-local MAX_CHAPTER_IMAGES = 3
+local MAX_CHAPTER_IMAGES = 8
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
@@ -194,30 +194,37 @@ function HTML.imageGroups(source)
 end
 
 function HTML.images(source)
-    local images = {}
-    for fragment in (source or ""):gmatch("<[Ii][Mm][Gg][^>]*>") do
+    local images, seen = {}, {}
+    local function add(fragment)
         local item = attributes(fragment)
-        local source_path = item.src
-        if source_path and not source_path:match("^[%a]+:") and not source_path:match("^/") then
-            local suffix = source_path:lower():match("%.([%w]+)$")
-            if suffix == "png" or suffix == "jpg" or suffix == "jpeg" or suffix == "gif" or suffix == "webp" then images[#images + 1] = source_path end
+        local source_path = item.src or item.href or item["xlink:href"]
+        if source_path and not source_path:match("^[%a][%w+.-]*:") then
+            local clean = source_path:gsub("#.*$", ""):gsub("%?.*$", "")
+            local suffix = clean:lower():match("%.([%w]+)$")
+            if suffix == "png" or suffix == "jpg" or suffix == "jpeg" or suffix == "gif" or suffix == "webp" then
+                if not seen[source_path] then images[#images + 1], seen[source_path] = source_path, true end
+            end
         end
     end
+    for fragment in (source or ""):gmatch("<[Ii][Mm][Gg][^>]*>") do add(fragment) end
+    for fragment in (source or ""):gmatch("<[Ii][Mm][Aa][Gg][Ee][^>]*>") do add(fragment) end
     return images
 end
 
 function HTML.text(source)
     source = source or ""
     local image_index = 0
-    source = source:gsub("<[Ii][Mm][Gg][^>]*>", function(fragment)
+    local function imageMarker(fragment)
         local item = attributes(fragment)
-        local relative = item.src
-        if relative and not relative:match("^[%a]+:") and not relative:match("^/") then
+        local relative = item.src or item.href or item["xlink:href"]
+        if relative and not relative:match("^[%a][%w+.-]*:") then
             image_index = image_index + 1
             return "\n\n@@DREADER_IMAGE_" .. image_index .. "@@\n\n"
         end
         return ""
-    end)
+    end
+    source = source:gsub("<[Ii][Mm][Gg][^>]*>", imageMarker)
+    source = source:gsub("<[Ii][Mm][Aa][Gg][Ee][^>]*>", imageMarker)
     source = source:gsub("<!%-%-.-%-%->", "")
     source = source:gsub("<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*>.-</[Ss][Cc][Rr][Ii][Pp][Tt]>", "")
     source = source:gsub("<[Ss][Tt][Yy][Ll][Ee][^>]*>.-</[Ss][Tt][Yy][Ll][Ee]>", "")
@@ -355,10 +362,14 @@ end
 local function resolvePath(base, relative)
     relative = (relative or ""):gsub("#.*$", ""):gsub("%?.*$", "")
     if relative:match("^[%a]+:") then return nil end
+    relative = relative:gsub("^/+", "")
     local joined = base == "" and relative or base .. "/" .. relative
     local parts = {}
     for part in joined:gmatch("[^/]+") do
-        if part == ".." then return nil elseif part ~= "." and part ~= "" then parts[#parts + 1] = part end
+        if part == ".." then
+            if #parts == 0 then return nil end
+            table.remove(parts)
+        elseif part ~= "." and part ~= "" then parts[#parts + 1] = part end
     end
     return table.concat(parts, "/")
 end
@@ -808,7 +819,7 @@ end
 
 return {
     id = "dreader",
-    version = "2.1.1",
+    version = "2.2.0",
     title = "DReader",
     subtitle = "A calm EPUB, HTML, and Markdown reader",
     symbol = "R",

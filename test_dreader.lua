@@ -40,10 +40,12 @@ package.preload["libs/libkoreader-lfs"] = function() return { attributes = funct
 
 local archive_data = {
     ["META-INF/container.xml"] = [[<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>]],
-    ["OEBPS/content.opf"] = [[<package><metadata><dc:title>Fixture EPUB</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>]],
+    ["OEBPS/content.opf"] = [[<package><metadata><dc:title>Fixture EPUB</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/><item id="manga" href="manga/page.xhtml" media-type="application/xhtml+xml"/><item id="manga-image" href="images/page01.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="one"/><itemref idref="two"/><itemref idref="manga"/></spine></package>]],
     ["OEBPS/nav.xhtml"] = [[<html><nav><a href="one.xhtml">Opening</a><a href="two.xhtml">Second chapter</a></nav></html>]],
     ["OEBPS/one.xhtml"] = [[<html><head><title>Opening</title></head><body><h1>Opening</h1><p>First paragraph &amp; safe text.</p><script>bad()</script><p>Second paragraph.</p></body></html>]],
     ["OEBPS/two.xhtml"] = [[<html><head><title>Second chapter</title></head><body><h1>Second chapter</h1><p>Another readable chapter.</p></body></html>]],
+    ["OEBPS/manga/page.xhtml"] = [[<html><head><title>Manga page</title></head><body><svg><image xlink:href="../images/page01.jpg" width="100" height="160"/></svg></body></html>]],
+    ["OEBPS/images/page01.jpg"] = "manga-image-bytes",
 }
 package.preload["ffi/archiver"] = function()
     local Reader = {}
@@ -90,8 +92,8 @@ This is **local** Markdown with a [safe label](https://example.invalid) and ![di
 ]])
 markdown:close()
 
-local app = dofile("/home/ubuntu/dapps-store-repo/dreader.lua")
-assert(app.id == "dreader" and app.version == "2.1.1" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
+local app = dofile(os.getenv("DREADER_SOURCE") or "/home/ubuntu/dapps-store-repo/dreader.lua")
+assert(app.id == "dreader" and app.version == "2.2.0" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
 local context = { dimen = { w = 600, h = 760 }, requestRebuild = function() end, requestRefresh = function() end }
 local html_instance = {}
 assert(app.openFile(html_instance, html_path), "DReader must open supported HTML")
@@ -118,9 +120,11 @@ assert(io.open(root .. "/appdock_dreader/library.lua", "rb"), "DReader must pers
 local epub_instance = {}
 assert(app.openFile(epub_instance, epub_path), "DReader must open an EPUB through container, OPF and spine")
 local book = epub_instance.dreader.book
-assert(book.title == "Fixture EPUB" and #book.chapters == 2 and book.chapters[1].title == "Opening", "DReader must parse EPUB metadata, navigation and spine")
+assert(book.title == "Fixture EPUB" and #book.chapters == 3 and book.chapters[1].title == "Opening", "DReader must parse EPUB metadata, navigation and spine")
 local epub_pane = app.buildPane(epub_instance, context)
 assert(epub_pane and epub_instance.dreader.pages and #epub_instance.dreader.pages >= 1, "DReader must paginate EPUB chapter text")
+local manga_images = app._test.Book.chapterImages(book, 3)
+assert(#manga_images == 1 and io.open(manga_images[1], "rb"), "DReader must resolve Manga SVG image references through safe EPUB parent paths")
 local markdown_instance = {}
 assert(app.openFile(markdown_instance, markdown_path), "DReader must open local Markdown")
 local markdown_book = markdown_instance.dreader.book
