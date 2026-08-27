@@ -1,0 +1,11 @@
+id=galaxy
+title=Galaxy
+version=1.0.0
+highlight=#A98BFF
+background=#111126
+button=#282653
+text=#F8F7FF
+dropdown=#181634
+button_style=3d
+logo_shape=circle
+wallpaper=designs/wallpapers/galaxy.jpg

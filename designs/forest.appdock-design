@@ -1,0 +1,11 @@
+id=forest
+title=Forest
+version=1.0.0
+highlight=#A5D6A7
+background=#122219
+button=#2D6745
+text=#EFF8E9
+dropdown=#183125
+button_style=rounded
+logo_shape=rounded
+wallpaper=designs/wallpapers/forest.jpg

@@ -2,20 +2,32 @@
 
 Dieses Repository ist der **vertrauenswürdige AppStore-Katalog** für die AppDock-DApp in KOReader. Der AppStore lädt ausschließlich die Datei [`dapps.txt`](dapps.txt) über HTTPS. Ein Katalogabruf führt keinen DApp-Code aus. Vor jeder Installation wird der vollständige Pfad angezeigt und der Nutzer muss die Installation auf dem Gerät ausdrücklich bestätigen.
 
-> **Sicherheitsmodell:** Eine installierte DApp ist Lua-Code und läuft innerhalb von KOReader. Füge deshalb nur selbst geprüfte DApps in diesen Katalog ein. Der AppStore akzeptiert keine absoluten Pfade und keine Pfade mit `..`.
+> **Sicherheitsmodell:** Eine installierte DApp ist Lua-Code und läuft innerhalb von KOReader. Füge deshalb nur selbst geprüfte DApps in diesen Katalog ein. Designs sind dagegen bewusst **deklarative Daten**: Sie werden nicht als Lua geladen oder ausgeführt. Der AppStore akzeptiert keine absoluten Pfade und keine Pfade mit `..`.
 
 ## Katalog
 
-`dapps.txt` enthält **eine sichere relative `.lua`-Datei pro Zeile**. Nach dem Pfad können eine numerische Version, ein AppDock-Logo und optional der Typ `widget` stehen. Ohne Typ ist der Eintrag eine DApp. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
+`dapps.txt` enthält eine sichere relative Datei pro Zeile. **DApps und Widgets** verwenden die Endung `.lua`; **Designs** nutzen ausschließlich `.appdock-design`. Nach dem Pfad stehen eine numerische Version, ein AppDock-Logo und optional der Typ `widget` oder `design`. Ohne Typ ist der Eintrag eine DApp. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
 
 ```text
 # Example catalog
 examples/quote_card.lua | 1.0.0 | help
 examples/reading_timer.lua | 1.2.0 | timer
 quote_widget.lua | 1.0.0 | help | widget
+designs/forest.appdock-design | 1.0.0 | palette | design
 ```
 
 Der AppStore vergleicht numerische Versionen komponentenweise. Ist die Repository-Version höher als die installierte Version, wird **Update** statt einer Installationssperre angeboten. Die Logo-Spalte akzeptiert ausschließlich Namen aus AppDocks Logo-Bibliothek, etwa `calculator`, `code`, `help`, `notes`, `timer` oder `translate`; ungültige Logoangaben werden ignoriert. Doppelte Pfade werden weiterhin ignoriert; die Reihenfolge im Katalog beeinflusst die Installationslogik nicht.
+
+## Designs
+
+Ein Design ist eine kleine UTF-8-Textdatei mit festen `key=value`-Zeilen. Der AppStore akzeptiert nur die Felder `id`, `title`, `version`, `highlight`, `background`, `button`, `text`, `dropdown`, `button_style`, `logo_shape` und `wallpaper`. Alle fünf Farbwerte müssen als sechsstellige Hexfarbe vorliegen. Der Buttonstil ist `rounded` oder `3d`, die App-Logoform `rounded` oder `circle`. Ein optionales Hintergrundbild muss als sicherer relativer PNG-, JPG-, JPEG- oder WEBP-Pfad im selben Repository liegen.
+
+Nach dem Bestätigen lädt AppDock die Textdatei und gegebenenfalls das Hintergrundbild ausschließlich lokal herunter. Anschließend werden Highlight-, Hintergrund-, Button-, Text- und Dropdownfarbe, der gewählte Buttonstil und die App-Logoform gemeinsam aktiviert. Ein erneutes Antippen eines installierten Designs aktiviert es wieder; **Uninstall** entfernt die lokalen Designdateien und stellt die vorhandene persönliche Theme-, Button- und Hintergrundkonfiguration wieder her.
+
+| Design | Charakter | Stil |
+|---|---|---|
+| [`Galaxy`](designs/galaxy.appdock-design) | Dunkles Indigo mit violettem Sternennebel | 3D-Schaltflächen, runde App-Logos |
+| [`Forest`](designs/forest.appdock-design) | Ruhiges Moosgrün mit nebligen Waldschichten | Abgerundete Schaltflächen und App-Logoflächen |
 
 ## DApp-Modulformat
 
