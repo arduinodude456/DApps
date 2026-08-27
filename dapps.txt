@@ -29,3 +29,6 @@ dchat.lua | 1.1.1 | rss
 dbasic.lua | 1.0.0 | code
 designs/galaxy.appdock-design | 1.0.0 | palette | design
 designs/forest.appdock-design | 1.0.0 | palette | design
+designs/coffee.appdock-design | 1.0.0 | palette | design
+designs/old-paper.appdock-design | 1.0.0 | palette | design
+designs/ozean.appdock-design | 1.0.0 | palette | design

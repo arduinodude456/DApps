@@ -1,0 +1,11 @@
+id=ozean
+title=Ozean
+version=1.0.0
+highlight=#62C6E8
+background=#082B3A
+button=#155C77
+text=#E9FBFF
+dropdown=#0D3D51
+button_style=3d
+logo_shape=circle
+wallpaper=designs/wallpapers/ozean.jpg

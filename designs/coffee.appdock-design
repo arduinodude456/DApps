@@ -1,0 +1,11 @@
+id=coffee
+title=Coffee
+version=1.0.0
+highlight=#D5A46C
+background=#2B1C17
+button=#6B432A
+text=#FFF3DE
+dropdown=#3C261F
+button_style=3d
+logo_shape=circle
+wallpaper=designs/wallpapers/coffee.jpg

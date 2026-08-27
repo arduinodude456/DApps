@@ -28,6 +28,9 @@ Nach dem Bestätigen lädt AppDock die Textdatei und gegebenenfalls das Hintergr
 |---|---|---|
 | [`Galaxy`](designs/galaxy.appdock-design) | Dunkles Indigo mit violettem Sternennebel | 3D-Schaltflächen, runde App-Logos |
 | [`Forest`](designs/forest.appdock-design) | Ruhiges Moosgrün mit nebligen Waldschichten | Abgerundete Schaltflächen und App-Logoflächen |
+| [`Coffee`](designs/coffee.appdock-design) | Warmes Espresso, Kakao und Creme | 3D-Schaltflächen, runde App-Logos |
+| [`Old Paper`](designs/old-paper.appdock-design) | Helles Pergament mit dezenten Alterungsspuren | Abgerundete Schaltflächen und App-Logoflächen |
+| [`Ozean`](designs/ozean.appdock-design) | Tiefes Blaugrün mit sanften Wellen | 3D-Schaltflächen, runde App-Logos |
 
 ## DApp-Modulformat
 
