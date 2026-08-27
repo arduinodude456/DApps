@@ -156,6 +156,16 @@ NightLua zeigt im DApp-Pane eine scrollbar Syntaxhervorhebung für Schlüsselwö
 
 > **Hinweis:** Die Live-Eingabe verwendet bewusst KOReaders bewährtes natives Texteingabefeld. Die farbige beziehungsweise kontrastverstärkte Syntaxansicht ist die separate, nach dem Speichern oder Aktualisieren angezeigte Vorschau im NightLua-Pane.
 
+## MarkUP
+
+[`markup.lua`](markup.lua) ist ein **vollständig lokaler Markdown-Editor** mit einer eigenen AppDock-Bedienoberfläche. Die Texteingabe nutzt eine große virtuelle Touch-Tastatur mit Buchstaben, Satzzeichen, Leerzeichen, Zeilenumbruch, Umschaltung auf Großschreibung, Rücktaste und Cursorpfeilen. Ein Tipp in den Editorbereich setzt den Cursor an die betreffende Textposition. Schnelltasten erzeugen Überschriften, Fettschrift, Listen, Zitate, Inline-Code und Linkgerüste. Für die Textbearbeitung verwendet MarkUP weder KOReaders native Texteingabe noch einen generischen Eingabedialog.
+
+Die Schaltflächen **New**, **Save**, **Save as**, **Preview** und **Discard** bilden den gesamten Dokumentablauf innerhalb der DApp ab. „Save as“ öffnet eine eigene Pfadeingabe im MarkUP-Pane; erlaubt sind ausschließlich absolute lokale Pfade mit `.md`, `.markdown`, `.mdown` oder `.mkdn`. Dateien werden über eine temporäre Datei im Zielverzeichnis und anschließendes Umbenennen geschrieben. Bei offenen Änderungen blockiert MarkUP das Schließen, bis der Nutzer gespeichert oder die Änderungen bewusst verworfen hat.
+
+Die sichere lokale Vorschau unterstützt Überschriften, Fett- und Kursivschrift, Streichungen, Listen, Zitate, Inline- und Blockcode, Links, Trennlinien und einfache Tabellen. Rohes HTML wird als Text maskiert; Bilder werden nur als beschreibender Hinweis dargestellt. MarkUP führt weder HTML noch Code aus und lädt keine externen Bilder oder Netzwerkressourcen. Die eigene **Files**-DApp zeigt für diese Markdown-Endungen **Open in MarkUP**, sobald MarkUP aus dem AppStore installiert ist.
+
+> **Grenzen:** MarkUP ist für handliche Notizen und Dokumente bis **512 KiB** ausgelegt. Der Renderer kürzt die Vorschau über **256 KiB** bewusst ab. Verschachtelte Markdown-Erweiterungen, HTML, eingebettete Medien, Fußnoten, mathematische Formeln und kollaborative Bearbeitung gehören nicht zum Funktionsumfang.
+
 ## DBASIC
 
 [`dbasic.lua`](dbasic.lua) ist ein kleiner, vollständig lokaler BASIC-Editor und -Interpreter für AppDock. Programme bestehen aus nummerierten Zeilen. DBASIC unterstützt `PRINT`, Zuweisungen mit und ohne `LET`, `IF … THEN`, `GOTO`, `FOR … TO … STEP … NEXT`, `CLS`, `COLOR`, `PSET`, `LINE`, `RECT`, `ON TOUCH GOTO` sowie `END` und `STOP`. Numerische Ausdrücke bieten Klammern, `+`, `-`, `*`, `/`, `^`, Vergleiche und die Funktionen `RND`, `ABS`, `INT`, `MIN` und `MAX`.
