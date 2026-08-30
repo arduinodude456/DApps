@@ -16,6 +16,7 @@ appdock_guide.lua | 1.0.0 | help
 dpdf.lua | 1.0.0 | document
 widget_generator.lua | 1.0.0 | settings
 2048.lua | 1.0.4 | other
+dex_document.lua | 1.0.0 | document
 geometry_dash.lua | 1.0.2 | other
 snake.lua | 1.0.1 | other
 status_message.lua | 1.0.0 | help
