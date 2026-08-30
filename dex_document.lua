@@ -1,23 +1,4 @@
---[[
-    Dex Document
-    ------------
-    Read-only .docx viewer for AppDock (KOReader).
-
-    Dex Document opens local .docx files (Office Open XML / WordprocessingML),
-    extracts the plain readable text (paragraphs, headings, simple emphasis)
-    from `word/document.xml` inside the zip container, and shows it in a
-    calm, paginated, E-Ink-friendly reading view.
-
-    Dex Document never writes back into the original .docx file and offers
-    no editing controls. It is a viewer only.
-
-    Follows the AppDock DApp contract (DeveloperManual.md):
-      - buildPane(instance, context) builds a widget confined to context.dimen.
-      - openFile(instance, path) accepts .docx handovers from AppDock Files.
-      - State lives under instance.dex_document, never in globals.
-      - context.px(...) is used for scalable sizes; requestRebuild("ui") is
-        used after any state change that must be visible.
-]]
+--[[ Dex Document ------------ Read-only .docx viewer for AppDock (KOReader). Dex Document opens local .docx files (Office Open XML / WordprocessingML), extracts the plain readable text (paragraphs, headings, simple emphasis) from `word/document.xml` inside the zip container, and shows it in a calm, paginated, E-Ink-friendly reading view. Dex Document never writes back into the original .docx file and offers no editing controls. It is a viewer only. Follows the AppDock DApp contract (DeveloperManual.md): - buildPane(instance, context) builds a widget confined to context.dimen. - openFile(instance, path) accepts .docx handovers from AppDock Files. - State lives under instance.dex_document, never in globals. - context.px(...) is used for scalable sizes; requestRebuild("ui") is used after any state change that must be visible. ]]
 
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
@@ -31,6 +12,7 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local InputDialog = require("ui/widget/inputdialog")
 local LineWidget = require("ui/widget/linewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
@@ -137,7 +119,7 @@ local function parseDocumentXml(xml)
                 table.insert(pieces, "\n")
                 cursor = para_body:find(">", br_start) + 1
             elseif next_special == tab_start then
-                table.insert(pieces, "    ")
+                table.insert(pieces, " ")
                 cursor = para_body:find(">", tab_start) + 1
             else
                 break
@@ -230,7 +212,7 @@ local function saveLibrary(library)
     file:write("return {\n")
     for _, entry in ipairs(library) do
         file:write(string.format(
-            "  { path = %q, title = %q, last_opened = %d, paragraph_index = %d },\n",
+            " { path = %q, title = %q, last_opened = %d, paragraph_index = %d },\n",
             entry.path or "",
             entry.title or "",
             entry.last_opened or 0,
@@ -380,6 +362,11 @@ local function openDocxAtPath(instance, context, path)
     return true
 end
 
+-- Forward declaration: openFile is defined near the bottom of this file (it
+-- is part of the public DApp contract) but is also invoked from the manual
+-- "Open document..." button built above, so the local must exist first.
+local openFile
+
 --- UI building ---------------------------------------------------------------
 
 local function scaledFont(context, base_size)
@@ -454,6 +441,52 @@ local function buildLibraryScreen(instance, context, width, height)
     })
     table.insert(rows, VerticalSpan:new{ width = context.px(10) })
 
+    -- Manual path entry works regardless of whether AppDock Files routes
+    -- .docx handovers to this DApp: it does not depend on the closed-source
+    -- core's extension-to-DApp mapping in appdock_filemanager.lua.
+    local open_button_width = math.min(width - 2 * margin, context.px(220))
+    local open_button = buildButton(context, "Open document\u{2026}", nil,
+        open_button_width, context.px(38), function()
+            local dialog
+            dialog = InputDialog:new{
+                title = "Open .docx file",
+                input = "",
+                input_hint = "/mnt/onboard/Books/example.docx",
+                buttons = {{
+                    {
+                        text = "Cancel",
+                        callback = function() UIManager:close(dialog) end,
+                    },
+                    {
+                        text = "Open",
+                        is_enter_default = true,
+                        callback = function()
+                            local path = dialog:getInputText()
+                            UIManager:close(dialog)
+                            if type(path) ~= "string" or path == "" then
+                                return
+                            end
+                            local ok_open, message = openFile(instance, path)
+                            if ok_open then
+                                local success, open_message =
+                                    openDocxAtPath(instance, context, path)
+                                if not success then
+                                    state.status = open_message
+                                end
+                            else
+                                state.status = message
+                            end
+                            context.requestRebuild("ui")
+                        end,
+                    },
+                }},
+            }
+            UIManager:show(dialog)
+            dialog:onShowKeyboard()
+        end)
+    table.insert(rows, open_button)
+    table.insert(rows, VerticalSpan:new{ width = context.px(10) })
+
     if state.status then
         table.insert(rows, TextWidget:new{
             text = state.status,
@@ -492,7 +525,8 @@ local function buildLibraryScreen(instance, context, width, height)
                         max_width = row_width - context.px(8),
                         overlap_offset = { context.px(2), context.px(4) },
                     },
-                    TextWidget:new{
+                    
+    TextWidget:new{
                         text = entry.path,
                         face = Font:getFace("smallinfofont", context.px(9)),
                         fgcolor = Blitbuffer.COLOR_DARK_GRAY,
@@ -661,7 +695,7 @@ local function buildPane(instance, context)
     return pane
 end
 
-local function openFile(instance, path)
+openFile = function(instance, path)
     if type(path) ~= "string" or not path:lower():match("%.docx$") then
         return false, "Dex Document only opens .docx files."
     end
@@ -711,4 +745,4 @@ return {
     end,
 
     openFile = openFile,
-}
+    }
