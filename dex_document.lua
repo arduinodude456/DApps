@@ -1,4 +1,23 @@
---[[ Dex Document ------------ Read-only .docx viewer for AppDock (KOReader). Dex Document opens local .docx files (Office Open XML / WordprocessingML), extracts the plain readable text (paragraphs, headings, simple emphasis) from `word/document.xml` inside the zip container, and shows it in a calm, paginated, E-Ink-friendly reading view. Dex Document never writes back into the original .docx file and offers no editing controls. It is a viewer only. Follows the AppDock DApp contract (DeveloperManual.md): - buildPane(instance, context) builds a widget confined to context.dimen. - openFile(instance, path) accepts .docx handovers from AppDock Files. - State lives under instance.dex_document, never in globals. - context.px(...) is used for scalable sizes; requestRebuild("ui") is used after any state change that must be visible. ]]
+--[[
+    Dex Document
+    ------------
+    Read-only .docx viewer for AppDock (KOReader).
+
+    Dex Document opens local .docx files (Office Open XML / WordprocessingML),
+    extracts the plain readable text (paragraphs, headings, simple emphasis)
+    from `word/document.xml` inside the zip container, and shows it in a
+    calm, paginated, E-Ink-friendly reading view.
+
+    Dex Document never writes back into the original .docx file and offers
+    no editing controls. It is a viewer only.
+
+    Follows the AppDock DApp contract (DeveloperManual.md):
+      - buildPane(instance, context) builds a widget confined to context.dimen.
+      - openFile(instance, path) accepts .docx handovers from AppDock Files.
+      - State lives under instance.dex_document, never in globals.
+      - context.px(...) is used for scalable sizes; requestRebuild("ui") is
+        used after any state change that must be visible.
+]]
 
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
@@ -110,16 +129,27 @@ local function parseDocumentXml(xml)
             end
 
             if tag_start and (not next_special or tag_start <= next_special) then
-                local close_start, close_end = para_body:find("</w:t>", tag_end + 1)
-                if not close_start then break end
-                local inner = para_body:sub(tag_end + 1, close_start - 1)
-                table.insert(pieces, decodeXmlEntities(inner))
-                cursor = close_end + 1
+                -- Self-closing empty run, e.g. <w:t/> or <w:t attr="x"/> — it
+                -- has no matching closing tag of its own. Reaching for the
+                -- next "</w:t>" in that case would grab a closing tag that
+                -- belongs to a much later run and swallow everything in
+                -- between as bogus "inner" text, which on real documents
+                -- could turn into a very long, near-endless-feeling parse.
+                local self_closing = para_body:sub(tag_end - 1, tag_end) == "/>"
+                if self_closing then
+                    cursor = tag_end + 1
+                else
+                    local close_start, close_end = para_body:find("</w:t>", tag_end + 1)
+                    if not close_start then break end
+                    local inner = para_body:sub(tag_end + 1, close_start - 1)
+                    table.insert(pieces, decodeXmlEntities(inner))
+                    cursor = close_end + 1
+                end
             elseif next_special == br_start then
                 table.insert(pieces, "\n")
                 cursor = para_body:find(">", br_start) + 1
             elseif next_special == tab_start then
-                table.insert(pieces, " ")
+                table.insert(pieces, "    ")
                 cursor = para_body:find(">", tab_start) + 1
             else
                 break
@@ -158,27 +188,42 @@ local function readDocumentXmlFromDocx(path)
     end
 
     local reader = Archiver.Reader:new()
-    local opened = reader:open(path)
+    -- The exact archive-reader method names could not be verified against
+    -- real KOReader source in this environment. Wrap every call so a
+    -- mismatch surfaces as a clear error message instead of an unhandled
+    -- error that leaves the DApp stuck mid-open.
+    local ok_open, opened = pcall(function() return reader:open(path) end)
+    if not ok_open then
+        return nil, "Dex Document could not read this file (archive open failed: "
+            .. tostring(opened) .. ")."
+    end
     if not opened then
         return nil, "This does not look like a valid .docx file."
     end
 
     local xml
     local err
-    for entry in reader:iterate() do
-        if entry and entry.path == "word/document.xml" then
-            if entry.size and entry.size > MAX_ENTRY_BYTES then
-                err = "The document body is larger than Dex Document allows."
+    local ok_iterate, iterate_err = pcall(function()
+        for entry in reader:iterate() do
+            if entry and entry.path == "word/document.xml" then
+                if entry.size and entry.size > MAX_ENTRY_BYTES then
+                    err = "The document body is larger than Dex Document allows."
+                    break
+                end
+                local extracted = reader:extractToMemory(entry.path)
+                if extracted then
+                    xml = extracted
+                end
                 break
             end
-            local extracted = reader:extractToMemory(entry.path)
-            if extracted then
-                xml = extracted
-            end
-            break
         end
+    end)
+    pcall(function() reader:close() end)
+
+    if not ok_iterate then
+        return nil, "Dex Document could not read this file (archive read failed: "
+            .. tostring(iterate_err) .. ")."
     end
-    reader:close()
 
     if not xml then
         return nil, err or "No document body was found inside this .docx file."
@@ -212,7 +257,7 @@ local function saveLibrary(library)
     file:write("return {\n")
     for _, entry in ipairs(library) do
         file:write(string.format(
-            " { path = %q, title = %q, last_opened = %d, paragraph_index = %d },\n",
+            "  { path = %q, title = %q, last_opened = %d, paragraph_index = %d },\n",
             entry.path or "",
             entry.title or "",
             entry.last_opened or 0,
@@ -320,44 +365,61 @@ end
 
 local function openDocxAtPath(instance, context, path)
     local state = stateFor(instance)
-    local xml, err = readDocumentXmlFromDocx(path)
-    if not xml then
-        state.status = err or "This .docx file could not be opened."
+
+    local ok, success_or_err, maybe_err = pcall(function()
+        local xml, err = readDocumentXmlFromDocx(path)
+        if not xml then
+            return false, err or "This .docx file could not be opened."
+        end
+
+        local paragraphs = parseDocumentXml(xml)
+        if #paragraphs == 0 then
+            return false, "No readable text was found in this document."
+        end
+
+        local title = basename(path):gsub("%.docx$", "")
+        state.doc = {
+            path = path,
+            title = title,
+            paragraphs = paragraphs,
+        }
+
+        local width = context and context.dimen and context.dimen.w or 600
+        local chars_per_page = math.max(600, math.floor(width * 2.6))
+        state.page_starts = buildPageStarts(paragraphs, chars_per_page)
+
+        local resume_index = 1
+        for _, entry in ipairs(state.library) do
+            if entry.path == path then
+                resume_index = entry.paragraph_index or 1
+            end
+        end
+        state.page_index = 1
+        for page_number, start_index in ipairs(state.page_starts) do
+            if start_index <= resume_index then
+                state.page_index = page_number
+            end
+        end
+
+        touchLibrary(state.library, path, title, state.page_starts[state.page_index])
+        state.screen = "reader"
+        return true
+    end)
+
+    if not ok then
+        -- A Lua error anywhere in opening/parsing (e.g. an archive-reader
+        -- API mismatch on this device) must never leave the DApp stuck: show
+        -- it as a normal, visible status message instead.
+        state.status = "Dex Document hit an internal error while opening this "
+            .. "file: " .. tostring(success_or_err)
         return false, state.status
     end
 
-    local paragraphs = parseDocumentXml(xml)
-    if #paragraphs == 0 then
-        state.status = "No readable text was found in this document."
+    if not success_or_err then
+        state.status = maybe_err
         return false, state.status
     end
 
-    local title = basename(path):gsub("%.docx$", "")
-    state.doc = {
-        path = path,
-        title = title,
-        paragraphs = paragraphs,
-    }
-
-    local width = context and context.dimen and context.dimen.w or 600
-    local chars_per_page = math.max(600, math.floor(width * 2.6))
-    state.page_starts = buildPageStarts(paragraphs, chars_per_page)
-
-    local resume_index = 1
-    for _, entry in ipairs(state.library) do
-        if entry.path == path then
-            resume_index = entry.paragraph_index or 1
-        end
-    end
-    state.page_index = 1
-    for page_number, start_index in ipairs(state.page_starts) do
-        if start_index <= resume_index then
-            state.page_index = page_number
-        end
-    end
-
-    touchLibrary(state.library, path, title, state.page_starts[state.page_index])
-    state.screen = "reader"
     state.status = nil
     return true
 end
@@ -468,9 +530,12 @@ local function buildLibraryScreen(instance, context, width, height)
                             end
                             local ok_open, message = openFile(instance, path)
                             if ok_open then
-                                local success, open_message =
-                                    openDocxAtPath(instance, context, path)
-                                if not success then
+                                local ok, success, open_message =
+                                    pcall(openDocxAtPath, instance, context, path)
+                                if not ok then
+                                    state.status = "Dex Document hit an internal error "
+                                        .. "while opening this file: " .. tostring(success)
+                                elseif not success then
                                     state.status = open_message
                                 end
                             else
@@ -525,8 +590,7 @@ local function buildLibraryScreen(instance, context, width, height)
                         max_width = row_width - context.px(8),
                         overlap_offset = { context.px(2), context.px(4) },
                     },
-                    
-    TextWidget:new{
+                    TextWidget:new{
                         text = entry.path,
                         face = Font:getFace("smallinfofont", context.px(9)),
                         fgcolor = Blitbuffer.COLOR_DARK_GRAY,
@@ -539,8 +603,13 @@ local function buildLibraryScreen(instance, context, width, height)
                 Tap = { GestureRange:new{ ges = "tap", range = row.dimen } },
             }
             row.onTap = function()
-                local success, message = openDocxAtPath(instance, context, entry.path)
-                if not success then
+                local ok, success, message = pcall(openDocxAtPath, instance, context, entry.path)
+                if not ok then
+                    UIManager:show(InfoMessage:new{
+                        text = "Dex Document hit an internal error while opening this "
+                            .. "file: " .. tostring(success),
+                    })
+                elseif not success then
                     UIManager:show(InfoMessage:new{ text = message })
                 end
                 context.requestRebuild("ui")
@@ -736,8 +805,11 @@ return {
         if state.pending_open then
             local path = state.pending_open
             state.pending_open = nil
-            local success, message = openDocxAtPath(instance, context, path)
-            if not success then
+            local ok, success, message = pcall(openDocxAtPath, instance, context, path)
+            if not ok then
+                state.status = "Dex Document hit an internal error while opening this "
+                    .. "file: " .. tostring(success)
+            elseif not success then
                 state.status = message
             end
         end
@@ -745,4 +817,4 @@ return {
     end,
 
     openFile = openFile,
-    }
+}
