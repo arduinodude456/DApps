@@ -177,3 +177,16 @@ Die Grafikfläche arbeitet mit einem festen virtuellen Koordinatensystem von **1
 ## Beispiel
 
 [`examples/quote_card.lua`](examples/quote_card.lua) ist eine kleine offline DApp und ein minimaler Ausgangspunkt für neue DApps.
+
+
+## Neu: fünf lokale Alltags-Apps
+
+| App | Funktion | Speicherung und Netzwerk |
+|---|---|---|
+| **Focus Timer** | Ruhiger 5-Minuten-Schritt-Timer für konzentrierte Sessions | Nur lokaler Sitzungszustand, kein Netzwerk |
+| **Quick Notes** | Kleine Notizen für spontane Gedanken | Nur lokaler Sitzungszustand, kein Netzwerk |
+| **Unit Converter** | Schnelle Umrechnungsreferenzen für Strecke, Gewicht, Temperatur und Volumen | Vollständig offline |
+| **Habit Tracker** | Ein täglicher Lese-Check-in mit einfacher Serie | Nur lokaler Sitzungszustand, kein Netzwerk |
+| **Mood Journal** | Privater täglicher Stimmungseintrag | Nur lokaler Sitzungszustand, kein Netzwerk |
+
+Alle fünf Apps erfüllen den AppDock-DApp-Vertrag mit `id`, `title` und `buildPane`. Ihre Oberflächen verwenden ausschließlich die vom Host übergebene Pane-Geometrie und sind für E-Ink mit großen, kontrastreichen Touch-Zielen gestaltet.

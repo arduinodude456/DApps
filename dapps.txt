@@ -29,6 +29,11 @@ calendar_widget.lua | 1.0.0 | calendar | widget
 random_book_covers_widget.lua | 1.0.0 | reading | widget
 dchat.lua | 1.1.1 | rss
 dbasic.lua | 1.0.0 | code
+focus_timer.lua | 1.0.0 | calendar
+quick_notes.lua | 1.0.0 | notes
+unit_converter.lua | 1.0.0 | calculator
+habit_tracker.lua | 1.0.0 | calendar
+mood_journal.lua | 1.0.0 | notes
 designs/galaxy.appdock-design | 1.0.0 | palette | design
 designs/forest.appdock-design | 1.0.0 | palette | design
 designs/coffee.appdock-design | 1.0.0 | palette | design
