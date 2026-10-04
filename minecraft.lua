@@ -451,6 +451,10 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
     local aspect = rows / cols
+    local floor, abs, min, max = math.floor, math.abs, math.min, math.max
+    local world, world_size = session.world, session.world.size
+    local world_heights, world_materials = world.heights, world.materials
+    local player_x, player_z = session.player_x, session.player_z
     local pitch = session.pitch or 0
     local cp, sp = math.cos(pitch), math.sin(pitch)
     local cy, sy = math.cos(session.yaw), math.sin(session.yaw)
@@ -466,38 +470,52 @@ function VoxelCanvas:_drawScene(bb, x, y)
         leaves = "1210121111121110112111211121111012111121111012111121110112111121",
         water = "1221122211221122122211221122122211221122211221122122211221122122",
     }
+    local pattern_values = {}
+    for name, pattern in pairs(patterns) do
+        pattern_values[name] = {}
+        for index = 1, 64 do pattern_values[name][index] = string.byte(pattern, index) - 48 end
+    end
     local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
         if material == "grass" and face ~= "top" then material = "dirt" end
-        local pattern = patterns[material] or patterns.stone
-        local fu, fv = hx - math.floor(hx), hy - math.floor(hy)
-        if side == 2 then fu, fv = hz - math.floor(hz), hy - math.floor(hy) end
-        local u = math.max(0, math.min(7, math.floor(fu * 8)))
-        local v = math.max(0, math.min(7, math.floor(fv * 8)))
-        local level = string.byte(pattern, v * 8 + u + 1) - 48
+        local pattern = pattern_values[material] or pattern_values.stone
+        local fu, fv = hx - floor(hx), hy - floor(hy)
+        if side == 2 then fu, fv = hz - floor(hz), hy - floor(hy) end
+        local u = max(0, min(7, floor(fu * 8)))
+        local v = max(0, min(7, floor(fv * 8)))
+        local level = pattern[v * 8 + u + 1]
         if face == "top" then level = level + 1 end
         if side == 0 then level = level - 1 end
-        level = math.max(0, math.min(3, level))
+        level = max(0, min(3, level))
         -- Convert the four texture luminances into deterministic 1-bit ink.
         -- This is the ordered Bayer pattern used instead of gray fills: it is
         -- crisp on E-Ink and does not accumulate a broad gray ghost.
         local darkness = 3 - level
-        local threshold = bayer4[(math.floor(screen_y or 0) % 4) + 1][(math.floor(screen_x or 0) % 4) + 1]
+        local threshold = bayer4[(floor(screen_y or 0) % 4) + 1][(floor(screen_x or 0) % 4) + 1]
         return darkness * 4 > threshold and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
     end
+    local col_x, col_z, row_x, row_z, row_y = {}, {}, {}, {}, {}
+    for rx = 0, cols - 1 do
+        local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
+        col_x[rx], col_z[rx] = right[1] * nx, right[2] * nx
+    end
+    for ry = 0, rows - 1 do
+        local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
+        row_x[ry], row_z[ry], row_y[ry] = up[1] * ny, up[2] * ny, up[3] * ny
+    end
     local function cast(dx, dy, dz)
-        local map_x, map_y, map_z = math.floor(session.player_x), math.floor(session.player_z), math.floor(camera_y)
-        local delta_x = math.abs(dx) < 0.00001 and 1e30 or math.abs(1 / dx)
-        local delta_y = math.abs(dy) < 0.00001 and 1e30 or math.abs(1 / dy)
-        local delta_z = math.abs(dz) < 0.00001 and 1e30 or math.abs(1 / dz)
+        local map_x, map_y, map_z = floor(player_x), floor(player_z), floor(camera_y)
+        local delta_x = abs(dx) < 0.00001 and 1e30 or abs(1 / dx)
+        local delta_y = abs(dy) < 0.00001 and 1e30 or abs(1 / dy)
+        local delta_z = abs(dz) < 0.00001 and 1e30 or abs(1 / dz)
         local step_x, step_y, step_z = dx < 0 and -1 or 1, dy < 0 and -1 or 1, dz < 0 and -1 or 1
-        local max_x = dx < 0 and (session.player_x - map_x) * delta_x or (map_x + 1 - session.player_x) * delta_x
-        local max_y = dy < 0 and (camera_y - map_y) * delta_y or (map_y + 1 - camera_y) * delta_y
-        local max_z = dz < 0 and (session.player_z - map_z) * delta_z or (map_z + 1 - session.player_z) * delta_z
+        local max_x = dx < 0 and (player_x - map_x) * delta_x or (map_x + 1 - player_x) * delta_x
+        local max_y = dy < 0 and (camera_y - map_z) * delta_y or (map_z + 1 - camera_y) * delta_y
+        local max_z = dz < 0 and (player_z - map_y) * delta_z or (map_y + 1 - player_z) * delta_z
         local dist, side = 0, 0
         for _ = 1, 96 do
-            local h = heightAt(session.world, map_x, map_y)
-            if map_x >= 0 and map_y >= 0 and map_x < session.world.size and map_y < session.world.size and map_z >= 0 and map_z < h then
+            local h = (map_x >= 0 and map_y >= 0 and map_x < world_size and map_y < world_size and world_heights[map_y + 1][map_x + 1]) or 0
+            if map_z >= 0 and map_z < h then
                 return map_x, map_y, map_z, dist, side, dx, dy, dz
             end
             if max_x < max_y and max_x < max_z then dist, max_x, map_x, side = max_x, max_x + delta_x, map_x + step_x, 0
@@ -510,19 +528,18 @@ function VoxelCanvas:_drawScene(bb, x, y)
     for ry = 0, rows - 1 do
         local row_ink, row_start
         for rx = 0, cols - 1 do
-            local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
-            local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
-            local dx = forward[1] + right[1] * nx + up[1] * ny
-            local dy = forward[2] + right[2] * nx + up[2] * ny
-            local dz = forward[3] + right[3] * nx + up[3] * ny
-            local length = math.sqrt(dx * dx + dy * dy + dz * dz)
-            dx, dy, dz = dx / length, dy / length, dz / length
+            -- Same column/row decomposition as PocketOS: the horizontal part
+            -- is prepared once per column and the vertical part once per row.
+            local dx = forward[1] + col_x[rx] + row_x[ry]
+            local dy = forward[2] + row_y[ry]
+            local dz = forward[3] + col_z[rx] + row_z[ry]
             local bx, bz, by, dist, side, rdx, rdy, rdz = cast(dx, dy, dz)
             local ink
             if bx then
-                local hx, hy, hz = session.player_x + rdx * dist, camera_y + rdy * dist, session.player_z + rdz * dist
+                local hx, hy, hz = player_x + rdx * dist, camera_y + rdy * dist, player_z + rdz * dist
                 local top = side == 1 and rdy < 0
-                ink = blockInk(materialAt(session.world, bx, bz), top and "top" or "side", hx, hy, hz, side, rx, ry)
+                local material = world_materials[bz + 1] and world_materials[bz + 1][bx + 1] or "stone"
+                ink = blockInk(material, top and "top" or "side", hx, hy, hz, side, rx, ry)
                 if side == 0 and (bx + bz) % 2 == 0 then ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK end
             elseif dy < 0 and (ry + rx) % 6 == 0 then
                 ink = Blitbuffer.COLOR_BLACK
@@ -797,7 +814,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.1.0",
+    version = "2.1.1",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
