@@ -18,6 +18,7 @@ local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
+local ImageWidget = require("ui/widget/imagewidget")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
@@ -46,6 +47,9 @@ local BACKGROUND_CHECK_SECONDS = 15 * 60
 local CHAT_GREEN = Blitbuffer.COLOR_DARK_GREEN or Blitbuffer.COLOR_GRAY_8
 local CHAT_LIGHT_GREEN = Blitbuffer.COLOR_LIGHT_GREEN or Blitbuffer.COLOR_LIGHT_GRAY
 local CHAT_BACKGROUND = Blitbuffer.COLOR_LIGHT_GRAY
+local DM_EMOJIS = { "😀", "😂", "😍", "👍", "❤️" }
+local DM_EMOJI_FILES = { "smile.png", "laugh.png", "heart.png", "thumbs.png", "surprise.png" }
+local DCHAT_SOURCE_DIR = (debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "")
 
 local function scale(value)
     return Device.screen:scaleBySize(value)
@@ -606,12 +610,12 @@ local function sendDirectMessage(state, context, text)
     fetchConversation(state, context)
 end
 
-local function promptDirectMessage(state, context)
+local function promptDirectMessage(state, context, initial_text)
     if not hasIdentity(state.store) then state.status = _("Create a local identity before sending a private message."); refresh(context); return end
     if not selectedRecipient(state) then state.status = _("Choose a recipient first."); refresh(context); return end
     local dialog
     dialog = InputDialog:new{
-        title = _("Send private message"), input = "", input_hint = _("Plain text, up to 1500 characters"),
+        title = _("Send private message"), input = initial_text or "", input_hint = _("Plain text, up to 1500 characters"),
         buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text) end } } },
     }
     UIManager:show(dialog)
@@ -663,6 +667,22 @@ function ActionButton:paintTo(bb, x, y)
     return InputContainer.paintTo(self, bb, x, y)
 end
 function ActionButton:onTapDChatAction()
+    if self.callback then self.callback() end
+    return true
+end
+
+local EmojiButton = InputContainer:extend{ width = nil, height = nil, image_file = nil, callback = nil }
+function EmojiButton:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, CenterContainer:new{ dimen = self.dimen, ImageWidget:new{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } } }
+    self.ges_events = { TapDChatEmoji = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+end
+function EmojiButton:paintTo(bb, x, y)
+    local range = self.ges_events.TapDChatEmoji[1].range
+    range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
+    return InputContainer.paintTo(self, bb, x, y)
+end
+function EmojiButton:onTapDChatEmoji()
     if self.callback then self.callback() end
     return true
 end
@@ -788,14 +808,21 @@ local function dmConversationPane(instance, context)
         FrameContainer:new{ width = width, height = px(56), padding = margin, bordersize = 0, background = CHAT_GREEN, TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(8) } }, TextWidget:new{ text = _("private chat · server stored"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * margin, overlap_offset = { margin, px(31) } } },
     }
     local quarter = math.floor((width - 2 * margin - 3 * gap) / 4)
-    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchConversation(state, context) end, overlap_offset = { margin, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Send"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + quarter + gap, px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Message…"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Send"), primary = true, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + quarter + gap, px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Delete"), callback = function() confirmDeleteConversation(state, context) end, overlap_offset = { margin + 2 * (quarter + gap), px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 3 * (quarter + gap), px(60) } }
+    local emoji_height = math.max(px(28), math.floor(button_height * .8))
+    local emoji_width = math.floor((width - 2 * margin - 5 * gap) / 6)
+    elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function() fetchConversation(state, context) end, overlap_offset = { margin, px(60) + button_height + gap } }
+    for index, emoji in ipairs(DM_EMOJIS) do
+        local emoji_file = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. DM_EMOJI_FILES[index]
+        elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, callback = function() promptDirectMessage(state, context, emoji) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
+    end
     local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
     state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
     local start_index = (state.dm_page - 1) * MAX_VISIBLE_PER_PAGE + 1
-    local y, end_y = px(112), height - margin - 2 * button_height - 2 * gap
+    local y, end_y = px(60) + button_height + emoji_height + 3 * gap, height - margin - 2 * button_height - 2 * gap
     for index = start_index, math.min(#(state.store.dm_messages or {}), start_index + MAX_VISIBLE_PER_PAGE - 1) do
         local message = state.store.dm_messages[index]
         if y + row_height > end_y then break end
@@ -854,7 +881,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.3.0",
+    version = "1.3.1",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
