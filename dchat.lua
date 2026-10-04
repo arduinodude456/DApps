@@ -322,7 +322,7 @@ local function wifiIsOn()
 end
 
 local function stateFor(instance)
-    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, selected_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false }
+    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false }
     return instance.dchat
 end
 
@@ -544,6 +544,7 @@ local function fetchConversation(state, context)
     end
     state.store.selected_recipient_name = safeText(response.conversation.displayName, MAX_NAME_BYTES) or state.store.selected_recipient_name
     replaceDirectMessages(state.store, response.conversation.messages)
+    state.dm_page = math.max(1, math.ceil(#state.store.dm_messages / MAX_VISIBLE_PER_PAGE))
     saveStore(state.store)
     state.status = #state.store.dm_messages == 0 and _("No private messages yet.") or _("Private conversation refreshed.")
     refresh(context)
@@ -589,6 +590,10 @@ end
 
 local function selectedMessage(state)
     for index, message in ipairs(state.store.messages) do if message.id == state.selected_id then return message end end
+end
+
+local function selectedDirectMessage(state)
+    for _, message in ipairs(state.store.dm_messages or {}) do if message.id == state.selected_dm_id then return message end end
 end
 
 local function reportMessage(state, context, category, note)
@@ -750,15 +755,42 @@ local function dmConversationPane(instance, context)
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchConversation(state, context) end, overlap_offset = { margin, margin + px(61) } }
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Send"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + third + gap, margin + px(61) } }
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(61) } }
-    local y, end_y = margin + px(104), height - margin - button_height - gap
-    for _, message in ipairs(state.store.dm_messages or {}) do
+    local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
+    state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
+    local start_index = (state.dm_page - 1) * MAX_VISIBLE_PER_PAGE + 1
+    local y, end_y = margin + px(104), height - margin - 2 * button_height - 2 * gap
+    for index = start_index, math.min(#(state.store.dm_messages or {}), start_index + MAX_VISIBLE_PER_PAGE - 1) do
+        local message = state.store.dm_messages[index]
         if y + row_height > end_y then break end
-        elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = message.authorName .. ": " .. message.body, callback = function() end, overlap_offset = { margin, y } }
+        elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = message.authorName .. " · " .. (message.createdAt ~= "" and message.createdAt or _("Private message")), callback = function() state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, overlap_offset = { margin, y } }
         y = y + row_height + gap
     end
     if #state.store.dm_messages == 0 then elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } } end
+    elements[#elements + 1] = ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Newer"), callback = function() state.dm_page = math.max(1, state.dm_page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
+    local half = math.floor((width - 2 * margin - gap) / 2)
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Older ›") .. " " .. state.dm_page .. "/" .. total_pages, callback = function() state.dm_page = math.min(total_pages, state.dm_page + 1); refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
     elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
+end
+
+local function dmMessagePane(instance, context)
+    local state = stateFor(instance)
+    local message = selectedDirectMessage(state)
+    if not message then state.view = "dm_conversation"; return dmConversationPane(instance, context) end
+    local width, height = context.dimen.w, context.dimen.h
+    local px = context.px or scale
+    local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(36), math.floor(height / 14))
+    local half = math.floor((width - 2 * margin - gap) / 2)
+    return OverlapGroup:new{
+        dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
+        TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
+        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = height - 2 * margin - px(50) - button_height - gap, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin + px(48) } },
+        ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
+        ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } },
+        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
+    }
 end
 
 local function messagePane(instance, context)
@@ -782,7 +814,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.6",
+    version = "1.2.7",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -792,6 +824,7 @@ return {
         if state.view == "settings" then return settingsPane(instance, context) end
         if state.view == "dm" then return dmPane(instance, context) end
         if state.view == "dm_conversation" then return dmConversationPane(instance, context) end
+        if state.view == "dm_message" then return dmMessagePane(instance, context) end
         if state.view == "message" then return messagePane(instance, context) end
         return timelinePane(instance, context)
     end,
