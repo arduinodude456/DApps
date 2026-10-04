@@ -883,6 +883,11 @@ local function attachmentFilePath(state, message)
     return path
 end
 
+local function safeImageWidget(options)
+    local ok, widget = pcall(function() return ImageWidget:new(options) end)
+    return ok and widget or nil
+end
+
 local DMBubble = InputContainer:extend{ width = nil, height = nil, image_file = nil, body = "", bubble_background = nil, callback = nil }
 function DMBubble:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -890,13 +895,12 @@ function DMBubble:init()
     local content = {}
     local content_width = self.width - 2 * padding
     local image_height = self.image_file and math.max(scale(58), math.min(scale(150), self.height - 2 * padding - scale(28))) or 0
-    if self.image_file then
-        content[#content + 1] = ImageWidget:new{ file = self.image_file, width = content_width, height = image_height, scale_factor = 0, overlap_offset = { padding, padding } }
-    end
-    local text_y = padding + image_height + (self.image_file and scale(4) or 0)
+    local image = self.image_file and safeImageWidget{ file = self.image_file, width = content_width, height = image_height, scale_factor = 0, overlap_offset = { padding, padding } }
+    if image then content[#content + 1] = image end
+    local text_y = padding + (image and image_height or 0) + (image and scale(4) or 0)
     if self.body ~= "" then
         content[#content + 1] = TextBoxWidget:new{ text = self.body, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .18))), width = content_width, height = math.max(scale(20), self.height - text_y - padding), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { padding, text_y } }
-    elseif self.image_file then
+    elseif image then
         content[#content + 1] = TextWidget:new{ text = _("Image"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { padding, self.height - padding - scale(16) } }
     end
     self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .12)), background = self.bubble_background or Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
@@ -980,17 +984,18 @@ local function dmMessagePane(instance, context)
     local half = math.floor((width - 2 * margin - gap) / 2)
     local full_body = message.body
     local image_file = attachmentFilePath(state, message)
-    if message.attachmentData ~= "" and not image_file then full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. _("[Image unavailable]") end
-    if message.senderDeviceId == state.store.device_id then full_body = (message.readAt ~= "" and "✓✓ " or "✓ ") .. full_body end
     local image_height = image_file and math.min(px(220), math.floor(height * .34)) or 0
-    local body_y = margin + px(48) + image_height + (image_file and gap or 0)
+    local image = image_file and safeImageWidget{ file = image_file, width = width - 2 * margin, height = image_height, scale_factor = 0, overlap_offset = { margin, margin + px(48) } }
+    if message.attachmentData ~= "" and not image then full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. _("[Image unavailable]") end
+    if message.senderDeviceId == state.store.device_id then full_body = (message.readAt ~= "" and "✓✓ " or "✓ ") .. full_body end
+    local body_y = margin + px(48) + (image and image_height or 0) + (image and gap or 0)
     local elements = {
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
         TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
     }
-    if image_file then elements[#elements + 1] = ImageWidget:new{ file = image_file, width = width - 2 * margin, height = image_height, scale_factor = 0, overlap_offset = { margin, margin + px(48) } } end
+    if image then elements[#elements + 1] = image end
     elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, body_y } }
     elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
     elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
@@ -1019,7 +1024,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.5",
+    version = "1.4.6",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
