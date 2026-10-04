@@ -710,7 +710,9 @@ local function chooseImageAttachment(state, context)
             function chooser:onFileSelect(item)
                 local path = item and item.path
                 UIManager:close(self)
-                if path then attachPath(path) else state.status = _("The image could not be opened."); refresh(context) end
+                UIManager:nextTick(function()
+                    if path then attachPath(path) else state.status = _("The image could not be opened."); refresh(context) end
+                end)
                 return true
             end
             UIManager:show(chooser)
@@ -1068,7 +1070,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.9",
+    version = "1.4.10",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
