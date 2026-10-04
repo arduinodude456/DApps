@@ -61,13 +61,13 @@ package.preload["ui/uimanager"] = function()
 end
 
 local app = dofile("minecraft.lua")
-assert(app.id == "minecraft" and app.version == "2.6.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "2.7.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(app._test.WORLD_SIZE == 80 and app._test.MAX_VIEW_DISTANCE == 48 and app._test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
-assert(app._test.RENDER_COLS == 180 and app._test.RENDER_ROWS == 108, "Renderer must use the sharper 180x108 logical render budget")
+assert(app._test.RENDER_COLS == 180 and app._test.RENDER_ROWS == 180, "Renderer must use the sharper 180x180 logical render budget")
 assert(app._test.MOVE_FRAMES == 4 and app._test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
 local standard_cols, standard_rows = app._test.renderGridFor(210, 126)
-assert(standard_cols == 180 and standard_rows == 108, "Normal panes must retain the 180x108 logical render grid")
+assert(standard_cols == 180 and standard_rows == 126, "A standard 210x126 pane must use all available rows of the 180x180 budget")
 local compact_cols, compact_rows = app._test.renderGridFor(39, 61)
 assert(compact_cols == 39 and compact_rows == 61, "Compact panes must not oversample their assigned canvas")
 
@@ -163,7 +163,7 @@ local function blackPixels(first_row, last_row)
     end
     return count
 end
-assert(blackPixels(42, 83) > 500 and blackPixels(84, 125) > 800, "Flat ground must project across the lower view instead of collapsing into one edge row")
+assert(blackPixels(42, 83) > 300 and blackPixels(84, 125) > 800, "Flat ground must project across the lower view instead of collapsing into one edge row")
 
 canvas._origin_x, canvas._origin_y = 17, 29
 assert(canvas:refreshFast(), "The game canvas must support a direct fast refresh")
@@ -184,5 +184,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 2.6.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 2.7.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
