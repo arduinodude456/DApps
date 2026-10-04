@@ -550,6 +550,33 @@ local function fetchConversation(state, context)
     refresh(context)
 end
 
+local function deleteConversation(state, context)
+    if state.store.selected_recipient_id == "" then return end
+    local response, code, err = httpJson(state.store, "DELETE", "/dms/" .. urlEncode(state.store.selected_recipient_id), nil, true, state.store.dm_endpoint)
+    if not response or response.deleted ~= true then
+        state.status = err or _("The private chat could not be deleted.")
+        refresh(context)
+        return
+    end
+    state.store.dm_messages = {}
+    state.store.selected_recipient_id = ""
+    state.store.selected_recipient_name = ""
+    state.selected_dm_id = nil
+    state.dm_page = 1
+    state.view = "dm"
+    saveStore(state.store)
+    state.status = _("Private chat deleted from the server.")
+    refresh(context)
+end
+
+local function confirmDeleteConversation(state, context)
+    UIManager:show(ConfirmBox:new{
+        text = _("Delete this private chat and all server-stored messages for both participants? This cannot be undone."),
+        ok_text = _("Delete chat"),
+        ok_callback = function() deleteConversation(state, context) end,
+    })
+end
+
 local function openPrivateChats(state, context)
     if not hasIdentity(state.store) then state.status = _("Create a local identity before opening private chats."); refresh(context); return end
     state.view = "dm"
@@ -751,10 +778,11 @@ local function dmConversationPane(instance, context)
         TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(20)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = _("Private · stored server-side · no end-to-end encryption"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(27) } },
     }
-    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchConversation(state, context) end, overlap_offset = { margin, margin + px(61) } }
-    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Send"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + third + gap, margin + px(61) } }
-    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(61) } }
+    local quarter = math.floor((width - 2 * margin - 3 * gap) / 4)
+    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchConversation(state, context) end, overlap_offset = { margin, margin + px(61) } }
+    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Send"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + quarter + gap, margin + px(61) } }
+    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Delete"), callback = function() confirmDeleteConversation(state, context) end, overlap_offset = { margin + 2 * (quarter + gap), margin + px(61) } }
+    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 3 * (quarter + gap), margin + px(61) } }
     local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
     state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
     local start_index = (state.dm_page - 1) * MAX_VISIBLE_PER_PAGE + 1
@@ -814,7 +842,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.7",
+    version = "1.2.8",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
