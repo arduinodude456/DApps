@@ -272,12 +272,16 @@ function VoxelCanvas:_line(bb, first, second, ink)
 end
 
 function VoxelCanvas:_drawVoxel(bb, points, top_tone, side_tone, phase)
-    -- Draw fill first, then a one-pixel wireframe. The slanted edges are what
-    -- the former rectangular implementation was missing.
-    self:_fillPolygon(bb, points.top, top_tone, phase, "top")
+    -- A voxel is closed on all six sides. Hidden faces are painted first so
+    -- the visible side faces and the cap remain on top in the painter pass.
+    self:_fillPolygon(bb, points.bottom, math.max(1, side_tone - 1), phase + 5, "side")
+    self:_fillPolygon(bb, points.back, math.max(1, side_tone - 1), phase + 4, "side")
+    self:_fillPolygon(bb, points.side_c, math.max(1, side_tone - 1), phase + 3, "side")
+    self:_fillPolygon(bb, points.side_d, side_tone, phase + 2, "side")
     self:_fillPolygon(bb, points.side_a, side_tone, phase + 1, "side")
     self:_fillPolygon(bb, points.side_b, math.max(1, side_tone - 1), phase + 2, "side")
-    for _, edge in ipairs({ points.top, points.side_a, points.side_b }) do
+    self:_fillPolygon(bb, points.top, top_tone, phase, "top")
+    for _, edge in ipairs({ points.top, points.side_a, points.side_b, points.side_c, points.side_d, points.back, points.bottom }) do
         for index = 1, #edge do self:_line(bb, edge[index], edge[index % #edge + 1], Blitbuffer.COLOR_BLACK) end
     end
 end
@@ -334,6 +338,10 @@ function VoxelCanvas:_drawScene(bb, x, y)
                         top = { top_nw, top_ne, top_se, top_sw },
                         side_a = math.sin(session.yaw) >= 0 and { top_nw, top_sw, bottom_sw, bottom_nw } or { top_ne, top_se, bottom_se, bottom_ne },
                         side_b = math.cos(session.yaw) >= 0 and { top_nw, top_ne, bottom_ne, bottom_nw } or { top_sw, top_se, bottom_se, bottom_sw },
+                        side_c = { top_nw, top_ne, bottom_ne, bottom_nw },
+                        side_d = { top_sw, top_se, bottom_se, bottom_sw },
+                        back = { top_ne, top_se, bottom_se, bottom_ne },
+                        bottom = { bottom_nw, bottom_sw, bottom_se, bottom_ne },
                     }
                     local min_x, max_x, min_y, max_y = width + x, x, height + y, y
                     for _, face in pairs(points) do for _, point in ipairs(face) do
@@ -466,7 +474,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.4.0",
+    version = "1.5.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",

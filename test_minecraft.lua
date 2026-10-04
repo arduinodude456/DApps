@@ -61,7 +61,7 @@ package.preload["ui/uimanager"] = function()
 end
 
 local app = dofile("minecraft.lua")
-assert(app.id == "minecraft" and app.version == "1.4.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "1.5.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(app._test.WORLD_SIZE == 24 and app._test.WALK_DISTANCE > 0, "Voxel world constants must be exported")
 assert(app._test.MOVE_FRAMES == 4 and app._test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
@@ -103,5 +103,5 @@ local split_pane = app.buildPane({}, {
 assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "Minecraft must also fit a compact split pane")
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("minecraft.lua | 1.4.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 1.5.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
