@@ -44,6 +44,8 @@ _G.unpack = table.unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
 assert(dchat._test.cloneDirectMessage({ id = 7, authorName = "Test", body = "ok", createdAt = "2026-10-04T00:00:00Z" }).id == "7", "numeric DM id was not normalized")
+assert(dchat._test.dmPreview("kurz", 10) == "kurz", "short DM preview was changed")
+assert(dchat._test.dmPreview(string.rep("x", 20), 10) == "xxxxxxx...", "long DM preview was not ellipsized")
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })
 assert(dual_store.endpoint == "https://appdock-bd7bcrzm.manus.space", "public endpoint was not normalized")
 assert(dual_store.dm_endpoint == "https://dchatdm-qkwwnvdq.manus.space", "DM endpoint was not initialized")

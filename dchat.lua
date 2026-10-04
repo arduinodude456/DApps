@@ -788,11 +788,17 @@ local function dmPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
+local function dmPreview(text, maximum)
+    text = tostring(text or "")
+    if #text <= maximum then return text end
+    return text:sub(1, math.max(1, maximum - 3)) .. "..."
+end
+
 local function dmBubble(width, height, message, own, callback)
     local bubble_width = math.max(math.floor(width * 0.78), width - 40)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
-    return ActionButton:new{ width = bubble_width, height = height, title = "", body = message.body, callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    return ActionButton:new{ width = bubble_width, height = height, title = "", body = dmPreview(message.body, 96), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
@@ -881,7 +887,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.3.1",
+    version = "1.3.2",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -896,5 +902,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
