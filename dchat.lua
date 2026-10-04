@@ -645,33 +645,24 @@ local function selectedMessage(state)
 end
 
 local function chooseImageAttachment(state, context)
-    local ok_chooser, FileChooser = pcall(require, "ui/widget/filechooser")
-    if not ok_chooser or not FileChooser then state.status = _("File selection is unavailable on this KOReader build."); refresh(context); return end
-    local chooser
-    local chooser_ui = {
-        selected_files = {},
-        folder_shortcuts = {
-            getShortcutFullName = function() return nil end,
-            hasShortcut = function() return false end,
-            hasFolderShortcut = function() return false end,
-        },
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Attach image"), input = Device.home_dir and (Device.home_dir .. "/") or "/", input_hint = _("Full path to PNG, JPEG, GIF or WEBP (max. 512 KB)"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Attach"), is_enter_default = true, callback = function()
+            local path = trim(dialog:getInputText())
+            UIManager:close(dialog)
+            local file = io.open(path, "rb")
+            if not file then state.status = _("The image could not be opened."); refresh(context); return end
+            local data = file:read(MAX_ATTACHMENT_BYTES + 1); file:close()
+            local lower = path:lower()
+            local mime = lower:match("%.png$") and "image/png" or lower:match("%.jpe?g$") and "image/jpeg" or lower:match("%.gif$") and "image/gif" or lower:match("%.webp$") and "image/webp"
+            if not mime then state.status = _("Use a PNG, JPEG, GIF or WEBP image."); refresh(context); return end
+            if not data or #data > MAX_ATTACHMENT_BYTES then state.status = _("Images are limited to 512 KB."); refresh(context); return end
+            sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
+        end } } },
     }
-    chooser = FileChooser:new{ name = "dchat_attachment", ui = chooser_ui, path = Device.home_dir or "/", show_path = true, file_filter = function(filename)
-        return filename:lower():match("%.(png|jpe?g|gif|webp)$") ~= nil
-    end }
-    function chooser:onFileSelect(item)
-        local file = io.open(item.path, "rb")
-        if not file then UIManager:close(self); state.status = _("The image could not be opened."); refresh(context); return true end
-        local data = file:read(MAX_ATTACHMENT_BYTES + 1)
-        file:close()
-        if not data or #data > MAX_ATTACHMENT_BYTES then UIManager:close(self); state.status = _("Images are limited to 512 KB."); refresh(context); return true end
-        local lower = item.path:lower()
-        local mime = lower:match("%.png$") and "image/png" or lower:match("%.jpe?g$") and "image/jpeg" or lower:match("%.gif$") and "image/gif" or "image/webp"
-        UIManager:close(self)
-        sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
-        return true
-    end
-    UIManager:show(chooser)
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 local function selectedDirectMessage(state)
@@ -949,7 +940,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.2",
+    version = "1.4.3",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
