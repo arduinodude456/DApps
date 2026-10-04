@@ -116,7 +116,7 @@ local function cloneStore(raw)
             dm_messages[#dm_messages + 1] = message
         end
     end
-    local saved_endpoint = trim(raw.endpoint)
+    local saved_endpoint = trim(raw.endpoint):gsub("/+$", "")
     if saved_endpoint == "" or saved_endpoint == LEGACY_ENDPOINT then saved_endpoint = DEFAULT_ENDPOINT end
     return {
         endpoint = saved_endpoint:gsub("/+$", ""):sub(1, MAX_ENDPOINT_BYTES),
@@ -756,7 +756,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.2",
+    version = "1.2.3",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
