@@ -208,23 +208,61 @@ function VoxelCanvas:_project(horizon, focal, camera_y, world_y, distance, y)
     return math.floor(y + horizon + (camera_y - world_y) * focal / math.max(distance, 0.18))
 end
 
-function VoxelCanvas:_drawCube(bb, left, top, size, tone, side_tone)
-    local cube_w = math.max(2, math.floor(size * 0.82))
-    local face_h = math.max(2, math.floor(size * 0.74))
-    local cap_h = math.max(2, math.floor(size * 0.18))
-    local side_w = math.max(1, math.floor(size * 0.16))
-    local face_top = top + cap_h
-    local face_bottom = face_top + face_h
-    -- The upper cap, front face, and narrow side face are separate rectangles.
-    -- On a one-bit display these hard seams read much more reliably than gray
-    -- vertical bands and make every terrain cell visibly cubic.
-    self:_paintDitherBand(bb, left, top, cube_w, cap_h, tone, left + top)
-    bb:paintRect(left, top, cube_w, 1, Blitbuffer.COLOR_BLACK)
-    self:_paintDitherBand(bb, left, face_top, cube_w - side_w, face_h, tone + 1, left + top * 3)
-    bb:paintRect(left, face_top, cube_w - side_w, 1, Blitbuffer.COLOR_BLACK)
-    self:_paintDitherBand(bb, left + cube_w - side_w, face_top, side_w, face_h, side_tone, left * 2 + top)
-    bb:paintRect(left + cube_w - side_w, face_top, 1, face_h, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(left, face_bottom - 1, cube_w, 1, Blitbuffer.COLOR_BLACK)
+function VoxelCanvas:_projectPoint(horizon, focal, camera_y, wx, wz, wy, session, x, y)
+    local dx, dz = wx - session.player_x, wz - session.player_z
+    local depth = dx * math.sin(session.yaw) + dz * math.cos(session.yaw)
+    local lateral = dx * math.cos(session.yaw) - dz * math.sin(session.yaw)
+    if depth < 0.18 then depth = 0.18 end
+    return x + self.width / 2 + lateral * focal / depth,
+        y + horizon + (camera_y - wy) * focal / depth
+end
+
+function VoxelCanvas:_fillPolygon(bb, points, tone, phase)
+    local min_y, max_y = points[1][2], points[1][2]
+    for index = 2, #points do
+        min_y, max_y = math.min(min_y, points[index][2]), math.max(max_y, points[index][2])
+    end
+    local edges = {}
+    for row = math.floor(min_y), math.floor(max_y) do
+        local intersections = {}
+        for index = 1, #points do
+            local first, second = points[index], points[index % #points + 1]
+            if (first[2] <= row and second[2] > row) or (second[2] <= row and first[2] > row) then
+                local ratio = (row - first[2]) / (second[2] - first[2])
+                intersections[#intersections + 1] = first[1] + (second[1] - first[1]) * ratio
+            end
+        end
+        table.sort(intersections)
+        for index = 1, #intersections - 1, 2 do
+            local left = math.floor(intersections[index])
+            local right = math.ceil(intersections[index + 1])
+            if right > left then
+                if tone >= 3 or ((row + phase) % (tone == 2 and 2 or 4) == 0) then
+                    bb:paintRect(left, row, right - left, 1, tone >= 3 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY)
+                end
+            end
+        end
+    end
+end
+
+function VoxelCanvas:_line(bb, first, second, ink)
+    local dx, dy = second[1] - first[1], second[2] - first[2]
+    local steps = math.max(1, math.ceil(math.max(math.abs(dx), math.abs(dy))))
+    for step = 0, steps do
+        local ratio = step / steps
+        bb:paintRect(math.floor(first[1] + dx * ratio), math.floor(first[2] + dy * ratio), 1, 1, ink)
+    end
+end
+
+function VoxelCanvas:_drawVoxel(bb, points, top_tone, side_tone, phase)
+    -- Draw fill first, then a one-pixel wireframe. The slanted edges are what
+    -- the former rectangular implementation was missing.
+    self:_fillPolygon(bb, points.top, top_tone, phase)
+    self:_fillPolygon(bb, points.side_a, side_tone, phase + 1)
+    self:_fillPolygon(bb, points.side_b, math.max(1, side_tone - 1), phase + 2)
+    for _, edge in ipairs({ points.top, points.side_a, points.side_b }) do
+        for index = 1, #edge do self:_line(bb, edge[index], edge[index % #edge + 1], Blitbuffer.COLOR_BLACK) end
+    end
 end
 
 function VoxelCanvas:_drawScene(bb, x, y)
@@ -263,15 +301,32 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 if depth > 0.4 and radial > distance - 0.8 and radial <= distance + 0.65 and not emitted[key] then
                     emitted[key] = true
                     local block_height = heightAt(session.world, world_x, world_z)
-                    local screen_x = center_x + math.floor(lateral * focal / depth)
                     local cube_size = math.floor(focal / depth)
-                    local top = self:_project(horizon, focal, camera_y, block_height, depth, y)
-                    local bottom = self:_project(horizon, focal, camera_y, block_height - 1, depth, y)
-                    local left = screen_x - math.floor(cube_size * 0.41)
-                    if block_height > 0 and cube_size >= 3 and left < right and left + cube_size > x and bottom > sky_bottom and top < y + height then
+                    local project = function(px, pz, py)
+                        return { self:_projectPoint(horizon, focal, camera_y, px, pz, py, session, x, y) }
+                    end
+                    local top_nw = project(world_x - 0.5, world_z - 0.5, block_height)
+                    local top_ne = project(world_x + 0.5, world_z - 0.5, block_height)
+                    local top_se = project(world_x + 0.5, world_z + 0.5, block_height)
+                    local top_sw = project(world_x - 0.5, world_z + 0.5, block_height)
+                    local bottom_nw = project(world_x - 0.5, world_z - 0.5, 0)
+                    local bottom_ne = project(world_x + 0.5, world_z - 0.5, 0)
+                    local bottom_se = project(world_x + 0.5, world_z + 0.5, 0)
+                    local bottom_sw = project(world_x - 0.5, world_z + 0.5, 0)
+                    local points = {
+                        top = { top_nw, top_ne, top_se, top_sw },
+                        side_a = math.sin(session.yaw) >= 0 and { top_nw, top_sw, bottom_sw, bottom_nw } or { top_ne, top_se, bottom_se, bottom_ne },
+                        side_b = math.cos(session.yaw) >= 0 and { top_nw, top_ne, bottom_ne, bottom_nw } or { top_sw, top_se, bottom_se, bottom_sw },
+                    }
+                    local min_x, max_x, min_y, max_y = width + x, x, height + y, y
+                    for _, face in pairs(points) do for _, point in ipairs(face) do
+                        min_x, max_x = math.min(min_x, point[1]), math.max(max_x, point[1])
+                        min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
+                    end end
+                    if block_height > 0 and cube_size >= 3 and max_x > x and min_x < right and max_y > sky_bottom and min_y < y + height then
                         local tone = depth < 3 and 3 or (depth < 7 and 2 or 1)
                         local side_tone = ((world_x + world_z) % 2 == 0) and math.max(1, tone - 1) or tone
-                        self:_drawCube(bb, math.max(x, left), math.max(y, top), cube_size, tone, side_tone)
+                        self:_drawVoxel(bb, points, tone, side_tone, world_x * 3 + world_z)
                     end
                 end
             end
@@ -394,7 +449,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.2.0",
+    version = "1.3.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
