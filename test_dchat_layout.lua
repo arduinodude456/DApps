@@ -19,6 +19,7 @@ local function install(name, value) package.preload[name] = function() return va
 local Widget = class()
 local Input = class()
 local image_widget_files = {}
+local deferred_ui_callback
 function Input:paintTo() end
 install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7 })
 install("ui/widget/container/centercontainer", Widget)
@@ -47,11 +48,12 @@ install("ui/uimanager", {
     scheduleIn = function(_, delay, callback)
         scheduled_ui_callback = { delay = delay, callback = callback }
     end,
+    tickAfterNext = function(_, callback)
+        deferred_ui_callback = callback
+    end,
 })
 install("ui/widget/container/widgetcontainer", Widget)
 install("gettext", function(value) return value end)
-local test_platform = "android"
-install("version", { getCurrentPlatform = function() return test_platform end })
 install("json", { encode = function() return "{}" end, decode = function() return {} end })
 install("socket.url", { parse = function(value) return { scheme = "https", host = value:match("https://([^/]+)") } end })
 _G.unpack = table.unpack or unpack
@@ -72,9 +74,11 @@ local dm_instance = { dchat = {
 } }
 local dm_context = { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }
 local dm_pane = dchat.buildPane(dm_instance, dm_context)
+local android_image_file
 for _, image_file in ipairs(image_widget_files) do
-    assert(not image_file:match("^/tmp/"), "DM conversation rebuild eagerly created an image widget for an attachment")
+    if image_file:match("^/tmp/") then android_image_file = image_file end
 end
+assert(android_image_file, "Android DM conversation did not restore inline image preview")
 local refresh_button
 for _, widget in ipairs(dm_pane) do
     if type(widget) == "table" and widget.title == "↻" then refresh_button = widget; break end
@@ -85,7 +89,6 @@ assert(scheduled_ui_callback and scheduled_ui_callback.delay == 0.1, "DM refresh
 dm_instance.dchat.view = "dm"
 scheduled_ui_callback.callback()
 assert(dm_instance.dchat.loading == false, "stale DM refresh ran after leaving the conversation")
-test_platform = "kobo"
 local kobo_dchat = assert(loadfile("dchat.lua"))()
 local kobo_instance = { dchat = { store = dm_instance.dchat.store, view = "dm_conversation", status = "", loading = false } }
 kobo_dchat.buildPane(kobo_instance, dm_context)
@@ -95,6 +98,23 @@ for _, image_file in ipairs(image_widget_files) do
 end
 assert(kobo_image_file, "Kobo inline DM image preview was not preserved")
 os.remove(kobo_image_file)
+os.remove(android_image_file)
+local rebuild_count = 0
+local deferred_state = { view = "dm_conversation" }
+local deferred_context = { requestRebuild = function() rebuild_count = rebuild_count + 1 end }
+dchat._test.deferConversationRefresh(deferred_state, deferred_context)
+assert(rebuild_count == 0 and deferred_ui_callback, "DM refresh rebuilt the native host inside the network callback")
+local pending_rebuild = deferred_ui_callback
+deferred_ui_callback = nil
+deferred_state.view = "dm"
+pending_rebuild()
+assert(rebuild_count == 0, "deferred DM refresh rebuilt after the conversation had closed")
+deferred_state.view = "dm_conversation"
+dchat._test.deferConversationRefresh(deferred_state, deferred_context)
+pending_rebuild = deferred_ui_callback
+deferred_ui_callback = nil
+pending_rebuild()
+assert(rebuild_count == 1, "deferred DM refresh did not rebuild an active conversation")
 local old_dm_instance = { dchat = { store = { recipients = { { deviceId = "dch_legacyrecipient123", displayName = "Legacy" } }, messages = {}, dm_messages = {}, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "", device_secret = "", display_name = "" }, view = "dm", status = "", loading = true } }
 assert(dchat.buildPane(old_dm_instance, { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }), "legacy DM cache pane crashed")
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })
