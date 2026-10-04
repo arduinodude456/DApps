@@ -26,6 +26,8 @@ local TAU = math.pi * 2
 local WORLD_SIZE = 80
 local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
+local RENDER_COLS = 100
+local RENDER_ROWS = 100
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -474,12 +476,14 @@ function VoxelCanvas:_drawScene(bb, x, y)
     -- rendered on a small logical grid and enlarged with nearest-neighbour
     -- spans. This is much cheaper and more stable on an E-Ink framebuffer than
     -- projecting hundreds of independent polygons.
-    local cols = math.min(480, math.max(1, math.floor(width / RENDER_SCALE)))
-    local rows = math.min(320, math.max(1, math.floor(height / RENDER_SCALE)))
+    -- PocketOS itself renders 100x100 logical pixels and stretches them into
+    -- the 480x320 viewport. Matching that layout keeps the C perspective and
+    -- finishes a complete frame instead of leaving a partial high-res redraw.
+    local cols, rows = RENDER_COLS, RENDER_ROWS
     local pixel_w, pixel_h = width / cols, height / rows
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
-    local aspect = rows / cols
+    local aspect = height / width
     local floor, abs, min, max = math.floor, math.abs, math.min, math.max
     local world, world_size = session.world, session.world.size
     local world_heights, world_materials = world.heights, world.materials
@@ -853,7 +857,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.2.0",
+    version = "2.3.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
@@ -926,6 +930,8 @@ return {
         WORLD_SIZE = WORLD_SIZE,
         MAX_VIEW_DISTANCE = MAX_VIEW_DISTANCE,
         RENDER_SCALE = RENDER_SCALE,
+        RENDER_COLS = RENDER_COLS,
+        RENDER_ROWS = RENDER_ROWS,
         WALK_DISTANCE = WALK_DISTANCE,
         TURN_ANGLE = TURN_ANGLE,
         MOVE_FRAMES = MOVE_FRAMES,
