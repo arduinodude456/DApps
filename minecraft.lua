@@ -121,6 +121,35 @@ local function materialAt(world, x, z)
     return (world.materials[z + 1] and world.materials[z + 1][x + 1]) or "grass"
 end
 
+local function blockHash3(seed, x, z, level)
+    local n = (seed * 1103515245 + x * 374761393 + z * 668265263 + level * 2246822519) % 2147483647
+    n = (n * 1274126177 + 1442695041) % 2147483647
+    return n
+end
+
+-- The C program raycasts individual blocks, not just a column silhouette.
+-- Keep the same layered rule in Lua so the DDA sees surface, dirt, stone and
+-- sparse ore blocks at separate heights.
+local function blockAt(world, x, z, level)
+    if x < 0 or z < 0 or x >= world.size or z >= world.size or level < 0 then return nil end
+    local height = heightAt(world, x, z)
+    if level >= height then return nil end
+    local surface = materialAt(world, x, z)
+    if level == height - 1 then return surface end
+    if surface == "wood" or surface == "leaves" then
+        return level >= math.max(0, height - 3) and surface or "dirt"
+    end
+    if level == 0 then return "stone" end
+    if level < height - 2 then
+        local ore = blockHash3(world.seed or 12345, x, z, level) % 100
+        if ore < 4 then return "coal" end
+        if ore == 4 then return "iron" end
+        if ore == 5 then return "gold" end
+        return "stone"
+    end
+    return "dirt"
+end
+
 local VoxelSession = {}
 VoxelSession.__index = VoxelSession
 
@@ -469,6 +498,11 @@ function VoxelCanvas:_drawScene(bb, x, y)
         wood = "1121111111211110111112111121111112111111111211111111211111111111",
         leaves = "1210121111121110112111211121111012111121111012111121110112111121",
         water = "1221122211221122122211221122122211221122211221122122211221122122",
+        sand = "2221222222221222222122222221222222221222221222222222122222222222",
+        snow = "2222222222222222222222222222222222222222222222222222222222222222",
+        coal = "1110111111111110111111111011111111110111111111111011111111111111",
+        iron = "1120111111111111112011111111111111111120111111111111111120111111",
+        gold = "1112111111111111111112111111111111111111112111111111111111112111",
     }
     local pattern_values = {}
     for name, pattern in pairs(patterns) do
@@ -518,9 +552,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local max_z = dz < 0 and (player_z - map_y) * delta_z or (map_y + 1 - player_z) * delta_z
         local dist, side = 0, 0
         for _ = 1, 96 do
-            local h = (map_x >= 0 and map_y >= 0 and map_x < world_size and map_y < world_size and world_heights[map_y + 1][map_x + 1]) or 0
-            if map_z >= 0 and map_z < h then
-                return map_x, map_y, map_z, dist, side, dx, dy, dz
+            local material = blockAt(world, map_x, map_y, map_z)
+            if material then
+                return map_x, map_y, map_z, dist, side, dx, dy, dz, material
             end
             if max_x < max_y and max_x < max_z then dist, max_x, map_x, side = max_x, max_x + delta_x, map_x + step_x, 0
             elseif max_y < max_z then dist, max_y, map_z, side = max_y, max_y + delta_y, map_z + step_y, 1
@@ -539,13 +573,12 @@ function VoxelCanvas:_drawScene(bb, x, y)
             local dz = forward[3] + col_z[rx] + row_z[ry]
             local inverse_length = 1 / math.sqrt(dx * dx + dy * dy + dz * dz)
             dx, dy, dz = dx * inverse_length, dy * inverse_length, dz * inverse_length
-            local bx, bz, by, dist, side, rdx, rdy, rdz = cast(dx, dy, dz)
+            local bx, bz, by, dist, side, rdx, rdy, rdz, hit_material = cast(dx, dy, dz)
             local ink
             if bx then
                 local hx, hy, hz = player_x + rdx * dist, camera_y + rdy * dist, player_z + rdz * dist
                 local top = side == 1 and rdy < 0
-                local material = world_materials[bz + 1] and world_materials[bz + 1][bx + 1] or "stone"
-                ink = blockInk(material, top and "top" or "side", hx, hy, hz, side, rx, ry)
+                ink = blockInk(hit_material, top and "top" or "side", hx, hy, hz, side, rx, ry)
                 if side == 0 and (bx + bz) % 2 == 0 then ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK end
             elseif dy < 0 and (ry + rx) % 6 == 0 then
                 ink = Blitbuffer.COLOR_BLACK
@@ -820,7 +853,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.1.2",
+    version = "2.2.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
