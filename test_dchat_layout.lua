@@ -60,14 +60,19 @@ _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
 assert(dchat._test.cloneDirectMessage({ id = 7, authorName = "Test", body = "ok", createdAt = "2026-10-04T00:00:00Z" }).id == "7", "numeric DM id was not normalized")
-assert(dchat._test.cloneDirectMessage({ id = 8, authorName = "Test", body = "", attachmentData = "a", createdAt = "2026-10-04T00:00:00Z" }).attachmentData == "a", "image-only DM was not normalized")
+assert(dchat._test.cloneDirectMessage({ id = 8, authorName = "Test", body = "", attachmentMime = "image/png", attachmentData = "TWFudXM=", createdAt = "2026-10-04T00:00:00Z" }).attachmentData == "TWFudXM=", "PNG-only DM attachment was not preserved")
 assert(dchat._test.dmPreview("kurz", 10) == "kurz", "short DM preview was changed")
 assert(dchat._test.dmPreview(string.rep("x", 40), 36) == string.rep("x", 33) .. "...", "long DM preview was not ellipsized")
 assert(dchat._test.base64Encode("Manus") == "TWFudXM=", "attachment base64 encoding failed")
 assert(dchat._test.base64Decode("TWFudXM=") == "Manus", "attachment base64 decoding failed")
 assert(dchat._test.base64Decode("not-base64") == nil, "invalid attachment base64 was accepted")
-assert(dchat._test.imageMimeForPath("/tmp/photo.jpg") == "image/jpeg", "JPG attachment MIME was not detected")
-assert(dchat._test.imageMimeForPath("/tmp/photo.jpeg") == "image/jpeg", "JPEG attachment MIME was not detected")
+assert(dchat._test.imageMimeForPath("/tmp/photo.png") == "image/png", "PNG attachment MIME was not detected")
+for _, unsupported_path in ipairs({ "/tmp/photo.jpg", "/tmp/photo.jpeg", "/tmp/photo.gif", "/tmp/photo.webp" }) do
+    assert(dchat._test.imageMimeForPath(unsupported_path) == nil, "non-PNG attachment was accepted: " .. unsupported_path)
+end
+local old_jpeg = dchat._test.cloneDirectMessage({ id = 9, authorName = "Test", body = "", attachmentMime = "image/jpeg", attachmentData = "TWFudXM=", createdAt = "2026-10-04T00:00:00Z" })
+assert(old_jpeg and old_jpeg.attachmentData == "" and old_jpeg.attachmentMime == "" and old_jpeg.body:find("PNG only", 1, true), "existing JPEG DM was not safely converted to a text-only placeholder")
+assert(dchat._test.attachmentFilePath({ attachment_files = {} }, { id = "10", attachmentMime = "image/jpeg", attachmentData = "TWFudXM=" }) == nil, "existing JPEG DM was decoded for inline display")
 local dm_instance = { dchat = {
     store = { recipients = { { deviceId = "dch_testrecipient123", displayName = "Test" } }, messages = {}, dm_messages = { { id = "10", authorName = "Test", body = "", createdAt = "2026-10-04T00:00:00Z", senderDeviceId = "dch_testrecipient123", readAt = "", attachmentMime = "image/png", attachmentData = "TWFudXM=" } }, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "", device_secret = "", display_name = "", selected_recipient_id = "dch_testrecipient123" },
     view = "dm_conversation", status = "", loading = false,
