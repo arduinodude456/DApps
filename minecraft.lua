@@ -26,8 +26,8 @@ local TAU = math.pi * 2
 local WORLD_SIZE = 80
 local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
-local RENDER_COLS = 100
-local RENDER_ROWS = 100
+local RENDER_COLS = 800
+local RENDER_ROWS = 800
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -857,7 +857,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.3.0",
+    version = "2.4.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
