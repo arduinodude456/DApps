@@ -23,9 +23,9 @@ local _ = require("gettext")
 
 local Screen = Device.screen
 local TAU = math.pi * 2
-local WORLD_SIZE = 48
-local MAX_VIEW_DISTANCE = 28
-local RENDER_SCALE = 3
+local WORLD_SIZE = 80
+local MAX_VIEW_DISTANCE = 48
+local RENDER_SCALE = 1
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -355,8 +355,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
     -- rendered on a small logical grid and enlarged with nearest-neighbour
     -- spans. This is much cheaper and more stable on an E-Ink framebuffer than
     -- projecting hundreds of independent polygons.
-    local cols = math.max(72, math.min(180, math.floor(width / RENDER_SCALE)))
-    local rows = math.max(54, math.min(120, math.floor(height / RENDER_SCALE)))
+    local cols = math.min(480, math.max(1, math.floor(width / RENDER_SCALE)))
+    local rows = math.min(320, math.max(1, math.floor(height / RENDER_SCALE)))
     local pixel_w, pixel_h = width / cols, height / rows
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
@@ -405,7 +405,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local max_y = dy < 0 and (camera_y - map_y) * delta_y or (map_y + 1 - camera_y) * delta_y
         local max_z = dz < 0 and (session.player_z - map_z) * delta_z or (map_z + 1 - session.player_z) * delta_z
         local dist, side = 0, 0
-        for _ = 1, 32 do
+        for _ = 1, 96 do
             local h = heightAt(session.world, map_x, map_y)
             if map_x >= 0 and map_y >= 0 and map_x < session.world.size and map_y < session.world.size and map_z >= 0 and map_z < h then
                 return map_x, map_y, map_z, dist, side, dx, dy, dz
@@ -418,6 +418,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         return nil
     end
     for ry = 0, rows - 1 do
+        local row_ink, row_start
         for rx = 0, cols - 1 do
             local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
             local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
@@ -438,7 +439,15 @@ function VoxelCanvas:_drawScene(bb, x, y)
             else
                 ink = Blitbuffer.COLOR_WHITE
             end
-            bb:paintRect(x + math.floor(rx * pixel_w), y + math.floor(ry * pixel_h), math.max(1, math.ceil(pixel_w)), math.max(1, math.ceil(pixel_h)), ink)
+            if rx == 0 then
+                row_ink, row_start = ink, rx
+            elseif ink ~= row_ink then
+                bb:paintRect(x + math.floor(row_start * pixel_w), y + math.floor(ry * pixel_h), math.max(1, math.floor((rx - row_start) * pixel_w)), math.max(1, math.ceil(pixel_h)), row_ink)
+                row_ink, row_start = ink, rx
+            end
+        end
+        if row_ink then
+            bb:paintRect(x + math.floor(row_start * pixel_w), y + math.floor(ry * pixel_h), math.max(1, math.floor((cols - row_start) * pixel_w)), math.max(1, math.ceil(pixel_h)), row_ink)
         end
     end
     local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
@@ -636,7 +645,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.9.0",
+    version = "2.0.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
