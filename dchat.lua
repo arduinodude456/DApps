@@ -469,6 +469,16 @@ local function selectedRecipient(state)
     end
 end
 
+local function registerExistingIdentity(state)
+    if not hasIdentity(state.store) then return false end
+    local response = httpJson(state.store, "POST", "/devices", {
+        deviceId = state.store.device_id,
+        deviceSecret = state.store.device_secret,
+        displayName = state.store.display_name,
+    }, false)
+    return response ~= nil
+end
+
 local function fetchRecipients(state, context, query)
     if state.loading then return end
     state.loading = true
@@ -479,6 +489,9 @@ local function fetchRecipients(state, context, query)
     local suffix = "/recipients?limit=" .. tostring(MAX_RECIPIENTS)
     if clean_query ~= "" then suffix = suffix .. "&q=" .. urlEncode(clean_query) end
     local response, code, err = httpJson(state.store, "GET", suffix, nil, true)
+    if not response and code == 401 and registerExistingIdentity(state) then
+        response, code, err = httpJson(state.store, "GET", suffix, nil, true)
+    end
     state.loading = false
     if not response or type(response.recipients) ~= "table" then
         state.status = err or _("Recipient search failed.")
@@ -740,7 +753,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.0",
+    version = "1.2.1",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
