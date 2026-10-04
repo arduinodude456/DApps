@@ -97,6 +97,7 @@ function VoxelSession.new()
         player_x = 11.5,
         player_z = 5.5,
         yaw = 0,
+        pitch = 0,
         steps = 0,
         last_event = _("Bereit — erkunde die Blockwelt."),
         canvas = nil,
@@ -137,6 +138,12 @@ end
 function VoxelSession:turn(direction)
     self.yaw = wrapAngle(self.yaw + direction * TURN_ANGLE)
     self.last_event = direction < 0 and _("Nach links gedreht.") or _("Nach rechts gedreht.")
+    return true
+end
+
+function VoxelSession:lookVertical(direction)
+    self.pitch = math.max(-1.35, math.min(1.35, self.pitch + direction * 0.14))
+    self.last_event = direction > 0 and _("Nach oben gesehen.") or _("Nach unten gesehen.")
     return true
 end
 
@@ -339,83 +346,95 @@ function VoxelCanvas:_drawVoxel(bb, points, top_tone, side_tone, phase, material
 end
 
 function VoxelCanvas:_drawScene(bb, x, y)
-    local width, height = self.width, self.height
+    local width, height, session = self.width, self.height, self.session
     bb:paintRect(x, y, width, height, Blitbuffer.COLOR_WHITE)
-    local session = self.session
     if not session then return end
 
-    local horizon = math.floor(height * 0.40)
-    -- A shorter focal length widens the view: more terrain and tree silhouettes
-    -- fit into the same narrow e-Ink pane.
-    local focal = math.max(width * 0.68, height * 0.92)
+    -- Port of PocketOS's compact DDA renderer: the image is deliberately
+    -- rendered on a small logical grid and enlarged with nearest-neighbour
+    -- spans. This is much cheaper and more stable on an E-Ink framebuffer than
+    -- projecting hundreds of independent polygons.
+    local cols = math.max(54, math.min(120, math.floor(width / 4)))
+    local rows = math.max(42, math.min(90, math.floor(height / 4)))
+    local pixel_w, pixel_h = width / cols, height / rows
+    local fov = math.rad(130)
+    local tan_half = math.tan(fov / 2)
+    local aspect = rows / cols
+    local pitch = session.pitch or 0
+    local cp, sp = math.cos(pitch), math.sin(pitch)
+    local cy, sy = math.cos(session.yaw), math.sin(session.yaw)
+    local forward = { sy * cp, cy * cp, sp }
+    local right = { cy, -sy, 0 }
+    local up = { -sy * sp, -cy * sp, cp }
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
-    local sky_bottom = y + horizon
-    bb:paintRect(x, sky_bottom, width, 1, Blitbuffer.COLOR_BLACK)
-    -- Perspective floor guides make the vanishing point explicit between the
-    -- individual blocks and cost only a few short fast-waveform lines.
-    for line = 1, 5 do
-        local line_y = math.floor(sky_bottom + (height - horizon) * (line / 6) ^ 1.65)
-        bb:paintRect(x, line_y, width, 1, Blitbuffer.COLOR_LIGHT_GRAY)
+    local patterns = {
+        grass = "1211121111112111111211111121111111112111111211111111211111111111",
+        dirt = "1021101211100112112011011220101110112010111022100112111012010110",
+        stone = "1120111011011210111120101101112011201110110111201112110110111021",
+        wood = "1121111111211110111112111121111112111111111211111111211111111111",
+        leaves = "1210121111121110112111211121111012111121111012111121110112111121",
+        water = "1221122211221122122211221122122211221122211221122122211221122122",
+    }
+    local function blockInk(material, face, hx, hy, hz, side)
+        if material == "grass" and face ~= "top" then material = "dirt" end
+        local pattern = patterns[material] or patterns.stone
+        local fu, fv = hx - math.floor(hx), hy - math.floor(hy)
+        if side == 2 then fu, fv = hz - math.floor(hz), hy - math.floor(hy) end
+        local u = math.max(0, math.min(7, math.floor(fu * 8)))
+        local v = math.max(0, math.min(7, math.floor(fv * 8)))
+        local level = string.byte(pattern, v * 8 + u + 1) - 48
+        if face == "top" then level = level + 1 end
+        return level <= 1 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
     end
-
-    local right = x + width
-    local center_x = x + math.floor(width / 2)
-    -- Painter's order: far cells first, near cells last. The grid is sampled
-    -- by distance rings, but each cell is emitted once, as a complete cube.
-    local emitted = {}
-    local distance = MAX_VIEW_DISTANCE
-    while distance >= 0.55 do
-        local radius = math.floor(distance + 0.5)
-        for world_z = math.max(0, math.floor(session.player_z - radius)), math.min(session.world.size - 1, math.floor(session.player_z + radius)) do
-            for world_x = math.max(0, math.floor(session.player_x - radius)), math.min(session.world.size - 1, math.floor(session.player_x + radius)) do
-                local dx, dz = world_x + 0.5 - session.player_x, world_z + 0.5 - session.player_z
-                local depth = dx * math.sin(session.yaw) + dz * math.cos(session.yaw)
-                local lateral = dx * math.cos(session.yaw) - dz * math.sin(session.yaw)
-                local radial = math.sqrt(dx * dx + dz * dz)
-                local key = world_x * 100 + world_z
-                if depth > 0.4 and radial > distance - 0.8 and radial <= distance + 0.65 and not emitted[key] then
-                    emitted[key] = true
-                    local block_height = heightAt(session.world, world_x, world_z)
-                    local cube_size = math.floor(focal / depth)
-                    local project = function(px, pz, py)
-                        return { self:_projectPoint(horizon, focal, camera_y, px, pz, py, session, x, y) }
-                    end
-                    local top_nw = project(world_x - 0.5, world_z - 0.5, block_height)
-                    local top_ne = project(world_x + 0.5, world_z - 0.5, block_height)
-                    local top_se = project(world_x + 0.5, world_z + 0.5, block_height)
-                    local top_sw = project(world_x - 0.5, world_z + 0.5, block_height)
-                    local bottom_nw = project(world_x - 0.5, world_z - 0.5, 0)
-                    local bottom_ne = project(world_x + 0.5, world_z - 0.5, 0)
-                    local bottom_se = project(world_x + 0.5, world_z + 0.5, 0)
-                    local bottom_sw = project(world_x - 0.5, world_z + 0.5, 0)
-                    local points = {
-                        top = { top_nw, top_ne, top_se, top_sw },
-                        side_a = math.sin(session.yaw) >= 0 and { top_nw, top_sw, bottom_sw, bottom_nw } or { top_ne, top_se, bottom_se, bottom_ne },
-                        side_b = math.cos(session.yaw) >= 0 and { top_nw, top_ne, bottom_ne, bottom_nw } or { top_sw, top_se, bottom_se, bottom_sw },
-                        side_c = { top_nw, top_ne, bottom_ne, bottom_nw },
-                        side_d = { top_sw, top_se, bottom_se, bottom_sw },
-                        back = { top_ne, top_se, bottom_se, bottom_ne },
-                        bottom = { bottom_nw, bottom_sw, bottom_se, bottom_ne },
-                    }
-                    local min_x, max_x, min_y, max_y = width + x, x, height + y, y
-                    for _, face in pairs(points) do for _, point in ipairs(face) do
-                        min_x, max_x = math.min(min_x, point[1]), math.max(max_x, point[1])
-                        min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
-                    end end
-                    if block_height > 0 and cube_size >= 3 and max_x > x and min_x < right and max_y > sky_bottom and min_y < y + height then
-                        local tone = depth < 3 and 3 or (depth < 7 and 2 or 1)
-                        local side_tone = ((world_x + world_z) % 2 == 0) and math.max(1, tone - 1) or tone
-                        self:_drawVoxel(bb, points, tone, side_tone, world_x * 3 + world_z, materialAt(session.world, world_x, world_z))
-                    end
-                end
+    local function cast(dx, dy, dz)
+        local map_x, map_y, map_z = math.floor(session.player_x), math.floor(session.player_z), math.floor(camera_y)
+        local delta_x = math.abs(dx) < 0.00001 and 1e30 or math.abs(1 / dx)
+        local delta_y = math.abs(dy) < 0.00001 and 1e30 or math.abs(1 / dy)
+        local delta_z = math.abs(dz) < 0.00001 and 1e30 or math.abs(1 / dz)
+        local step_x, step_y, step_z = dx < 0 and -1 or 1, dy < 0 and -1 or 1, dz < 0 and -1 or 1
+        local max_x = dx < 0 and (session.player_x - map_x) * delta_x or (map_x + 1 - session.player_x) * delta_x
+        local max_y = dy < 0 and (camera_y - map_y) * delta_y or (map_y + 1 - camera_y) * delta_y
+        local max_z = dz < 0 and (session.player_z - map_z) * delta_z or (map_z + 1 - session.player_z) * delta_z
+        local dist, side = 0, 0
+        for _ = 1, 32 do
+            local h = heightAt(session.world, map_x, map_y)
+            if map_x >= 0 and map_y >= 0 and map_x < session.world.size and map_y < session.world.size and map_z >= 0 and map_z < h then
+                return map_x, map_y, map_z, dist, side, dx, dy, dz
             end
+            if max_x < max_y and max_x < max_z then dist, max_x, map_x, side = max_x, max_x + delta_x, map_x + step_x, 0
+            elseif max_y < max_z then dist, max_y, map_z, side = max_y, max_y + delta_y, map_z + step_y, 1
+            else dist, max_z, map_y, side = max_z, max_z + delta_z, map_y + step_z, 2 end
+            if dist > MAX_VIEW_DISTANCE then break end
         end
-        distance = distance - 0.8
+        return nil
     end
-
-    local center_y = y + horizon
-    bb:paintRect(center_x - 5, center_y - 1, 11, 2, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(center_x - 1, center_y - 5, 2, 11, Blitbuffer.COLOR_BLACK)
+    for ry = 0, rows - 1 do
+        for rx = 0, cols - 1 do
+            local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
+            local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
+            local dx = forward[1] + right[1] * nx + up[1] * ny
+            local dy = forward[2] + right[2] * nx + up[2] * ny
+            local dz = forward[3] + right[3] * nx + up[3] * ny
+            local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+            dx, dy, dz = dx / length, dy / length, dz / length
+            local bx, bz, by, dist, side, rdx, rdy, rdz = cast(dx, dy, dz)
+            local ink
+            if bx then
+                local hx, hy, hz = session.player_x + rdx * dist, camera_y + rdy * dist, session.player_z + rdz * dist
+                local top = side == 1 and rdy < 0
+                ink = blockInk(materialAt(session.world, bx, bz), top and "top" or "side", hx, hy, hz, side)
+                if side == 0 and (bx + bz) % 2 == 0 then ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK end
+            elseif dy < 0 and (ry + rx) % 6 == 0 then
+                ink = Blitbuffer.COLOR_BLACK
+            else
+                ink = Blitbuffer.COLOR_WHITE
+            end
+            bb:paintRect(x + math.floor(rx * pixel_w), y + math.floor(ry * pixel_h), math.max(1, math.ceil(pixel_w)), math.max(1, math.ceil(pixel_h)), ink)
+        end
+    end
+    local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
+    bb:paintRect(center_x - 5, center_y, 11, 1, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(center_x, center_y - 5, 1, 11, Blitbuffer.COLOR_BLACK)
 end
 
 function VoxelCanvas:paintTo(bb, x, y)
@@ -477,7 +496,9 @@ function VoxelCanvas:onSwipeMinecraftLook(_, gesture)
     elseif direction == "east" then
         self.session:turn(3)
     elseif direction == "north" then
-        self.session:jump()
+        self.session:lookVertical(1)
+    elseif direction == "south" then
+        self.session:lookVertical(-1)
     else
         return false
     end
@@ -606,7 +627,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.7.1",
+    version = "1.8.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
