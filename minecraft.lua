@@ -27,14 +27,14 @@ local TAU = math.pi * 2
 local WORLD_SIZE = 80
 local MAX_TERRAIN_HEIGHT = 14
 local MAX_COLUMN_HEIGHT = 18
-local MAX_VIEW_DISTANCE = 40
+local MAX_VIEW_DISTANCE = 32
 local RENDER_SCALE = 1
--- 800x800 output target. To keep the 3D DDA fast, the renderer samples
--- 2x2 output pixels as one logical ray and paints the result as a 2x2 cell.
--- This keeps the requested 800x800 canvas while reducing ray casts by 4x.
-local RENDER_COLS = 800
-local RENDER_ROWS = 800
-local RENDER_SAMPLE = 2
+-- 600x600 output target. The renderer samples 3x3 output pixels as one
+-- logical ray. This keeps the requested 600x600 canvas while reducing the
+-- expensive ray casts to about 1/9 of full-resolution rendering.
+local RENDER_COLS = 600
+local RENDER_ROWS = 600
+local RENDER_SAMPLE = 3
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
     red = { 220, 45, 45 },
@@ -633,7 +633,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local next_z = ray_z < 0 and (player_z - cell_z) * delta_z or (cell_z + 1 - player_z) * delta_z
         local next_y = ray_y < 0 and (camera_y - cell_y) * delta_y or (cell_y + 1 - camera_y) * delta_y
         local dist, side = 0, 0
-        for ray_step = 1, 72 do
+        for ray_step = 1, 48 do
             local material = blockAt(world, cell_x, cell_z, cell_y)
             if material then
                 return cell_x, cell_z, cell_y, dist, side, ray_x, ray_z, ray_y, material
@@ -952,7 +952,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.9.0",
+    version = "2.9.1",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
