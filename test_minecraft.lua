@@ -25,11 +25,12 @@ package.preload["ffi/blitbuffer"] = function()
         COLOR_BLACK = "black",
         COLOR_LIGHT_GRAY = "light",
         COLOR_DARK_GRAY = "dark",
+        ColorRGB32 = function(r, g, b, a) return string.format("rgb:%d,%d,%d,%d", r, g, b, a) end,
     }
 end
 package.preload["device"] = function()
     return {
-        screen = { scaleBySize = function(_, value) return value end },
+        screen = { scaleBySize = function(_, value) return value end, isColorEnabled = function() return true end },
         input = { group = {} },
     }
 end
@@ -61,10 +62,15 @@ package.preload["ui/uimanager"] = function()
 end
 
 local app = dofile("minecraft.lua")
-assert(app.id == "minecraft" and app.version == "2.7.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "2.8.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(app._test.WORLD_SIZE == 80 and app._test.MAX_VIEW_DISTANCE == 48 and app._test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(app._test.RENDER_COLS == 180 and app._test.RENDER_ROWS == 180, "Renderer must use the sharper 180x180 logical render budget")
 assert(app._test.MOVE_FRAMES == 4 and app._test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
+local palette_count = 0
+for _ in pairs(app._test.COLOR_PALETTE) do palette_count = palette_count + 1 end
+assert(palette_count == 7, "Color mode must expose exactly seven palette colors")
+assert(app._test.colorForMaterial("grass") == "rgb:45,170,70,255", "Grass must use the RGB green palette color")
+assert(app._test.colorForMaterial("water") == "rgb:55,105,220,255", "Water must use the RGB blue palette color")
 
 local standard_cols, standard_rows = app._test.renderGridFor(210, 126)
 assert(standard_cols == 180 and standard_rows == 126, "A standard 210x126 pane must use all available rows of the 180x180 budget")
@@ -112,6 +118,7 @@ for z = 1, motion_session.world.size do
     end
 end
 motion_session.player_x, motion_session.player_z, motion_session.yaw = 40.5, 40.5, 0
+assert(not motion_session.color_enabled and motion_session:act("color") and motion_session.color_enabled, "Color action must toggle color rendering")
 assert(motion_session:act("left") and motion_session:act("back"), "Session actions must support navigation controls")
 assert(motion_session.motion and motion_session.motion.frame == 0, "Interactive movement must begin as an animated step")
 motion_session:tickMotion()
@@ -130,12 +137,15 @@ assert(motion_session.pitch > original_pitch, "Swipe look must change pitch")
 dirty_calls, repaint_calls = {}, 0
 canvas._refresh_count = 0
 local paint_calls = 0
-canvas:paintTo({ paintRect = function(_, left, top, width, height)
+local captured_color = false
+canvas:paintTo({ paintRect = function(_, left, top, width, height, ink)
     paint_calls = paint_calls + 1
+    if type(ink) == "string" and ink:match("^rgb:") then captured_color = true end
     assert(width >= 1 and height >= 1, "Renderer spans must have a positive physical size")
     assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
 end }, 17, 29)
 assert(paint_calls > 100, "Voxel renderer must draw a substantial projected block scene")
+assert(captured_color, "Color mode must paint RGB colors when color hardware is available")
 
 local flat_session = app._test.VoxelSession.new()
 for z = 1, flat_session.world.size do
@@ -184,5 +194,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 2.7.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 2.8.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
