@@ -1,0 +1,101 @@
+local function class(base)
+    base = base or {}
+    base.__index = base
+    function base:extend(child)
+        child = child or {}
+        child.__index = child
+        setmetatable(child, { __index = self })
+        return child
+    end
+    function base:new(args)
+        local value = setmetatable(args or {}, self)
+        if value.init then value:init() end
+        return value
+    end
+    return base
+end
+
+local Widget = class({})
+local InputContainer = Widget:extend({})
+local dirty_calls, repaint_calls = {}, 0
+
+package.preload["ffi/blitbuffer"] = function()
+    return {
+        COLOR_WHITE = "white",
+        COLOR_BLACK = "black",
+        COLOR_LIGHT_GRAY = "light",
+        COLOR_DARK_GRAY = "dark",
+    }
+end
+package.preload["device"] = function()
+    return {
+        screen = { scaleBySize = function(_, value) return value end },
+        input = { group = {} },
+    }
+end
+package.preload["gettext"] = function() return function(value) return value end end
+package.preload["ui/font"] = function() return { getFace = function(_, name, size) return { name = name, size = size } end } end
+package.preload["ui/geometry"] = function() return { new = function(_, value) return value end } end
+package.preload["ui/gesturerange"] = function() return { new = function(_, value) return value end } end
+for _, module in ipairs({
+    "ui/widget/container/centercontainer",
+    "ui/widget/container/framecontainer",
+    "ui/widget/container/inputcontainer",
+    "ui/widget/horizontalspan",
+    "ui/widget/overlapgroup",
+    "ui/widget/textwidget",
+}) do
+    package.preload[module] = function() return InputContainer end
+end
+package.preload["ui/uimanager"] = function()
+    return {
+        widgetRepaint = function() repaint_calls = repaint_calls + 1 end,
+        setDirty = function(_, _, waveform, region)
+            dirty_calls[#dirty_calls + 1] = { waveform = waveform, region = region }
+        end,
+        forceRePaint = function() end,
+        yieldToEPDC = function() end,
+    }
+end
+
+local app = dofile("minecraft.lua")
+assert(app.id == "minecraft" and app.version == "1.0.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app._test.WORLD_SIZE == 24 and app._test.WALK_DISTANCE > 0, "Voxel world constants must be exported")
+
+local world = app._test.buildWorld()
+assert(world.size == 24 and #world.heights == 24 and #world.heights[1] == 24, "World must be a complete deterministic block grid")
+assert(app._test.heightAt(world, -1, 0) == 0 and app._test.heightAt(world, 0, -1) == 0, "Outside terrain must be empty")
+assert(app._test.heightAt(world, 11, 5) == 3, "Starting terrace must remain walkable")
+
+local session = app._test.VoxelSession.new()
+local original_z = session.player_z
+assert(session:move(1), "Player must walk forward on the starting terrace")
+assert(session.player_z > original_z, "Forward at zero yaw must increase z")
+local original_yaw = session.yaw
+assert(session:turn(1) and session.yaw > original_yaw, "Turning right must change the camera heading")
+assert(session:act("left") and session:act("back"), "Session actions must support navigation controls")
+
+local canvas = app._test.VoxelCanvas:new{ width = 210, height = 126, session = session }
+local paint_calls = 0
+canvas:paintTo({ paintRect = function() paint_calls = paint_calls + 1 end }, 17, 29)
+assert(paint_calls > 100, "Voxel renderer must draw a substantial projected block scene")
+canvas._origin_x, canvas._origin_y = 17, 29
+assert(canvas:refreshFast(), "The game canvas must support a direct fast refresh")
+assert(repaint_calls == 1 and #dirty_calls == 1, "Fast refresh must repaint exactly the arena")
+assert(dirty_calls[1].waveform == "fast", "Arena redraw must request KOReader's fast waveform")
+assert(dirty_calls[1].region.x == 17 and dirty_calls[1].region.y == 29 and dirty_calls[1].region.w == 210 and dirty_calls[1].region.h == 126, "Fast refresh region must match the canvas only")
+
+local pane = app.buildPane({}, {
+    dimen = { w = 600, h = 420 },
+    px = function(value) return value end,
+})
+assert(pane and pane.dimen.w == 600 and pane.dimen.h == 420, "Minecraft must build inside its assigned AppDock pane")
+local split_pane = app.buildPane({}, {
+    dimen = { w = 600, h = 350 },
+    px = function(value) return value end,
+})
+assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "Minecraft must also fit a compact split pane")
+
+local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
+assert(catalog:find("minecraft.lua | 1.0.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+print("Minecraft 3D DApp test: OK")

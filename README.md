@@ -144,6 +144,12 @@ Die DApp spielt ausschließlich lokale, vorab geditherte `.bwr`-Dateien ab, biet
 
 Die DApp bietet Touch-Schaltflächen sowie Pfeiltasten, wenn das Gerät sie bereitstellt. Auf Farb-E-Ink-Geräten kann die Blockdarstellung über **Color on/off** optional farbig oder kontrastreich monochrom dargestellt werden. Spielstand, Pause und die Farbwahl bleiben in der laufenden DApp-Instanz erhalten; Netzwerkzugriff und Hintergrunddienste werden nicht verwendet.
 
+## Minecraft 3D
+
+[`minecraft.lua`](minecraft.lua) ist eine lokale **3D-Voxelwelt aus quantisierten Blöcken**, die für E-Ink optimiert wurde. Die feste 24×24-Blocklandschaft enthält Höhenstufen, einzelne Säulen und einen kleinen Turm; sie wird nicht aus dem Netzwerk geladen und speichert keine persönlichen Daten. Die Kamera kann sich vorwärts und rückwärts bewegen sowie nach links und rechts drehen. Touch-Steuerung und, sofern bereitgestellt, Pfeiltasten/Select bedienen dieselben Bewegungen.
+
+Der Renderer projiziert die Voxelwelt in breiten Tiefenspalten statt für jeden Block ein vollständiges Mesh zu erstellen. Helle und mittlere Flächen entstehen aus einem expliziten Schwarzweiß-Dither, nahe Flächen bleiben schwarz; harte Oberkanten lassen die Höhenstufen als Blöcke lesbar. Nach jeder Bewegung zeichnet die DApp ausschließlich ihre lokale Arena neu und fordert über `UIManager:setDirty(..., "fast", region)` einen regionalen schnellen E-Ink-Refresh an. AppDock-Chrome, Schaltflächen und der übrige Bildschirm werden dabei nicht neu aufgebaut.
+
 ## Draw
 
 [`draw.lua`](draw.lua) ist ein mehrseitiges E-Ink-Skizzenbuch für AppDock. Es speichert Striche als bearbeitbare Vektorpunkte in einem eigenen lokalen `.draw.lua`-Format und kann gespeicherte Zeichnungen wieder laden. Jede Zeichnung besitzt mehrere Seiten mit den Hintergrundtypen **blank**, **lined**, **grid** oder einem optionalen Bildhintergrund über einen vom Nutzer eingegebenen PNG-, JPG-, GIF- oder WEBP-Pfad.
