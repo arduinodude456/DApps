@@ -18,7 +18,6 @@ local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
-local ImageWidget = require("ui/widget/imagewidget")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
@@ -59,6 +58,18 @@ local function scale(value)
     return Device.screen:scaleBySize(value)
 end
 
+local function isAndroidDevice()
+    return type(Device.isAndroid) == "function" and Device:isAndroid() == true
+end
+
+local function safeImageWidget(options)
+    if isAndroidDevice() then return nil end
+    local loaded, ImageWidget = pcall(require, "ui/widget/imagewidget")
+    if not loaded or not ImageWidget then return nil end
+    local ok, widget = pcall(function() return ImageWidget:new(options) end)
+    return ok and widget or nil
+end
+
 local function trim(value)
     if type(value) ~= "string" then return "" end
     return value:match("^%s*(.-)%s*$") or ""
@@ -77,6 +88,9 @@ end
 local function imageMimeForPath(path)
     local lower = tostring(path or ""):lower()
     if lower:match("%.png$") then return "image/png" end
+    if lower:match("%.jpg$") or lower:match("%.jpeg$") then return "image/jpeg" end
+    if lower:match("%.gif$") then return "image/gif" end
+    if lower:match("%.webp$") then return "image/webp" end
 end
 
 local function cloneMessage(raw)
@@ -105,11 +119,6 @@ local function cloneDirectMessage(raw)
     local created_at = trim(tostring(raw.createdAt or "")):sub(1, 48)
     local attachment_mime = trim(tostring(raw.attachmentMime or ""))
     local attachment_data = trim(tostring(raw.attachmentData or ""))
-    if attachment_data ~= "" and attachment_mime ~= "image/png" then
-        local unsupported_note = _("Image format temporarily unsupported; PNG only.")
-        body = body ~= "" and (safeText(body .. " [" .. unsupported_note .. "]", MAX_TEXT_BYTES) or body) or unsupported_note
-        attachment_mime, attachment_data = "", ""
-    end
     if not id:match("^%d+$") or not author_name or (body == "" and attachment_data == "") then return nil end
     return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")), readAt = trim(tostring(raw.readAt or "")), attachmentMime = attachment_mime, attachmentData = attachment_data }
 end
@@ -382,6 +391,10 @@ end
 
 local function stateFor(instance)
     instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
+    if isAndroidDevice() and type(instance.dchat.attachment_files) == "table" then
+        for _, path in pairs(instance.dchat.attachment_files) do pcall(os.remove, path) end
+        instance.dchat.attachment_files = {}
+    end
     return instance.dchat
 end
 
@@ -694,7 +707,7 @@ local function chooseImageAttachment(state, context)
         if not file then state.status = _("The image could not be opened."); refresh(context); return end
         local data = file:read(MAX_ATTACHMENT_BYTES + 1); file:close()
         local mime = imageMimeForPath(path)
-        if not mime then state.status = _("Only PNG images are temporarily supported."); refresh(context); return end
+        if not mime then state.status = _("Use a PNG, JPEG, GIF or WEBP image."); refresh(context); return end
         if not data or #data > MAX_ATTACHMENT_BYTES then state.status = _("Images are limited to 512 KB."); refresh(context); return end
         sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
     end
@@ -728,7 +741,7 @@ local function chooseImageAttachment(state, context)
     end
     local dialog
     dialog = InputDialog:new{
-        title = _("Attach image"), input = Device.home_dir and (Device.home_dir .. "/") or "/", input_hint = _("Full path to a PNG image (max. 512 KB)"),
+        title = _("Attach image"), input = Device.home_dir and (Device.home_dir .. "/") or "/", input_hint = _("Full path to PNG, JPEG, GIF or WEBP (max. 512 KB)"),
         buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Attach"), is_enter_default = true, callback = function()
             local path = dialog:getInputText()
             UIManager:close(dialog)
@@ -787,9 +800,14 @@ end
 local EmojiButton = InputContainer:extend{ width = nil, height = nil, image_file = nil, fallback = "?", callback = nil }
 function EmojiButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local image_file = io.open(self.image_file, "rb")
-    if image_file then image_file:close() end
-    local icon = image_file and ImageWidget:new{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } or emptySizedWidget(self.height - 4, self.height - 4)
+    local icon = emptySizedWidget(self.height - 4, self.height - 4)
+    if not isAndroidDevice() then
+        local image_file = io.open(self.image_file, "rb")
+        if image_file then
+            image_file:close()
+            icon = safeImageWidget{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } or icon
+        end
+    end
     local fallback = TextWidget:new{ text = self.fallback, face = Font:getFace("cfont", math.max(scale(8), math.floor(self.height * .24))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { 2, self.height - scale(14) } }
     self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, CenterContainer:new{ dimen = self.dimen, icon }, fallback } }
     self.ges_events = { TapDChatEmoji = { GestureRange:new{ ges = "tap", range = self.dimen } } }
@@ -915,7 +933,7 @@ local function dmPreview(text, maximum)
 end
 
 local function attachmentFilePath(state, message)
-    if not message or message.attachmentData == "" or message.attachmentMime ~= "image/png" then return nil end
+    if isAndroidDevice() or not message or message.attachmentData == "" then return nil end
     state.attachment_files = state.attachment_files or {}
     local cached = state.attachment_files[message.id]
     if cached then
@@ -925,7 +943,7 @@ local function attachmentFilePath(state, message)
     end
     local data = base64Decode(message.attachmentData)
     if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then return nil end
-    local extension = ({ ["image/png"] = ".png" })[message.attachmentMime]
+    local extension = ({ ["image/png"] = ".png", ["image/jpeg"] = ".jpg", ["image/gif"] = ".gif", ["image/webp"] = ".webp" })[message.attachmentMime]
     if not extension then return nil end
     local path = os.tmpname() .. extension
     local file = io.open(path, "wb")
@@ -934,11 +952,6 @@ local function attachmentFilePath(state, message)
     if not ok then pcall(function() file:close() end); os.remove(path); return nil end
     state.attachment_files[message.id] = path
     return path
-end
-
-local function safeImageWidget(options)
-    local ok, widget = pcall(function() return ImageWidget:new(options) end)
-    return ok and widget or nil
 end
 
 local DMBubble = InputContainer:extend{ width = nil, height = nil, image_file = nil, body = "", bubble_background = nil, callback = nil }
@@ -976,7 +989,8 @@ local function dmBubble(width, height, message, own, callback, state)
     local body = message.body
     local image_file = attachmentFilePath(state, message)
     if message.attachmentData ~= "" and not image_file then
-        body = (body ~= "" and body .. "\n" or "") .. _("Image attachment · tap to view")
+        local notice = isAndroidDevice() and _("Image attached; preview disabled on Android") or _("Image attachment unavailable · tap to view")
+        body = (body ~= "" and body .. "\n" or "") .. notice
     end
     if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
     return DMBubble:new{ width = bubble_width, height = height, image_file = image_file, body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
@@ -1046,7 +1060,10 @@ local function dmMessagePane(instance, context)
     local image_file = attachmentFilePath(state, message)
     local image_height = image_file and math.min(px(220), math.floor(height * .34)) or 0
     local image = image_file and safeImageWidget{ file = image_file, width = width - 2 * margin, height = image_height, scale_factor = 0, overlap_offset = { margin, margin + px(48) } }
-    if message.attachmentData ~= "" and not image then full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. _("[Image unavailable]") end
+    if message.attachmentData ~= "" and not image then
+        local notice = isAndroidDevice() and _("Image preview is disabled on Android.") or _("[Image unavailable]")
+        full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. notice
+    end
     if message.senderDeviceId == state.store.device_id then full_body = (message.readAt ~= "" and "✓✓ " or "✓ ") .. full_body end
     local body_y = margin + px(48) + (image and image_height or 0) + (image and gap or 0)
     local elements = {
@@ -1084,7 +1101,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.14",
+    version = "1.4.15",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
