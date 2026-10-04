@@ -677,8 +677,9 @@ function EmojiButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     local image_file = io.open(self.image_file, "rb")
     if image_file then image_file:close() end
-    local icon = image_file and ImageWidget:new{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } or TextWidget:new{ text = self.fallback, face = Font:getFace("cfont", math.max(scale(10), math.floor(self.height * .42))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true }
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, CenterContainer:new{ dimen = self.dimen, icon } }
+    local icon = image_file and ImageWidget:new{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } or emptySizedWidget(self.height - 4, self.height - 4)
+    local fallback = TextWidget:new{ text = self.fallback, face = Font:getFace("cfont", math.max(scale(8), math.floor(self.height * .24))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { 2, self.height - scale(14) } }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, CenterContainer:new{ dimen = self.dimen, icon }, fallback } }
     self.ges_events = { TapDChatEmoji = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function EmojiButton:paintTo(bb, x, y)
@@ -802,7 +803,7 @@ local function dmBubble(width, height, message, own, callback)
     local bubble_width = math.max(math.floor(width * 0.78), width - 40)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
-    return ActionButton:new{ width = bubble_width, height = height, title = "", body = dmPreview(message.body, 96), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    return ActionButton:new{ width = bubble_width, height = height, title = "", body = dmPreview(message.body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
@@ -891,7 +892,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.3.3",
+    version = "1.3.4",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
