@@ -1,0 +1,3 @@
+# DChat 1.4.12
+
+Der manuelle Refresh einer privaten Unterhaltung wartet jetzt 100 ms nach dem Touch-Callback, bevor der HTTPS-Abruf startet. Aufträge werden verworfen, wenn die Unterhaltung inzwischen verlassen wurde. Der redundante UI-Neuaufbau vor dem synchronen Abruf entfällt. Nur auf Android werden DM-Bildanhänge in der Gesprächsliste nicht automatisch als native Bild-Widgets dekodiert; ein Tap öffnet sie weiterhin in der Detailansicht. Kobo behält die bisherige Inline-Bildvorschau. So startet der Conversation-Refresh auf Android keinen Bilddecoder während eines nativen KOReader-Lifecycle-Übergangs.
