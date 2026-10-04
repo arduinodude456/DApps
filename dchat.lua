@@ -15,7 +15,6 @@ local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
-local FileChooser = require("ui/widget/filechooser")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
@@ -646,6 +645,8 @@ local function selectedMessage(state)
 end
 
 local function chooseImageAttachment(state, context)
+    local ok_chooser, FileChooser = pcall(require, "ui/widget/filechooser")
+    if not ok_chooser or not FileChooser then state.status = _("File selection is unavailable on this KOReader build."); refresh(context); return end
     local chooser
     chooser = FileChooser:new{ path = Device.home_dir, show_path = true, file_filter = function(filename)
         return filename:lower():match("%.(png|jpe?g|gif|webp)$") ~= nil
@@ -818,12 +819,14 @@ local function dmPane(instance, context)
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Search"), callback = function() promptRecipientSearch(state, context) end, overlap_offset = { margin + third + gap, px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Public"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), px(60) } }
     local y, end_y = px(112), height - margin - button_height - gap
-    if #state.store.recipients == 0 then
+    local recipients = state.store.recipients or {}
+    if #recipients == 0 then
         elements[#elements + 1] = TextBoxWidget:new{ text = _("No recipients cached. Tap Search or Refresh."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } }
     else
-        for index, recipient in ipairs(state.store.recipients) do
+        for index, recipient in ipairs(recipients) do
             if y + row_height > end_y then break end
-            local unread = recipient.unreadCount > 0 and (" · " .. tostring(recipient.unreadCount) .. " unread") or ""
+            local unread_count = tonumber(recipient.unreadCount) or 0
+            local unread = unread_count > 0 and (" · " .. tostring(unread_count) .. " unread") or ""
             elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. unread .. " · " .. recipient.deviceId, callback = function() state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
             y = y + row_height + gap
         end
@@ -938,7 +941,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.0",
+    version = "1.4.1",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
