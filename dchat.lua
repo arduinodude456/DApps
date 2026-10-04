@@ -29,13 +29,6 @@ local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
 
-local IS_ANDROID = false
-local ok_version, Version = pcall(require, "version")
-if ok_version and Version and type(Version.getCurrentPlatform) == "function" then
-    local platform_ok, platform = pcall(Version.getCurrentPlatform, Version)
-    IS_ANDROID = platform_ok and type(platform) == "string" and platform:sub(1, 7) == "android"
-end
-
 local SETTINGS_KEY = "appdock_dchat_v1"
 local LEGACY_ENDPOINT = "https://appdock-bd7bcrzm.manus.space"
 local DEFAULT_ENDPOINT = LEGACY_ENDPOINT
@@ -594,6 +587,12 @@ local function fetchRecipients(state, context, query)
     refresh(context)
 end
 
+local function deferConversationRefresh(state, context)
+    UIManager:tickAfterNext(function()
+        if state.view == "dm_conversation" then refresh(context) end
+    end)
+end
+
 local function fetchConversation(state, context)
     if state.loading or state.store.selected_recipient_id == "" then return end
     state.loading = true
@@ -606,7 +605,7 @@ local function fetchConversation(state, context)
     state.loading = false
     if not response or type(response.conversation) ~= "table" then
         state.status = err == RESPONSE_TOO_LARGE and _("This chat contains very large attachments. The latest messages could not be loaded; saved messages remain on this reader.") or (err or _("Private conversation could not be loaded."))
-        refresh(context)
+        deferConversationRefresh(state, context)
         return
     end
     state.store.selected_recipient_name = safeText(response.conversation.displayName, MAX_NAME_BYTES) or state.store.selected_recipient_name
@@ -614,7 +613,7 @@ local function fetchConversation(state, context)
     state.dm_page = math.max(1, math.ceil(#state.store.dm_messages / MAX_VISIBLE_PER_PAGE))
     saveStore(state.store)
     state.status = #state.store.dm_messages == 0 and _("No private messages yet.") or _("Private conversation refreshed.")
-    refresh(context)
+    deferConversationRefresh(state, context)
 end
 
 local function deleteConversation(state, context)
@@ -973,7 +972,7 @@ local function dmBubble(width, height, message, own, callback, state)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
     local body = message.body
-    local image_file = not IS_ANDROID and attachmentFilePath(state, message) or nil
+    local image_file = attachmentFilePath(state, message)
     if message.attachmentData ~= "" and not image_file then
         body = (body ~= "" and body .. "\n" or "") .. _("Image attachment · tap to view")
     end
@@ -1083,7 +1082,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.12",
+    version = "1.4.13",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -1098,5 +1097,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
