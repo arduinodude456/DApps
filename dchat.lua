@@ -29,7 +29,7 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
 
 local SETTINGS_KEY = "appdock_dchat_v1"
-local DEFAULT_ENDPOINT = "https://appdock-bd7bcrzm.manus.space"
+local DEFAULT_ENDPOINT = "https://dchatdm-qkwwnvdq.manus.space"
 local MAX_ENDPOINT_BYTES = 240
 local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
