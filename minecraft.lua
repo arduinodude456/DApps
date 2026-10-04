@@ -952,7 +952,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.8.0",
+    version = "2.8.1",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
