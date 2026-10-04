@@ -19,7 +19,7 @@ local function install(name, value) package.preload[name] = function() return va
 local Widget = class()
 local Input = class()
 function Input:paintTo() end
-install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5 })
+install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7 })
 install("ui/widget/container/centercontainer", Widget)
 install("ui/widget/confirmbox", Widget)
 install("device", { screen = { scaleBySize = function(_, value) return value end } })
