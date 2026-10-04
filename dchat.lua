@@ -49,6 +49,7 @@ local CHAT_LIGHT_GREEN = Blitbuffer.COLOR_LIGHT_GREEN or Blitbuffer.COLOR_LIGHT_
 local CHAT_BACKGROUND = Blitbuffer.COLOR_LIGHT_GRAY
 local DM_EMOJIS = { "😀", "😂", "😍", "👍", "❤️" }
 local DM_EMOJI_FILES = { "smile.png", "laugh.png", "heart.png", "thumbs.png", "surprise.png" }
+local DM_EMOJI_LABELS = { ":)", "XD", "<3", "+1", "!!" }
 local DCHAT_SOURCE_DIR = (debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "")
 
 local function scale(value)
@@ -671,10 +672,13 @@ function ActionButton:onTapDChatAction()
     return true
 end
 
-local EmojiButton = InputContainer:extend{ width = nil, height = nil, image_file = nil, callback = nil }
+local EmojiButton = InputContainer:extend{ width = nil, height = nil, image_file = nil, fallback = "?", callback = nil }
 function EmojiButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, CenterContainer:new{ dimen = self.dimen, ImageWidget:new{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } } }
+    local image_file = io.open(self.image_file, "rb")
+    if image_file then image_file:close() end
+    local icon = image_file and ImageWidget:new{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } or TextWidget:new{ text = self.fallback, face = Font:getFace("cfont", math.max(scale(10), math.floor(self.height * .42))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, CenterContainer:new{ dimen = self.dimen, icon } }
     self.ges_events = { TapDChatEmoji = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function EmojiButton:paintTo(bb, x, y)
@@ -823,7 +827,7 @@ local function dmConversationPane(instance, context)
     elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function() fetchConversation(state, context) end, overlap_offset = { margin, px(60) + button_height + gap } }
     for index, emoji in ipairs(DM_EMOJIS) do
         local emoji_file = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. DM_EMOJI_FILES[index]
-        elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, callback = function() promptDirectMessage(state, context, emoji) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
+        elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, fallback = DM_EMOJI_LABELS[index], callback = function() promptDirectMessage(state, context, emoji) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
     end
     local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
     state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
@@ -887,7 +891,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.3.2",
+    version = "1.3.3",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
