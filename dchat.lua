@@ -872,7 +872,9 @@ local function attachmentFilePath(state, message)
     end
     local data = base64Decode(message.attachmentData)
     if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then return nil end
-    local path = os.tmpname()
+    local extension = ({ ["image/png"] = ".png", ["image/jpeg"] = ".jpg", ["image/gif"] = ".gif", ["image/webp"] = ".webp" })[message.attachmentMime]
+    if not extension then return nil end
+    local path = os.tmpname() .. extension
     local file = io.open(path, "wb")
     if not file then return nil end
     local ok = pcall(function() file:write(data); file:close() end)
@@ -1017,7 +1019,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.4",
+    version = "1.4.5",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
