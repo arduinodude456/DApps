@@ -23,8 +23,8 @@ local _ = require("gettext")
 
 local Screen = Device.screen
 local TAU = math.pi * 2
-local WORLD_SIZE = 24
-local MAX_VIEW_DISTANCE = 14
+local WORLD_SIZE = 32
+local MAX_VIEW_DISTANCE = 20
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -45,24 +45,34 @@ end
 -- A fixed seed keeps the landscape exactly the same across refreshes, which is
 -- important on E-Ink: only camera motion may change a game frame.
 local function buildWorld()
-    local world = { size = WORLD_SIZE, heights = {} }
+    local world = { size = WORLD_SIZE, heights = {}, materials = {} }
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1] = {}
+        world.materials[z + 1] = {}
         for x = 0, WORLD_SIZE - 1 do
             -- Keep the floor low and discrete. The previous wave terrain made
             -- every ray hit a continuous gray wall, hiding the fact that this
             -- is a block game. Raised columns are deliberately sparse so that
             -- each projected cube keeps a visible seam.
             local height = 1
-            if (x * 13 + z * 7) % 17 == 0 then height = 2 end
-            if (x * 5 + z * 11) % 31 == 0 then height = 3 end
+            local material = "grass"
+            if z > 12 and z < 23 and x > 1 and x < 8 then
+                height, material = 1, "water"
+            elseif (x * 13 + z * 7) % 17 == 0 then
+                height, material = 2, "grass"
+            elseif (x * 5 + z * 11) % 31 == 0 then
+                height, material = 3, "stone"
+            elseif z > 18 and (x + z) % 5 == 0 then
+                height, material = 2, "dirt"
+            end
             if x >= 9 and x <= 13 and z >= 4 and z <= 7 then height = 1 end
-            -- A recognizable stepped tower sits deeper in the starting view.
-            if x == 17 and z == 16 then height = 4 end
-            if x == 18 and z == 16 then height = 3 end
-            if x == 17 and z == 17 then height = 5 end
-            if x == 18 and z == 17 then height = 4 end
+            local tree = (x == 15 and z == 11) or (x == 23 and z == 15) or (x == 7 and z == 24)
+            local canopy = ((x == 14 or x == 16) and z == 11) or (x == 15 and (z == 10 or z == 12))
+                or ((x == 22 or x == 24) and z == 15) or (x == 23 and (z == 14 or z == 16))
+            if tree then height, material = 4, "wood"
+            elseif canopy then height, material = 5, "leaves" end
             world.heights[z + 1][x + 1] = clamp(height, 1, 8)
+            world.materials[z + 1][x + 1] = material
         end
     end
     return world
@@ -71,6 +81,11 @@ end
 local function heightAt(world, x, z)
     if x < 0 or z < 0 or x >= world.size or z >= world.size then return 0 end
     return world.heights[z + 1][x + 1] or 0
+end
+
+local function materialAt(world, x, z)
+    if x < 0 or z < 0 or x >= world.size or z >= world.size then return "stone" end
+    return (world.materials[z + 1] and world.materials[z + 1][x + 1]) or "grass"
 end
 
 local VoxelSession = {}
@@ -237,11 +252,22 @@ function VoxelCanvas:_fillPolygon(bb, points, tone, phase, texture)
             local left = math.floor(intersections[index])
             local right = math.ceil(intersections[index + 1])
             if right > left then
-                local base = tone >= 3 and Blitbuffer.COLOR_BLACK or (tone == 2 and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_LIGHT_GRAY)
-                bb:paintRect(left, row, right - left, 1, base)
+                -- Avoid gray washes: true black/white is slower to ghost and
+                -- survives a fast waveform much better than gray fills.
+                bb:paintRect(left, row, right - left, 1, Blitbuffer.COLOR_WHITE)
                 -- Texture is intentionally procedural: no bitmap assets are
                 -- needed, and the pattern remains crisp on one-bit E-Ink.
-                if texture == "top" then
+                if texture == "water" then
+                    if (row + phase) % 5 == 0 then bb:paintRect(left, row, right - left, 1, Blitbuffer.COLOR_BLACK) end
+                elseif texture == "leaves" then
+                    for pixel = left + ((row + phase) % 5), right - 1, 7 do
+                        bb:paintRect(pixel, row, 2, 1, Blitbuffer.COLOR_BLACK)
+                    end
+                elseif texture == "wood" then
+                    for pixel = left + (phase % 6), right - 1, 8 do
+                        bb:paintRect(pixel, row, 1, 1, Blitbuffer.COLOR_BLACK)
+                    end
+                elseif texture == "top" then
                     local offset = (row + phase) % 6
                     for pixel = left + offset, right - 1, 6 do
                         bb:paintRect(pixel, row, math.min(2, right - pixel), 1, Blitbuffer.COLOR_BLACK)
@@ -271,16 +297,16 @@ function VoxelCanvas:_line(bb, first, second, ink)
     end
 end
 
-function VoxelCanvas:_drawVoxel(bb, points, top_tone, side_tone, phase)
+function VoxelCanvas:_drawVoxel(bb, points, top_tone, side_tone, phase, material)
     -- A voxel is closed on all six sides. Hidden faces are painted first so
     -- the visible side faces and the cap remain on top in the painter pass.
-    self:_fillPolygon(bb, points.bottom, math.max(1, side_tone - 1), phase + 5, "side")
-    self:_fillPolygon(bb, points.back, math.max(1, side_tone - 1), phase + 4, "side")
-    self:_fillPolygon(bb, points.side_c, math.max(1, side_tone - 1), phase + 3, "side")
-    self:_fillPolygon(bb, points.side_d, side_tone, phase + 2, "side")
-    self:_fillPolygon(bb, points.side_a, side_tone, phase + 1, "side")
-    self:_fillPolygon(bb, points.side_b, math.max(1, side_tone - 1), phase + 2, "side")
-    self:_fillPolygon(bb, points.top, top_tone, phase, "top")
+    self:_fillPolygon(bb, points.bottom, math.max(1, side_tone - 1), phase + 5, material)
+    self:_fillPolygon(bb, points.back, math.max(1, side_tone - 1), phase + 4, material)
+    self:_fillPolygon(bb, points.side_c, math.max(1, side_tone - 1), phase + 3, material)
+    self:_fillPolygon(bb, points.side_d, side_tone, phase + 2, material)
+    self:_fillPolygon(bb, points.side_a, side_tone, phase + 1, material)
+    self:_fillPolygon(bb, points.side_b, math.max(1, side_tone - 1), phase + 2, material)
+    self:_fillPolygon(bb, points.top, top_tone, phase, material == "water" and "water" or (material == "leaves" and "leaves" or "top"))
     for _, edge in ipairs({ points.top, points.side_a, points.side_b, points.side_c, points.side_d, points.back, points.bottom }) do
         for index = 1, #edge do self:_line(bb, edge[index], edge[index % #edge + 1], Blitbuffer.COLOR_BLACK) end
     end
@@ -293,7 +319,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
     if not session then return end
 
     local horizon = math.floor(height * 0.40)
-    local focal = math.max(width * 0.88, height * 1.20)
+    -- A shorter focal length widens the view: more terrain and tree silhouettes
+    -- fit into the same narrow e-Ink pane.
+    local focal = math.max(width * 0.68, height * 0.92)
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT
     local sky_bottom = y + horizon
     bb:paintRect(x, sky_bottom, width, 1, Blitbuffer.COLOR_BLACK)
@@ -351,7 +379,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
                     if block_height > 0 and cube_size >= 3 and max_x > x and min_x < right and max_y > sky_bottom and min_y < y + height then
                         local tone = depth < 3 and 3 or (depth < 7 and 2 or 1)
                         local side_tone = ((world_x + world_z) % 2 == 0) and math.max(1, tone - 1) or tone
-                        self:_drawVoxel(bb, points, tone, side_tone, world_x * 3 + world_z)
+                        self:_drawVoxel(bb, points, tone, side_tone, world_x * 3 + world_z, materialAt(session.world, world_x, world_z))
                     end
                 end
             end
@@ -373,8 +401,13 @@ end
 
 function VoxelCanvas:refreshFast()
     if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
+    self._refresh_count = (self._refresh_count or 0) + 1
     UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
-    UIManager:setDirty(nil, "fast", Geom:new{
+    -- Fast waveforms are intentionally used for motion, but they accumulate
+    -- ghosting on E-Ink. Every second step gets a clean UI waveform for the
+    -- same local region; it is still not a fullscreen refresh.
+    local waveform = self._refresh_count % 2 == 0 and "ui" or "fast"
+    UIManager:setDirty(nil, waveform, Geom:new{
         x = self._origin_x,
         y = self._origin_y,
         w = self.width,
@@ -474,7 +507,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.5.0",
+    version = "1.6.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
