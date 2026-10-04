@@ -31,8 +31,8 @@ local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
 -- High detail budget for the renderer; compact panes still clamp this to
 -- their actual canvas dimensions below.
-local RENDER_COLS = 240
-local RENDER_ROWS = 240
+local RENDER_COLS = 480
+local RENDER_ROWS = 480
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
     red = { 220, 45, 45 },
