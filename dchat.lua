@@ -1,8 +1,8 @@
 --[[--
 DChat for AppDock.
 
-One public, text-only room. This DApp deliberately has no private messages,
-no end-to-end encryption claim, and no account recovery. Its optional
+A public, text-only room plus server-side private device-to-device messages.
+DChat makes no end-to-end encryption claim and has no account recovery. Its optional
 background check is disabled by default and only runs through AppDock's
 explicit background-notification permission.
 The reader keeps a local opaque device secret; the server only receives it in
@@ -37,6 +37,7 @@ local MAX_NOTE_BYTES = 840
 local MAX_RESPONSE_BYTES = 96 * 1024
 local MAX_CACHE_MESSAGES = 60
 local MAX_VISIBLE_PER_PAGE = 5
+local MAX_RECIPIENTS = 30
 local CONNECT_TIMEOUT = 10
 local REQUEST_MAX_TIME = 25
 local BACKGROUND_CHECK_SECONDS = 15 * 60
@@ -70,14 +71,48 @@ local function cloneMessage(raw)
     return { id = id, authorName = author_name, body = body, createdAt = created_at }
 end
 
+local function cloneRecipient(raw)
+    if type(raw) ~= "table" then return nil end
+    local device_id = trim(raw.deviceId):sub(1, 64)
+    local display_name = safeText(raw.displayName, MAX_NAME_BYTES)
+    if not device_id:match("^dch_[%w_%-]+$") or not display_name then return nil end
+    return { deviceId = device_id, displayName = display_name }
+end
+
+local function cloneDirectMessage(raw)
+    if type(raw) ~= "table" then return nil end
+    local id = trim(raw.id)
+    local author_name = safeText(raw.authorName, MAX_NAME_BYTES)
+    local body = safeText(raw.body, MAX_TEXT_BYTES)
+    local created_at = trim(raw.createdAt):sub(1, 48)
+    if not id:match("^%d+$") or not author_name or not body then return nil end
+    return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(raw.senderDeviceId) }
+end
+
 local function cloneStore(raw)
     raw = type(raw) == "table" and raw or {}
     local messages, seen = {}, {}
+    local recipients, recipient_seen = {}, {}
+    local dm_messages, dm_seen = {}, {}
     for index, raw_message in ipairs(type(raw.messages) == "table" and raw.messages or {}) do
         local message = cloneMessage(raw_message)
         if message and not seen[message.id] and #messages < MAX_CACHE_MESSAGES then
             seen[message.id] = true
             messages[#messages + 1] = message
+        end
+    end
+    for index, raw_recipient in ipairs(type(raw.recipients) == "table" and raw.recipients or {}) do
+        local recipient = cloneRecipient(raw_recipient)
+        if recipient and not recipient_seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
+            recipient_seen[recipient.deviceId] = true
+            recipients[#recipients + 1] = recipient
+        end
+    end
+    for index, raw_dm_message in ipairs(type(raw.dm_messages) == "table" and raw.dm_messages or {}) do
+        local message = cloneDirectMessage(raw_dm_message)
+        if message and not dm_seen[message.id] and #dm_messages < MAX_CACHE_MESSAGES then
+            dm_seen[message.id] = true
+            dm_messages[#dm_messages + 1] = message
         end
     end
     return {
@@ -86,6 +121,10 @@ local function cloneStore(raw)
         device_secret = trim(raw.device_secret):sub(1, 128),
         display_name = safeText(raw.display_name, MAX_NAME_BYTES) or "",
         messages = messages,
+        recipients = recipients,
+        dm_messages = dm_messages,
+        selected_recipient_id = trim(raw.selected_recipient_id):match("^dch_[%w_%-]+$") and trim(raw.selected_recipient_id) or "",
+        selected_recipient_name = safeText(raw.selected_recipient_name, MAX_NAME_BYTES) or "",
         last_refresh = tonumber(raw.last_refresh) or 0,
         last_background_check = math.max(0, math.floor(tonumber(raw.last_background_check) or 0)),
         last_seen_message_id = trim(raw.last_seen_message_id):match("^%d+$") and trim(raw.last_seen_message_id) or "",
@@ -212,6 +251,34 @@ local function replaceMessages(store, raw_messages)
     end
     store.messages = messages
     store.last_refresh = os.time()
+end
+
+local function replaceRecipients(store, raw_recipients)
+    local recipients, seen = {}, {}
+    for _, raw_recipient in ipairs(type(raw_recipients) == "table" and raw_recipients or {}) do
+        local recipient = cloneRecipient(raw_recipient)
+        if recipient and not seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
+            seen[recipient.deviceId] = true
+            recipients[#recipients + 1] = recipient
+        end
+    end
+    store.recipients = recipients
+end
+
+local function replaceDirectMessages(store, raw_messages)
+    local messages, seen = {}, {}
+    for _, raw_message in ipairs(type(raw_messages) == "table" and raw_messages or {}) do
+        local message = cloneDirectMessage(raw_message)
+        if message and not seen[message.id] and #messages < MAX_CACHE_MESSAGES then
+            seen[message.id] = true
+            messages[#messages + 1] = message
+        end
+    end
+    store.dm_messages = messages
+end
+
+local function urlEncode(value)
+    return tostring(value):gsub("([^%w%-_%.~])", function(character) return string.format("%%%02X", string.byte(character)) end)
 end
 
 local function newestMessageId(messages)
@@ -396,6 +463,91 @@ local function promptMessage(state, context)
     dialog:onShowKeyboard()
 end
 
+local function selectedRecipient(state)
+    for _, recipient in ipairs(state.store.recipients or {}) do
+        if recipient.deviceId == state.store.selected_recipient_id then return recipient end
+    end
+end
+
+local function fetchRecipients(state, context, query)
+    if state.loading then return end
+    state.loading = true
+    state.status = _("Searching DChat recipients…")
+    refresh(context)
+    local clean_query = trim(query or "")
+    if #clean_query > MAX_NAME_BYTES then clean_query = clean_query:sub(1, MAX_NAME_BYTES) end
+    local suffix = "/recipients?limit=" .. tostring(MAX_RECIPIENTS)
+    if clean_query ~= "" then suffix = suffix .. "&q=" .. urlEncode(clean_query) end
+    local response, code, err = httpJson(state.store, "GET", suffix, nil, true)
+    state.loading = false
+    if not response or type(response.recipients) ~= "table" then
+        state.status = err or _("Recipient search failed.")
+        refresh(context)
+        return
+    end
+    replaceRecipients(state.store, response.recipients)
+    saveStore(state.store)
+    state.status = #state.store.recipients == 0 and _("No recipients found.") or _("Recipients refreshed manually.")
+    refresh(context)
+end
+
+local function fetchConversation(state, context)
+    if state.loading or state.store.selected_recipient_id == "" then return end
+    state.loading = true
+    state.status = _("Refreshing private conversation…")
+    refresh(context)
+    local response, code, err = httpJson(state.store, "GET", "/dms/" .. urlEncode(state.store.selected_recipient_id) .. "?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, true)
+    state.loading = false
+    if not response or type(response.conversation) ~= "table" then
+        state.status = err or _("Private conversation could not be loaded.")
+        refresh(context)
+        return
+    end
+    state.store.selected_recipient_name = safeText(response.conversation.displayName, MAX_NAME_BYTES) or state.store.selected_recipient_name
+    replaceDirectMessages(state.store, response.conversation.messages)
+    saveStore(state.store)
+    state.status = #state.store.dm_messages == 0 and _("No private messages yet.") or _("Private conversation refreshed.")
+    refresh(context)
+end
+
+local function openPrivateChats(state, context)
+    if not hasIdentity(state.store) then state.status = _("Create a local identity before opening private chats."); refresh(context); return end
+    state.view = "dm"
+    fetchRecipients(state, context, "")
+end
+
+local function promptRecipientSearch(state, context)
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Find recipient"), input = "", input_hint = _("Display name or device ID"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Search"), is_enter_default = true, callback = function() local query = dialog:getInputText(); UIManager:close(dialog); fetchRecipients(state, context, query) end } } },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+local function sendDirectMessage(state, context, text)
+    local recipient = selectedRecipient(state)
+    local message = safeText(text, MAX_TEXT_BYTES)
+    if not recipient or not message then state.status = _("Choose a recipient and use plain text up to 1500 characters."); refresh(context); return end
+    local response, code, err = httpJson(state.store, "POST", "/dms", { recipientDeviceId = recipient.deviceId, text = message }, true)
+    if not response then state.status = err or _("Private message could not be sent."); refresh(context); return end
+    state.status = _("Private message sent. It is stored server-side and is not end-to-end encrypted.")
+    fetchConversation(state, context)
+end
+
+local function promptDirectMessage(state, context)
+    if not hasIdentity(state.store) then state.status = _("Create a local identity before sending a private message."); refresh(context); return end
+    if not selectedRecipient(state) then state.status = _("Choose a recipient first."); refresh(context); return end
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Send private message"), input = "", input_hint = _("Plain text, up to 1500 characters"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text) end } } },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
 local function selectedMessage(state)
     for index, message in ipairs(state.store.messages) do if message.id == state.selected_id then return message end end
 end
@@ -461,10 +613,10 @@ local function timelinePane(instance, context)
     local elements = {
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
         TextWidget:new{ text = _("AppDock Lounge"), face = Font:getFace("cfont", px(21)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { margin, margin } },
-        TextWidget:new{ text = _("Public text room · no private messages · no encryption · optional background alerts"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(28) } },
+        TextWidget:new{ text = _("Public text room · private chats are server-stored, not end-to-end encrypted"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(28) } },
         ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchMessages(state, context) end, overlap_offset = { margin, margin + px(62) } },
         ActionButton:new{ width = third, height = button_height, title = _("Send"), callback = function() promptMessage(state, context) end, overlap_offset = { margin + third + gap, margin + px(62) } },
-        ActionButton:new{ width = third, height = button_height, title = _("Settings"), callback = function() state.view = "settings"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(62) } },
+        ActionButton:new{ width = third, height = button_height, title = _("DMs"), callback = function() openPrivateChats(state, context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(62) } },
     }
     local y = content_y
     if #state.store.messages == 0 then
@@ -479,6 +631,7 @@ local function timelinePane(instance, context)
         end
     end
     local half = math.floor((width - 2 * margin - gap) / 2)
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Settings"), callback = function() state.view = "settings"; refresh(context) end, overlap_offset = { margin, math.max(content_y, height - margin - 2 * button_height - gap) } }
     elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Newer"), callback = function() state.page = math.max(1, state.page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
     elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Older ›") .. " " .. state.page .. "/" .. total_pages, callback = function() state.page = math.min(total_pages, state.page + 1); refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
     elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, math.max(content_y, height - margin - button_height - px(20)) } }
@@ -498,7 +651,7 @@ local function settingsPane(instance, context)
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
         TextWidget:new{ text = _("DChat settings"), face = Font:getFace("cfont", px(20)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { margin, margin } },
-        TextBoxWidget:new{ text = _("DChat is a public room. Do not share sensitive data. It does not provide private messages, end-to-end encryption, real-time delivery, account recovery or identity transfer."), face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = px(67), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + px(31) } },
+        TextBoxWidget:new{ text = _("DChat has a public room and server-stored private chats. Private messages are not end-to-end encrypted. Do not share sensitive data. There is no account recovery or identity transfer."), face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = px(67), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + px(31) } },
         TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(108) } },
         TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(126) } },
         TextWidget:new{ text = background_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(143) } },
@@ -507,6 +660,63 @@ local function settingsPane(instance, context)
         ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(24) } },
     }
+end
+
+local function dmPane(instance, context)
+    local state = stateFor(instance)
+    local width, height = context.dimen.w, context.dimen.h
+    local px = context.px or scale
+    local margin, gap = math.max(px(8), math.floor(width / 70)), math.max(px(5), math.floor(width / 130))
+    local button_height, row_height = math.max(px(32), math.floor(height / 16)), math.max(px(42), math.floor(height / 9))
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
+        TextWidget:new{ text = _("Private chats"), face = Font:getFace("cfont", px(21)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = _("Server-stored · not end-to-end encrypted"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(28) } },
+    }
+    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
+    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchRecipients(state, context, "") end, overlap_offset = { margin, margin + px(62) } }
+    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Search"), callback = function() promptRecipientSearch(state, context) end, overlap_offset = { margin + third + gap, margin + px(62) } }
+    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Public"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(62) } }
+    local y, end_y = margin + px(106), height - margin - button_height - gap
+    if #state.store.recipients == 0 then
+        elements[#elements + 1] = TextBoxWidget:new{ text = _("No recipients cached. Tap Search or Refresh."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } }
+    else
+        for index, recipient in ipairs(state.store.recipients) do
+            if y + row_height > end_y then break end
+            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. " · " .. recipient.deviceId, callback = function() state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
+            y = y + row_height + gap
+        end
+    end
+    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
+    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
+end
+
+local function dmConversationPane(instance, context)
+    local state = stateFor(instance)
+    local recipient = selectedRecipient(state)
+    if not recipient then state.view = "dm"; return dmPane(instance, context) end
+    local width, height = context.dimen.w, context.dimen.h
+    local px = context.px or scale
+    local margin, gap = math.max(px(8), math.floor(width / 70)), math.max(px(5), math.floor(width / 130))
+    local button_height, row_height = math.max(px(32), math.floor(height / 16)), math.max(px(42), math.floor(height / 9))
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
+        TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(20)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = _("Private · stored server-side · no end-to-end encryption"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(27) } },
+    }
+    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
+    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchConversation(state, context) end, overlap_offset = { margin, margin + px(61) } }
+    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Send"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + third + gap, margin + px(61) } }
+    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(61) } }
+    local y, end_y = margin + px(104), height - margin - button_height - gap
+    for _, message in ipairs(state.store.dm_messages or {}) do
+        if y + row_height > end_y then break end
+        elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = message.authorName .. ": " .. message.body, callback = function() end, overlap_offset = { margin, y } }
+        y = y + row_height + gap
+    end
+    if #state.store.dm_messages == 0 then elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } } end
+    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
+    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
 local function messagePane(instance, context)
@@ -530,17 +740,19 @@ end
 
 return {
     id = "dchat",
-    version = "1.1.1",
+    version = "1.2.0",
     title = "DChat",
-    subtitle = "Public AppDock Lounge, optional 15-minute alerts",
+    subtitle = "Public Lounge and private device chats",
     symbol = "D",
     logo = "rss",
     buildPane = function(instance, context)
         local state = stateFor(instance)
         if state.view == "settings" then return settingsPane(instance, context) end
+        if state.view == "dm" then return dmPane(instance, context) end
+        if state.view == "dm_conversation" then return dmConversationPane(instance, context) end
         if state.view == "message" then return messagePane(instance, context) end
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
