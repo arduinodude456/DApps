@@ -31,8 +31,8 @@ local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
 -- High detail budget for the renderer; compact panes still clamp this to
 -- their actual canvas dimensions below.
-local RENDER_COLS = 480
-local RENDER_ROWS = 480
+local RENDER_COLS = 800
+local RENDER_ROWS = 800
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
     red = { 220, 45, 45 },
@@ -952,7 +952,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.8.1",
+    version = "2.8.2",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
