@@ -470,6 +470,7 @@ function VoxelCanvas:onTapMinecraftExplore(gesture)
 end
 
 function VoxelCanvas:onSwipeMinecraftLook(_, gesture)
+    if not self.session then return false end
     local direction = gesture and gesture.direction
     if direction == "west" then
         self.session:turn(-3)
@@ -497,13 +498,14 @@ function Joystick:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.ges_events = {
         TapMinecraftJoystick = { GestureRange:new{ ges = "tap", range = self.dimen } },
-        PanMinecraftJoystick = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } },
-        PanMinecraftJoystickRelease = { GestureRange:new{ ges = "pan_release", range = self.dimen } },
+        SwipeMinecraftJoystick = { GestureRange:new{ ges = "swipe", range = self.dimen } },
     }
 end
 
 function Joystick:paintTo(bb, x, y)
     self._origin_x, self._origin_y = x, y
+    local range = self.ges_events.TapMinecraftJoystick[1].range
+    range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
     local size = math.min(self.width, self.height)
     bb:paintRect(x + 1, y + 1, size - 2, size - 2, Blitbuffer.COLOR_WHITE)
     bb:paintRect(x, y, size, 1, Blitbuffer.COLOR_BLACK)
@@ -518,8 +520,8 @@ end
 function Joystick:_steer(gesture)
     local pos = gesture and gesture.pos
     if not pos or not self.canvas then return true end
-    local dx = pos.x - (self._origin_x + self.width / 2)
-    local dy = pos.y - (self._origin_y + self.height / 2)
+    local dx = (pos.x or self._origin_x) - (self._origin_x + self.width / 2)
+    local dy = (pos.y or self._origin_y) - (self._origin_y + self.height / 2)
     if math.abs(dx) > math.abs(dy) then
         self.canvas:act(dx < 0 and "left" or "right")
     elseif math.abs(dy) > self.height * 0.15 then
@@ -528,9 +530,17 @@ function Joystick:_steer(gesture)
     return true
 end
 
-function Joystick:onTapMinecraftJoystick(_, gesture) return self:_steer(gesture) end
-function Joystick:onPanMinecraftJoystick(_, gesture) return self:_steer(gesture) end
-function Joystick:onPanMinecraftJoystickRelease() return true end
+function Joystick:onTapMinecraftJoystick(gesture) return self:_steer(gesture) end
+function Joystick:onSwipeMinecraftJoystick(_, gesture)
+    if not self.canvas then return false end
+    local direction = gesture and gesture.direction
+    if direction == "west" then self.canvas:act("left")
+    elseif direction == "east" then self.canvas:act("right")
+    elseif direction == "north" then self.canvas:act("forward")
+    elseif direction == "south" then self.canvas:act("back")
+    else return false end
+    return true
+end
 
 local NavButton = InputContainer:extend{
     title = "",
@@ -596,7 +606,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.7.0",
+    version = "1.7.1",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
