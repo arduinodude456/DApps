@@ -117,9 +117,12 @@ local function cloneStore(raw)
         end
     end
     local saved_endpoint = trim(raw.endpoint):gsub("/+$", "")
-    if saved_endpoint == "" or saved_endpoint == LEGACY_ENDPOINT then saved_endpoint = DEFAULT_ENDPOINT end
+    if saved_endpoint == "" then saved_endpoint = DEFAULT_ENDPOINT end
+    local saved_dm_endpoint = trim(raw.dm_endpoint):gsub("/+$", "")
+    if saved_dm_endpoint == "" or saved_dm_endpoint == LEGACY_ENDPOINT then saved_dm_endpoint = DEFAULT_ENDPOINT end
     return {
         endpoint = saved_endpoint:gsub("/+$", ""):sub(1, MAX_ENDPOINT_BYTES),
+        dm_endpoint = saved_dm_endpoint:sub(1, MAX_ENDPOINT_BYTES),
         device_id = trim(raw.device_id):sub(1, 52),
         device_secret = trim(raw.device_secret):sub(1, 128),
         display_name = safeText(raw.display_name, MAX_NAME_BYTES) or "",
@@ -174,14 +177,14 @@ local function newIdentity()
     return "dch_" .. public_part, secret_part
 end
 
-local function apiUrl(store, suffix)
-    local endpoint, err = validEndpoint(store.endpoint)
+local function apiUrl(store, suffix, endpoint_override)
+    local endpoint, err = validEndpoint(endpoint_override or store.endpoint)
     if not endpoint then return nil, err end
     return endpoint .. "/api/dchat/v1" .. suffix
 end
 
-local function httpJson(store, method, suffix, payload, include_identity)
-    local url, url_err = apiUrl(store, suffix)
+local function httpJson(store, method, suffix, payload, include_identity, endpoint_override)
+    local url, url_err = apiUrl(store, suffix, endpoint_override)
     if not url then return nil, nil, url_err end
     local ok_https, https = pcall(require, "ssl.https")
     local ok_socket, socket = pcall(require, "socket")
@@ -345,6 +348,24 @@ local function setEndpoint(state, context)
     dialog:onShowKeyboard()
 end
 
+local function setDMEndpoint(state, context)
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Private DM service"), input = state.store.dm_endpoint, input_hint = "https://dchatdm.example.org",
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Save"), is_enter_default = true, callback = function()
+            local endpoint, err = validEndpoint(dialog:getInputText())
+            if not endpoint then state.status = err; UIManager:close(dialog); refresh(context); return end
+            state.store.dm_endpoint = endpoint
+            saveStore(state.store)
+            state.status = _("DM service address saved locally.")
+            UIManager:close(dialog)
+            refresh(context)
+        end } } },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
 local function registerIdentity(state, context, display_name)
     local name = safeText(display_name, MAX_NAME_BYTES)
     if not name or #name < 3 then state.status = _("Use a display name with 3–24 visible characters."); refresh(context); return end
@@ -358,9 +379,10 @@ local function registerIdentity(state, context, display_name)
         refresh(context)
         return
     end
+    local dm_response = httpJson(draft, "POST", "/devices", { deviceId = device_id, deviceSecret = device_secret, displayName = name }, false, draft.dm_endpoint)
     state.store.device_id, state.store.device_secret, state.store.display_name = device_id, device_secret, name
     saveStore(state.store)
-    state.status = _("Local DChat identity registered. This identity cannot be recovered after reset.")
+    state.status = dm_response and _("Local DChat identity registered for public chat and DMs. This identity cannot be recovered after reset.") or _("Public identity registered; DMs will retry registration on first use.")
     refresh(context)
 end
 
@@ -478,7 +500,7 @@ local function registerExistingIdentity(state)
         deviceId = state.store.device_id,
         deviceSecret = state.store.device_secret,
         displayName = state.store.display_name,
-    }, false)
+    }, false, state.store.dm_endpoint)
     return response ~= nil
 end
 
@@ -491,9 +513,9 @@ local function fetchRecipients(state, context, query)
     if #clean_query > MAX_NAME_BYTES then clean_query = clean_query:sub(1, MAX_NAME_BYTES) end
     local suffix = "/recipients?limit=" .. tostring(MAX_RECIPIENTS)
     if clean_query ~= "" then suffix = suffix .. "&q=" .. urlEncode(clean_query) end
-    local response, code, err = httpJson(state.store, "GET", suffix, nil, true)
+    local response, code, err = httpJson(state.store, "GET", suffix, nil, true, state.store.dm_endpoint)
     if not response and code == 401 and registerExistingIdentity(state) then
-        response, code, err = httpJson(state.store, "GET", suffix, nil, true)
+        response, code, err = httpJson(state.store, "GET", suffix, nil, true, state.store.dm_endpoint)
     end
     state.loading = false
     if not response or type(response.recipients) ~= "table" then
@@ -512,7 +534,7 @@ local function fetchConversation(state, context)
     state.loading = true
     state.status = _("Refreshing private conversation…")
     refresh(context)
-    local response, code, err = httpJson(state.store, "GET", "/dms/" .. urlEncode(state.store.selected_recipient_id) .. "?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, true)
+    local response, code, err = httpJson(state.store, "GET", "/dms/" .. urlEncode(state.store.selected_recipient_id) .. "?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, true, state.store.dm_endpoint)
     state.loading = false
     if not response or type(response.conversation) ~= "table" then
         state.status = err or _("Private conversation could not be loaded.")
@@ -546,7 +568,7 @@ local function sendDirectMessage(state, context, text)
     local recipient = selectedRecipient(state)
     local message = safeText(text, MAX_TEXT_BYTES)
     if not recipient or not message then state.status = _("Choose a recipient and use plain text up to 1500 characters."); refresh(context); return end
-    local response, code, err = httpJson(state.store, "POST", "/dms", { recipientDeviceId = recipient.deviceId, text = message }, true)
+    local response, code, err = httpJson(state.store, "POST", "/dms", { recipientDeviceId = recipient.deviceId, text = message }, true, state.store.dm_endpoint)
     if not response then state.status = err or _("Private message could not be sent."); refresh(context); return end
     state.status = _("Private message sent. It is stored server-side and is not end-to-end encrypted.")
     fetchConversation(state, context)
@@ -660,6 +682,7 @@ local function settingsPane(instance, context)
     local px = context.px or scale
     local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(38), math.floor(height / 13))
     local endpoint_status = state.store.endpoint ~= "" and state.store.endpoint or _("Public service address missing")
+    local dm_endpoint_status = state.store.dm_endpoint ~= "" and state.store.dm_endpoint or _("DM service address missing")
     local identity_status = hasIdentity(state.store) and (_("Identity: ") .. state.store.display_name) or _("No local identity")
     local permissions = context.appdock and context.appdock.getDAppPermissions and context.appdock:getDAppPermissions("dchat") or {}
     local background_status = permissions.background and _("Background checks: on · Wi-Fi only · every 15 minutes") or _("Background checks: off · enable in DApp permissions")
@@ -671,8 +694,10 @@ local function settingsPane(instance, context)
         TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(108) } },
         TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(126) } },
         TextWidget:new{ text = background_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(143) } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Public service address"), callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(166) } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(166) + button_height + gap } },
+        TextWidget:new{ text = dm_endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(160) } },
+        ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Public address"), callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(181) } },
+        ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("DM address"), primary = true, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, margin + px(181) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + button_height + gap } },
         ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(24) } },
     }
@@ -756,7 +781,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.3",
+    version = "1.2.4",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
