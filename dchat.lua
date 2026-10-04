@@ -30,6 +30,7 @@ local _ = require("gettext")
 
 local SETTINGS_KEY = "appdock_dchat_v1"
 local DEFAULT_ENDPOINT = "https://dchatdm-qkwwnvdq.manus.space"
+local LEGACY_ENDPOINT = "https://appdock-bd7bcrzm.manus.space"
 local MAX_ENDPOINT_BYTES = 240
 local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
@@ -115,8 +116,10 @@ local function cloneStore(raw)
             dm_messages[#dm_messages + 1] = message
         end
     end
+    local saved_endpoint = trim(raw.endpoint)
+    if saved_endpoint == "" or saved_endpoint == LEGACY_ENDPOINT then saved_endpoint = DEFAULT_ENDPOINT end
     return {
-        endpoint = (trim(raw.endpoint) ~= "" and trim(raw.endpoint) or DEFAULT_ENDPOINT):gsub("/+$", ""):sub(1, MAX_ENDPOINT_BYTES),
+        endpoint = saved_endpoint:gsub("/+$", ""):sub(1, MAX_ENDPOINT_BYTES),
         device_id = trim(raw.device_id):sub(1, 52),
         device_secret = trim(raw.device_secret):sub(1, 128),
         display_name = safeText(raw.display_name, MAX_NAME_BYTES) or "",
@@ -753,7 +756,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.1",
+    version = "1.2.2",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",

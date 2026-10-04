@@ -42,6 +42,7 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
+assert(dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space" }).endpoint == "https://dchatdm-qkwwnvdq.manus.space", "legacy endpoint was not migrated")
 for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
     local pane = dchat.buildPane({}, { dimen = dimen, px = function(value) return value end, requestRebuild = function() end, appdock = {} })
     assert(type(pane) == "table", "pane did not build")
