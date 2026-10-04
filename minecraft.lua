@@ -1,9 +1,10 @@
 --[[--
 Minecraft 3D for AppDock.
 
-A compact, offline voxel explorer for E-Ink displays. The world is a deterministic
-height-field made from unit blocks. Its renderer uses a column-based voxel-space
-projection so movement only redraws the game canvas, never the full AppDock pane.
+A compact, offline voxel explorer for E-Ink and color displays. The world is a
+deterministic height-field made from unit blocks. Its renderer uses a
+column-based voxel-space projection so movement only redraws the game canvas,
+never the full AppDock pane.
 Every interactive redraw goes through UIManager:setDirty(..., "fast", region).
 --]]--
 
@@ -30,8 +31,22 @@ local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
 -- High detail budget for the renderer; compact panes still clamp this to
 -- their actual canvas dimensions below.
-local RENDER_COLS = 180
-local RENDER_ROWS = 180
+local RENDER_COLS = 240
+local RENDER_ROWS = 240
+local COLOR_PALETTE = {
+    black = { 0, 0, 0 },
+    red = { 220, 45, 45 },
+    green = { 45, 170, 70 },
+    blue = { 55, 105, 220 },
+    cyan = { 25, 175, 185 },
+    magenta = { 195, 60, 175 },
+    yellow = { 225, 185, 35 },
+}
+local MATERIAL_COLORS = {
+    grass = "green", leaves = "green", dirt = "red", wood = "red",
+    stone = "blue", water = "blue", snow = "cyan", sand = "yellow",
+    coal = "black", iron = "cyan", gold = "yellow",
+}
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -45,8 +60,20 @@ local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 local function wrapAngle(value) return value % TAU end
 
+local function colorHardwareAvailable()
+    return type(Screen.isColorEnabled) == "function"
+        and Screen:isColorEnabled()
+        and type(Blitbuffer.ColorRGB32) == "function"
+end
+
+local function colorForMaterial(material)
+    local rgb = COLOR_PALETTE[MATERIAL_COLORS[material] or "black"]
+    if not colorHardwareAvailable() then return Blitbuffer.COLOR_BLACK end
+    return Blitbuffer.ColorRGB32(rgb[1], rgb[2], rgb[3], 0xFF)
+end
+
 -- Render no more logical pixels than the assigned canvas can represent. This
--- avoids overdraw on compact split panes while retaining the 180x180 detail
+-- avoids overdraw on compact split panes while retaining the 240x240 detail
 -- budget on normal AppDock panes.
 local function renderGridFor(width, height)
     local cols = math.max(1, math.min(RENDER_COLS, math.floor(width)))
@@ -206,6 +233,7 @@ function VoxelSession.new(seed)
         jump_offset = 0,
         jump_frame = nil,
         inventory_open = false,
+        color_enabled = false,
         selected_slot = 1,
         inventory = { grass = 12, dirt = 8, stone = 6, wood = 3, leaves = 4, sand = 5, snow = 4 },
         hotbar = { "grass", "dirt", "stone", "wood", "leaves", "sand", "snow", "water", "grass" },
@@ -239,6 +267,12 @@ end
 function VoxelSession:toggleInventory()
     self.inventory_open = not self.inventory_open
     self.last_event = self.inventory_open and _("Inventar geöffnet.") or _("Inventar geschlossen.")
+    return true
+end
+
+function VoxelSession:toggleColor()
+    self.color_enabled = not self.color_enabled
+    self.last_event = self.color_enabled and _("Farbrendering aktiviert.") or _("Monochromes Rendering aktiviert.")
     return true
 end
 
@@ -369,6 +403,7 @@ function VoxelSession:act(action)
     if action == "mine" then return self:mine() end
     if action == "place" then return self:place() end
     if action == "inventory" then return self:toggleInventory() end
+    if action == "color" then return self:toggleColor() end
     return false
 end
 
@@ -554,6 +589,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
     end
     local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
+        if session.color_enabled and colorHardwareAvailable() then
+            return colorForMaterial(material)
+        end
         if material == "grass" and face ~= "top" then material = "dirt" end
         local pattern = pattern_values[material] or pattern_values.stone
         local fu, fv = textureCoordinates(face, hx, hy, hz, side)
@@ -914,9 +952,9 @@ end
 
 return {
     id = "minecraft",
-    version = "2.7.0",
+    version = "2.8.0",
     title = "Minecraft 3D",
-    subtitle = "Schnelle monochrome Voxelwelt",
+    subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
     logo = "other",
     buildPane = function(instance, context)
@@ -932,6 +970,7 @@ return {
         local button_w = math.max(px(30), math.floor((canvas_w - 4 * gap) / 5))
         local joystick_size = math.min(px(76), math.floor(canvas_w * 0.22))
         local jump_w, jump_h = px(58), px(30)
+        local color_button_w = math.min(px(58), canvas_w)
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
         local hotbar = Hotbar:new{ width = canvas_w, height = px(30), session = state.session }
         local inventory_panel = InventoryPanel:new{ width = canvas_w, height = canvas_h, session = state.session }
@@ -963,8 +1002,9 @@ return {
             dimen = pane.dimen,
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = canvas_w, overlap_offset = { margin, px(6) } },
-            TextWidget:new{ text = _("Voxelwelt · schnelle regionale Aktualisierung"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, px(29) } },
+            TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = math.max(px(40), canvas_w - color_button_w - px(8)), overlap_offset = { margin, px(6) } },
+            TextWidget:new{ text = _("Voxelwelt · monochrom oder 7 Farben"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = math.max(px(40), canvas_w - color_button_w - px(8)), overlap_offset = { margin, px(29) } },
+            NavButton:new{ title = _("Farbe"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
             canvas,
             hotbar,
             joystick,
@@ -986,6 +1026,8 @@ return {
         heightAt = heightAt,
         renderGridFor = renderGridFor,
         textureCoordinates = textureCoordinates,
+        colorForMaterial = colorForMaterial,
+        COLOR_PALETTE = COLOR_PALETTE,
         WORLD_SIZE = WORLD_SIZE,
         MAX_COLUMN_HEIGHT = MAX_COLUMN_HEIGHT,
         MAX_VIEW_DISTANCE = MAX_VIEW_DISTANCE,
