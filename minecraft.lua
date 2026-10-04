@@ -217,7 +217,7 @@ function VoxelCanvas:_projectPoint(horizon, focal, camera_y, wx, wz, wy, session
         y + horizon + (camera_y - wy) * focal / depth
 end
 
-function VoxelCanvas:_fillPolygon(bb, points, tone, phase)
+function VoxelCanvas:_fillPolygon(bb, points, tone, phase, texture)
     local min_y, max_y = points[1][2], points[1][2]
     for index = 2, #points do
         min_y, max_y = math.min(min_y, points[index][2]), math.max(max_y, points[index][2])
@@ -237,8 +237,25 @@ function VoxelCanvas:_fillPolygon(bb, points, tone, phase)
             local left = math.floor(intersections[index])
             local right = math.ceil(intersections[index + 1])
             if right > left then
-                if tone >= 3 or ((row + phase) % (tone == 2 and 2 or 4) == 0) then
-                    bb:paintRect(left, row, right - left, 1, tone >= 3 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY)
+                local base = tone >= 3 and Blitbuffer.COLOR_BLACK or (tone == 2 and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_LIGHT_GRAY)
+                bb:paintRect(left, row, right - left, 1, base)
+                -- Texture is intentionally procedural: no bitmap assets are
+                -- needed, and the pattern remains crisp on one-bit E-Ink.
+                if texture == "top" then
+                    local offset = (row + phase) % 6
+                    for pixel = left + offset, right - 1, 6 do
+                        bb:paintRect(pixel, row, math.min(2, right - pixel), 1, Blitbuffer.COLOR_BLACK)
+                    end
+                    if (row + phase) % 5 == 0 then bb:paintRect(left, row, right - left, 1, Blitbuffer.COLOR_BLACK) end
+                else
+                    if (row + phase) % 8 == 0 then
+                        bb:paintRect(left, row, right - left, 1, Blitbuffer.COLOR_BLACK)
+                    else
+                        local offset = (phase + math.floor(row / 8) * 7) % 15
+                        for pixel = left + offset, right - 1, 15 do
+                            bb:paintRect(pixel, row, 1, 1, Blitbuffer.COLOR_BLACK)
+                        end
+                    end
                 end
             end
         end
@@ -257,9 +274,9 @@ end
 function VoxelCanvas:_drawVoxel(bb, points, top_tone, side_tone, phase)
     -- Draw fill first, then a one-pixel wireframe. The slanted edges are what
     -- the former rectangular implementation was missing.
-    self:_fillPolygon(bb, points.top, top_tone, phase)
-    self:_fillPolygon(bb, points.side_a, side_tone, phase + 1)
-    self:_fillPolygon(bb, points.side_b, math.max(1, side_tone - 1), phase + 2)
+    self:_fillPolygon(bb, points.top, top_tone, phase, "top")
+    self:_fillPolygon(bb, points.side_a, side_tone, phase + 1, "side")
+    self:_fillPolygon(bb, points.side_b, math.max(1, side_tone - 1), phase + 2, "side")
     for _, edge in ipairs({ points.top, points.side_a, points.side_b }) do
         for index = 1, #edge do self:_line(bb, edge[index], edge[index % #edge + 1], Blitbuffer.COLOR_BLACK) end
     end
@@ -449,7 +466,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.3.0",
+    version = "1.4.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
