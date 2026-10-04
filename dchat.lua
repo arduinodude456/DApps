@@ -993,7 +993,9 @@ local function dmConversationPane(instance, context)
     elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 4 * (fifth + gap), px(60) } }
     local emoji_height = math.max(px(28), math.floor(button_height * .8))
     local emoji_width = math.floor((width - 2 * margin - 5 * gap) / 6)
-    elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function() fetchConversation(state, context) end, overlap_offset = { margin, px(60) + button_height + gap } }
+    elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function()
+        UIManager:nextTick(function() fetchConversation(state, context) end)
+    end, overlap_offset = { margin, px(60) + button_height + gap } }
     for index, emoji in ipairs(DM_EMOJIS) do
         local emoji_file = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. DM_EMOJI_FILES[index]
         elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, fallback = DM_EMOJI_LABELS[index], callback = function() promptDirectMessage(state, context, emoji) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
@@ -1070,7 +1072,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.10",
+    version = "1.4.11",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
