@@ -61,7 +61,7 @@ package.preload["ui/uimanager"] = function()
 end
 
 local app = dofile("minecraft.lua")
-assert(app.id == "minecraft" and app.version == "1.6.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "1.7.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(app._test.WORLD_SIZE == 32 and app._test.WALK_DISTANCE > 0, "Voxel world constants must be exported")
 assert(app._test.MOVE_FRAMES == 4 and app._test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
@@ -81,8 +81,16 @@ assert(session:act("left") and session:act("back"), "Session actions must suppor
 assert(session.motion and session.motion.frame == 0, "Interactive movement must begin as an animated step")
 session:tickMotion()
 assert(session.motion and session.motion.frame == 1, "Animated movement must advance one fast-refresh frame at a time")
+assert(session:act("jump") and session.jump_frame == 0, "Jump action must start a jump animation")
+session:tickJump()
+assert(session.jump_frame == 1 and session.jump_offset > 0, "Jump animation must change camera height")
 
 local canvas = app._test.VoxelCanvas:new{ width = 210, height = 126, session = session }
+local swipe_yaw = session.yaw
+assert(canvas:onSwipeMinecraftLook(nil, { direction = "east" }), "Horizontal swipes must turn the camera")
+assert(session.yaw ~= swipe_yaw, "Swipe look must change yaw")
+dirty_calls, repaint_calls = {}, 0
+canvas._refresh_count = 0
 local paint_calls = 0
 canvas:paintTo({ paintRect = function() paint_calls = paint_calls + 1 end }, 17, 29)
 assert(paint_calls > 100, "Voxel renderer must draw a substantial projected block scene")
@@ -104,5 +112,5 @@ local split_pane = app.buildPane({}, {
 assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "Minecraft must also fit a compact split pane")
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("minecraft.lua | 1.6.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 1.7.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

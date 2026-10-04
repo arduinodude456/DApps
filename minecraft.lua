@@ -101,13 +101,37 @@ function VoxelSession.new()
         last_event = _("Bereit — erkunde die Blockwelt."),
         canvas = nil,
         motion = nil,
+        jump_offset = 0,
+        jump_frame = nil,
     }, VoxelSession)
     self._motionTick = function() self:tickMotion() end
+    self._jumpTick = function() self:tickJump() end
     return self
 end
 
 function VoxelSession:groundHeightAtPlayer()
     return heightAt(self.world, math.floor(self.player_x), math.floor(self.player_z))
+end
+
+function VoxelSession:jump()
+    if self.jump_frame then return false end
+    self.jump_frame = 0
+    self.last_event = _("Sprung!")
+    UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._jumpTick)
+    return true
+end
+
+function VoxelSession:tickJump()
+    if self.jump_frame == nil then return end
+    self.jump_frame = self.jump_frame + 1
+    local progress = self.jump_frame / 8
+    self.jump_offset = math.max(0, math.sin(progress * math.pi) * 0.72)
+    if self.canvas then self.canvas:refreshFast() end
+    if self.jump_frame >= 8 then
+        self.jump_frame, self.jump_offset = nil, 0
+    else
+        UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._jumpTick)
+    end
 end
 
 function VoxelSession:turn(direction)
@@ -178,6 +202,7 @@ function VoxelSession:act(action)
     if action == "right" then return self:turn(1) end
     if action == "forward" then return self:beginMove(1) end
     if action == "back" then return self:beginMove(-1) end
+    if action == "jump" then return self:jump() end
     return false
 end
 
@@ -198,6 +223,7 @@ function VoxelCanvas:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.ges_events = {
         TapMinecraftExplore = { GestureRange:new{ ges = "tap", range = self.dimen } },
+        SwipeMinecraftLook = { GestureRange:new{ ges = "swipe", range = self.dimen } },
     }
 end
 
@@ -322,7 +348,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
     -- A shorter focal length widens the view: more terrain and tree silhouettes
     -- fit into the same narrow e-Ink pane.
     local focal = math.max(width * 0.68, height * 0.92)
-    local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT
+    local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local sky_bottom = y + horizon
     bb:paintRect(x, sky_bottom, width, 1, Blitbuffer.COLOR_BLACK)
     -- Perspective floor guides make the vanishing point explicit between the
@@ -443,6 +469,69 @@ function VoxelCanvas:onTapMinecraftExplore(gesture)
     return true
 end
 
+function VoxelCanvas:onSwipeMinecraftLook(_, gesture)
+    local direction = gesture and gesture.direction
+    if direction == "west" then
+        self.session:turn(-3)
+    elseif direction == "east" then
+        self.session:turn(3)
+    elseif direction == "north" then
+        self.session:jump()
+    else
+        return false
+    end
+    self:refreshFast()
+    return true
+end
+
+local Joystick = InputContainer:extend{
+    width = nil,
+    height = nil,
+    canvas = nil,
+    dimen = nil,
+    _origin_x = 0,
+    _origin_y = 0,
+}
+
+function Joystick:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    self.ges_events = {
+        TapMinecraftJoystick = { GestureRange:new{ ges = "tap", range = self.dimen } },
+        PanMinecraftJoystick = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } },
+        PanMinecraftJoystickRelease = { GestureRange:new{ ges = "pan_release", range = self.dimen } },
+    }
+end
+
+function Joystick:paintTo(bb, x, y)
+    self._origin_x, self._origin_y = x, y
+    local size = math.min(self.width, self.height)
+    bb:paintRect(x + 1, y + 1, size - 2, size - 2, Blitbuffer.COLOR_WHITE)
+    bb:paintRect(x, y, size, 1, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y + size - 1, size, 1, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, 1, size, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + size - 1, y, 1, size, Blitbuffer.COLOR_BLACK)
+    local cx, cy = x + math.floor(size / 2), y + math.floor(size / 2)
+    bb:paintRect(cx - 2, cy - 2, 5, 5, Blitbuffer.COLOR_BLACK)
+    return true
+end
+
+function Joystick:_steer(gesture)
+    local pos = gesture and gesture.pos
+    if not pos or not self.canvas then return true end
+    local dx = pos.x - (self._origin_x + self.width / 2)
+    local dy = pos.y - (self._origin_y + self.height / 2)
+    if math.abs(dx) > math.abs(dy) then
+        self.canvas:act(dx < 0 and "left" or "right")
+    elseif math.abs(dy) > self.height * 0.15 then
+        self.canvas:act(dy < 0 and "forward" or "back")
+    end
+    return true
+end
+
+function Joystick:onTapMinecraftJoystick(_, gesture) return self:_steer(gesture) end
+function Joystick:onPanMinecraftJoystick(_, gesture) return self:_steer(gesture) end
+function Joystick:onPanMinecraftJoystickRelease() return true end
+
 local NavButton = InputContainer:extend{
     title = "",
     width = nil,
@@ -507,7 +596,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.6.0",
+    version = "1.7.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
@@ -523,6 +612,8 @@ return {
         local canvas_y = header_h
         local controls_y = canvas_y + canvas_h + gap
         local button_w = math.max(px(30), math.floor((canvas_w - 3 * gap) / 4))
+        local joystick_size = math.min(px(76), math.floor(canvas_w * 0.22))
+        local jump_w, jump_h = px(58), px(30)
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
         state.session.canvas = canvas
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
@@ -530,6 +621,10 @@ return {
             if state.session.motion then
                 state.session.motion = nil
                 UIManager:unschedule(state.session._motionTick)
+            end
+            if state.session.jump_frame then
+                state.session.jump_frame, state.session.jump_offset = nil, 0
+                UIManager:unschedule(state.session._jumpTick)
             end
         end
         local groups = Device.input and Device.input.group or {}
@@ -541,6 +636,7 @@ return {
         if groups.Press then pane.key_events.MinecraftForwardPress = { { groups.Press }, event = "MinecraftForward" } end
         if groups.Select then pane.key_events.MinecraftForwardSelect = { { groups.Select }, event = "MinecraftForward" } end
         canvas.overlap_offset = { margin, canvas_y }
+        local joystick = Joystick:new{ width = joystick_size, height = joystick_size, canvas = canvas }
         pane[1] = OverlapGroup:new{
             dimen = pane.dimen,
             allow_mirroring = false,
@@ -548,11 +644,13 @@ return {
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = canvas_w, overlap_offset = { margin, px(6) } },
             TextWidget:new{ text = _("Voxelwelt · schnelle regionale Aktualisierung"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, px(29) } },
             canvas,
+            joystick,
+            NavButton:new{ title = _("Springen"), width = jump_w, height = jump_h, primary = true, callback = function() canvas:act("jump") end, overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) } },
             NavButton:new{ title = _("Links"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
             NavButton:new{ title = _("Vor"), width = button_w, height = controls_h, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
             NavButton:new{ title = _("Zurück"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
             NavButton:new{ title = _("Rechts"), width = button_w, height = controls_h, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
-            TextWidget:new{ text = _("Szene antippen: oben vor · unten zurück · Seiten drehen"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, height - px(14) } },
+            TextWidget:new{ text = _("Joystick bewegen · wischen zum Umsehen · Springen"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, height - px(14) } },
         }
         return pane
     end,
