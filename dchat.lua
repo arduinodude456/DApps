@@ -77,9 +77,6 @@ end
 local function imageMimeForPath(path)
     local lower = tostring(path or ""):lower()
     if lower:match("%.png$") then return "image/png" end
-    if lower:match("%.jpg$") or lower:match("%.jpeg$") then return "image/jpeg" end
-    if lower:match("%.gif$") then return "image/gif" end
-    if lower:match("%.webp$") then return "image/webp" end
 end
 
 local function cloneMessage(raw)
@@ -108,6 +105,11 @@ local function cloneDirectMessage(raw)
     local created_at = trim(tostring(raw.createdAt or "")):sub(1, 48)
     local attachment_mime = trim(tostring(raw.attachmentMime or ""))
     local attachment_data = trim(tostring(raw.attachmentData or ""))
+    if attachment_data ~= "" and attachment_mime ~= "image/png" then
+        local unsupported_note = _("Image format temporarily unsupported; PNG only.")
+        body = body ~= "" and (safeText(body .. " [" .. unsupported_note .. "]", MAX_TEXT_BYTES) or body) or unsupported_note
+        attachment_mime, attachment_data = "", ""
+    end
     if not id:match("^%d+$") or not author_name or (body == "" and attachment_data == "") then return nil end
     return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")), readAt = trim(tostring(raw.readAt or "")), attachmentMime = attachment_mime, attachmentData = attachment_data }
 end
@@ -692,7 +694,7 @@ local function chooseImageAttachment(state, context)
         if not file then state.status = _("The image could not be opened."); refresh(context); return end
         local data = file:read(MAX_ATTACHMENT_BYTES + 1); file:close()
         local mime = imageMimeForPath(path)
-        if not mime then state.status = _("Use a PNG, JPEG, GIF or WEBP image."); refresh(context); return end
+        if not mime then state.status = _("Only PNG images are temporarily supported."); refresh(context); return end
         if not data or #data > MAX_ATTACHMENT_BYTES then state.status = _("Images are limited to 512 KB."); refresh(context); return end
         sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
     end
@@ -726,7 +728,7 @@ local function chooseImageAttachment(state, context)
     end
     local dialog
     dialog = InputDialog:new{
-        title = _("Attach image"), input = Device.home_dir and (Device.home_dir .. "/") or "/", input_hint = _("Full path to PNG, JPEG, GIF or WEBP (max. 512 KB)"),
+        title = _("Attach image"), input = Device.home_dir and (Device.home_dir .. "/") or "/", input_hint = _("Full path to a PNG image (max. 512 KB)"),
         buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Attach"), is_enter_default = true, callback = function()
             local path = dialog:getInputText()
             UIManager:close(dialog)
@@ -913,7 +915,7 @@ local function dmPreview(text, maximum)
 end
 
 local function attachmentFilePath(state, message)
-    if not message or message.attachmentData == "" then return nil end
+    if not message or message.attachmentData == "" or message.attachmentMime ~= "image/png" then return nil end
     state.attachment_files = state.attachment_files or {}
     local cached = state.attachment_files[message.id]
     if cached then
@@ -923,7 +925,7 @@ local function attachmentFilePath(state, message)
     end
     local data = base64Decode(message.attachmentData)
     if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then return nil end
-    local extension = ({ ["image/png"] = ".png", ["image/jpeg"] = ".jpg", ["image/gif"] = ".gif", ["image/webp"] = ".webp" })[message.attachmentMime]
+    local extension = ({ ["image/png"] = ".png" })[message.attachmentMime]
     if not extension then return nil end
     local path = os.tmpname() .. extension
     local file = io.open(path, "wb")
@@ -1082,7 +1084,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.13",
+    version = "1.4.14",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -1097,5 +1099,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
