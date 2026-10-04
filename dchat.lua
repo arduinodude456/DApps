@@ -29,6 +29,13 @@ local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
 
+local IS_ANDROID = false
+local ok_version, Version = pcall(require, "version")
+if ok_version and Version and type(Version.getCurrentPlatform) == "function" then
+    local platform_ok, platform = pcall(Version.getCurrentPlatform, Version)
+    IS_ANDROID = platform_ok and type(platform) == "string" and platform:sub(1, 7) == "android"
+end
+
 local SETTINGS_KEY = "appdock_dchat_v1"
 local LEGACY_ENDPOINT = "https://appdock-bd7bcrzm.manus.space"
 local DEFAULT_ENDPOINT = LEGACY_ENDPOINT
@@ -591,7 +598,6 @@ local function fetchConversation(state, context)
     if state.loading or state.store.selected_recipient_id == "" then return end
     state.loading = true
     state.status = _("Refreshing private conversation…")
-    refresh(context)
     local conversation_path = "/dms/" .. urlEncode(state.store.selected_recipient_id)
     local response, code, err = httpJson(state.store, "GET", conversation_path .. "?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, true, state.store.dm_endpoint)
     if not response and err == RESPONSE_TOO_LARGE then
@@ -967,10 +973,12 @@ local function dmBubble(width, height, message, own, callback, state)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
     local body = message.body
-    local image_file = attachmentFilePath(state, message)
-    if message.attachmentData ~= "" and not image_file then body = (body ~= "" and body .. "\n" or "") .. _("Image unavailable") end
+    local image_file = not IS_ANDROID and attachmentFilePath(state, message) or nil
+    if message.attachmentData ~= "" and not image_file then
+        body = (body ~= "" and body .. "\n" or "") .. _("Image attachment · tap to view")
+    end
     if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
-    return DMBubble:new{ width = bubble_width, height = height, body = dmPreview(body, 36), image_file = image_file, callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    return DMBubble:new{ width = bubble_width, height = height, image_file = image_file, body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
@@ -994,7 +1002,10 @@ local function dmConversationPane(instance, context)
     local emoji_height = math.max(px(28), math.floor(button_height * .8))
     local emoji_width = math.floor((width - 2 * margin - 5 * gap) / 6)
     elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function()
-        UIManager:nextTick(function() fetchConversation(state, context) end)
+        UIManager:scheduleIn(0.1, function()
+            if state.view ~= "dm_conversation" or state.store.selected_recipient_id == "" then return end
+            fetchConversation(state, context)
+        end)
     end, overlap_offset = { margin, px(60) + button_height + gap } }
     for index, emoji in ipairs(DM_EMOJIS) do
         local emoji_file = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. DM_EMOJI_FILES[index]
@@ -1072,7 +1083,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.11",
+    version = "1.4.12",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
