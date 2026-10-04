@@ -38,7 +38,9 @@ local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
 local MAX_ATTACHMENT_BYTES = 512 * 1024
 local MAX_NOTE_BYTES = 840
-local MAX_RESPONSE_BYTES = 96 * 1024
+local MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+local RESPONSE_TOO_LARGE = "response too large"
+local CONVERSATION_RETRY_LIMIT = 5
 local MAX_CACHE_MESSAGES = 60
 local MAX_VISIBLE_PER_PAGE = 5
 local MAX_RECIPIENTS = 30
@@ -209,7 +211,7 @@ local function httpJson(store, method, suffix, payload, include_identity, endpoi
         if sink_err then return nil, sink_err end
         if chunk then
             received = received + #chunk
-            if received > MAX_RESPONSE_BYTES then return nil, "response too large" end
+            if received > MAX_RESPONSE_BYTES then return nil, RESPONSE_TOO_LARGE end
             chunks[#chunks + 1] = chunk
         end
         return 1
@@ -244,6 +246,7 @@ local function httpJson(store, method, suffix, payload, include_identity, endpoi
         if decoded_ok and type(result) == "table" then decoded = result end
     end
     if not ok or not response_headers then
+        if status == RESPONSE_TOO_LARGE then return nil, nil, RESPONSE_TOO_LARGE end
         local detail = safeText(tostring(status or code or ""), 160)
         local message = _("DChat could not reach the service. Your saved messages remain on this reader.")
         if detail and detail ~= "" then message = message .. " " .. detail end
@@ -581,10 +584,14 @@ local function fetchConversation(state, context)
     state.loading = true
     state.status = _("Refreshing private conversation…")
     refresh(context)
-    local response, code, err = httpJson(state.store, "GET", "/dms/" .. urlEncode(state.store.selected_recipient_id) .. "?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, true, state.store.dm_endpoint)
+    local conversation_path = "/dms/" .. urlEncode(state.store.selected_recipient_id)
+    local response, code, err = httpJson(state.store, "GET", conversation_path .. "?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, true, state.store.dm_endpoint)
+    if not response and err == RESPONSE_TOO_LARGE then
+        response, code, err = httpJson(state.store, "GET", conversation_path .. "?limit=" .. tostring(CONVERSATION_RETRY_LIMIT), nil, true, state.store.dm_endpoint)
+    end
     state.loading = false
     if not response or type(response.conversation) ~= "table" then
-        state.status = err or _("Private conversation could not be loaded.")
+        state.status = err == RESPONSE_TOO_LARGE and _("This chat contains very large attachments. The latest messages could not be loaded; saved messages remain on this reader.") or (err or _("Private conversation could not be loaded."))
         refresh(context)
         return
     end
@@ -1024,7 +1031,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.6",
+    version = "1.4.7",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
