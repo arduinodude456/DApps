@@ -49,15 +49,19 @@ local function buildWorld()
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1] = {}
         for x = 0, WORLD_SIZE - 1 do
-            local waves = math.sin(x * 0.61) + math.cos(z * 0.47) + math.sin((x + z) * 0.29)
-            local height = 2 + math.floor((waves + 3) * 0.48)
-            -- Sparse raised columns make the block structure legible at a
-            -- distance without requiring a costly mesh per cube.
-            if (x * 13 + z * 7) % 37 == 0 then height = height + 2 end
-            if (x == 17 and z >= 15 and z <= 18) or (z == 17 and x >= 15 and x <= 18) then height = 6 end
-            if x == 18 and z == 18 then height = 8 end
-            -- Calm starting terrace: players always begin on walkable terrain.
-            if x >= 9 and x <= 13 and z >= 4 and z <= 7 then height = 3 end
+            -- Keep the floor low and discrete. The previous wave terrain made
+            -- every ray hit a continuous gray wall, hiding the fact that this
+            -- is a block game. Raised columns are deliberately sparse so that
+            -- each projected cube keeps a visible seam.
+            local height = 1
+            if (x * 13 + z * 7) % 17 == 0 then height = 2 end
+            if (x * 5 + z * 11) % 31 == 0 then height = 3 end
+            if x >= 9 and x <= 13 and z >= 4 and z <= 7 then height = 1 end
+            -- A recognizable stepped tower sits deeper in the starting view.
+            if x == 17 and z == 16 then height = 4 end
+            if x == 18 and z == 16 then height = 3 end
+            if x == 17 and z == 17 then height = 5 end
+            if x == 18 and z == 17 then height = 4 end
             world.heights[z + 1][x + 1] = clamp(height, 1, 8)
         end
     end
@@ -204,6 +208,25 @@ function VoxelCanvas:_project(horizon, focal, camera_y, world_y, distance, y)
     return math.floor(y + horizon + (camera_y - world_y) * focal / math.max(distance, 0.18))
 end
 
+function VoxelCanvas:_drawCube(bb, left, top, size, tone, side_tone)
+    local cube_w = math.max(2, math.floor(size * 0.82))
+    local face_h = math.max(2, math.floor(size * 0.74))
+    local cap_h = math.max(2, math.floor(size * 0.18))
+    local side_w = math.max(1, math.floor(size * 0.16))
+    local face_top = top + cap_h
+    local face_bottom = face_top + face_h
+    -- The upper cap, front face, and narrow side face are separate rectangles.
+    -- On a one-bit display these hard seams read much more reliably than gray
+    -- vertical bands and make every terrain cell visibly cubic.
+    self:_paintDitherBand(bb, left, top, cube_w, cap_h, tone, left + top)
+    bb:paintRect(left, top, cube_w, 1, Blitbuffer.COLOR_BLACK)
+    self:_paintDitherBand(bb, left, face_top, cube_w - side_w, face_h, tone + 1, left + top * 3)
+    bb:paintRect(left, face_top, cube_w - side_w, 1, Blitbuffer.COLOR_BLACK)
+    self:_paintDitherBand(bb, left + cube_w - side_w, face_top, side_w, face_h, side_tone, left * 2 + top)
+    bb:paintRect(left + cube_w - side_w, face_top, 1, face_h, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(left, face_bottom - 1, cube_w, 1, Blitbuffer.COLOR_BLACK)
+end
+
 function VoxelCanvas:_drawScene(bb, x, y)
     local width, height = self.width, self.height
     bb:paintRect(x, y, width, height, Blitbuffer.COLOR_WHITE)
@@ -213,51 +236,50 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local horizon = math.floor(height * 0.40)
     local focal = math.max(width * 0.88, height * 1.20)
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT
-    local column_step = clamp(math.floor(width / 175), 2, 4)
     local sky_bottom = y + horizon
     bb:paintRect(x, sky_bottom, width, 1, Blitbuffer.COLOR_BLACK)
-    -- Perspective floor guides make the vanishing point explicit even in a
-    -- sparse world and cost only a few short fast-waveform lines.
+    -- Perspective floor guides make the vanishing point explicit between the
+    -- individual blocks and cost only a few short fast-waveform lines.
     for line = 1, 5 do
         local line_y = math.floor(sky_bottom + (height - horizon) * (line / 6) ^ 1.65)
         bb:paintRect(x, line_y, width, 1, Blitbuffer.COLOR_LIGHT_GRAY)
     end
 
     local right = x + width
-    for screen_x = x, right - 1, column_step do
-        local band_width = math.min(column_step, right - screen_x)
-        local normalized = ((screen_x - x) + band_width * 0.5) / width - 0.5
-        local ray_angle = session.yaw + math.atan(normalized * 1.28)
-        local ray_x, ray_z = math.sin(ray_angle), math.cos(ray_angle)
-        local distance = MAX_VIEW_DISTANCE
-        local last_cell = nil
-        while distance >= 0.28 do
-            local world_x = math.floor(session.player_x + ray_x * distance)
-            local world_z = math.floor(session.player_z + ray_z * distance)
-            local block_height = heightAt(session.world, world_x, world_z)
-            local cell_key = world_x * 100 + world_z
-            if block_height > 0 and cell_key ~= last_cell then
-                last_cell = cell_key
-                local top = self:_project(horizon, focal, camera_y, block_height, distance, y)
-                local block_bottom = self:_project(horizon, focal, camera_y, math.max(0, block_height - 1), distance, y)
-                local face_bottom = math.min(y + height, block_bottom)
-                if top < face_bottom then
-                    local tone = distance < 2.6 and 3 or (distance < 6.5 and 2 or 1)
-                    local side = ((world_x + world_z) % 2 == 0) and 1 or 0
-                    if side == 0 and tone > 1 then tone = tone - 1 end
-                    self:_paintDitherBand(bb, screen_x, math.max(y, top), band_width, face_bottom - math.max(y, top), tone, world_x + world_z * 3)
-                    bb:paintRect(screen_x, math.max(y, top), band_width, 1, Blitbuffer.COLOR_BLACK)
-                    -- The exposed horizontal cap is the key visual difference
-                    -- from a flat height silhouette: it is drawn when this
-                    -- column crosses a terrain step.
-                    bb:paintRect(screen_x, math.max(y, top), band_width, 1, Blitbuffer.COLOR_BLACK)
+    local center_x = x + math.floor(width / 2)
+    -- Painter's order: far cells first, near cells last. The grid is sampled
+    -- by distance rings, but each cell is emitted once, as a complete cube.
+    local emitted = {}
+    local distance = MAX_VIEW_DISTANCE
+    while distance >= 0.55 do
+        local radius = math.floor(distance + 0.5)
+        for world_z = math.max(0, math.floor(session.player_z - radius)), math.min(session.world.size - 1, math.floor(session.player_z + radius)) do
+            for world_x = math.max(0, math.floor(session.player_x - radius)), math.min(session.world.size - 1, math.floor(session.player_x + radius)) do
+                local dx, dz = world_x + 0.5 - session.player_x, world_z + 0.5 - session.player_z
+                local depth = dx * math.sin(session.yaw) + dz * math.cos(session.yaw)
+                local lateral = dx * math.cos(session.yaw) - dz * math.sin(session.yaw)
+                local radial = math.sqrt(dx * dx + dz * dz)
+                local key = world_x * 100 + world_z
+                if depth > 0.4 and radial > distance - 0.8 and radial <= distance + 0.65 and not emitted[key] then
+                    emitted[key] = true
+                    local block_height = heightAt(session.world, world_x, world_z)
+                    local screen_x = center_x + math.floor(lateral * focal / depth)
+                    local cube_size = math.floor(focal / depth)
+                    local top = self:_project(horizon, focal, camera_y, block_height, depth, y)
+                    local bottom = self:_project(horizon, focal, camera_y, block_height - 1, depth, y)
+                    local left = screen_x - math.floor(cube_size * 0.41)
+                    if block_height > 0 and cube_size >= 3 and left < right and left + cube_size > x and bottom > sky_bottom and top < y + height then
+                        local tone = depth < 3 and 3 or (depth < 7 and 2 or 1)
+                        local side_tone = ((world_x + world_z) % 2 == 0) and math.max(1, tone - 1) or tone
+                        self:_drawCube(bb, math.max(x, left), math.max(y, top), cube_size, tone, side_tone)
+                    end
                 end
             end
-            distance = distance - 0.18 - distance * 0.085
         end
+        distance = distance - 0.8
     end
 
-    local center_x, center_y = x + math.floor(width / 2), y + horizon
+    local center_y = y + horizon
     bb:paintRect(center_x - 5, center_y - 1, 11, 2, Blitbuffer.COLOR_BLACK)
     bb:paintRect(center_x - 1, center_y - 5, 2, 11, Blitbuffer.COLOR_BLACK)
 end
@@ -372,7 +394,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.1.0",
+    version = "1.2.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
