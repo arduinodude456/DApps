@@ -24,19 +24,35 @@ local _ = require("gettext")
 local Screen = Device.screen
 local TAU = math.pi * 2
 local WORLD_SIZE = 80
+local MAX_TERRAIN_HEIGHT = 14
+local MAX_COLUMN_HEIGHT = 18
 local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
-local RENDER_COLS = 800
-local RENDER_ROWS = 800
+-- Near-native detail for the standard 210x126 AppDock canvas while still
+-- avoiding duplicate logical pixels in compact panes.
+local RENDER_COLS = 180
+local RENDER_ROWS = 108
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
 local MOVE_FRAMES = 4
 local MOVE_FRAME_SECONDS = 0.045
+local START_PLAYER_X = 44.5
+local START_PLAYER_Z = 52.5
+local START_YAW = math.pi / 2
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 local function wrapAngle(value) return value % TAU end
+
+-- Render no more logical pixels than the assigned canvas can represent. This
+-- avoids overdraw on compact split panes while retaining the 180x108 detail
+-- budget on normal AppDock panes.
+local function renderGridFor(width, height)
+    local cols = math.max(1, math.min(RENDER_COLS, math.floor(width)))
+    local rows = math.max(1, math.min(RENDER_ROWS, math.floor(height)))
+    return cols, rows
+end
 
 local function emptySizedWidget(width, height)
     return CenterContainer:new{
@@ -88,23 +104,36 @@ local function buildWorld(seed)
                 or (biome == "plains" and noise2(seed + 77, x, z, 7) < 0.12)
             if lake then height = math.max(1, height - 1) end
             local material = lake and "water" or (biome == "desert" and "sand" or (biome == "mountains" and "stone" or (biome == "tundra" and "snow" or "grass")))
-            world.heights[z + 1][x + 1] = clamp(height, 1, 14)
+            world.heights[z + 1][x + 1] = clamp(height, 1, MAX_TERRAIN_HEIGHT)
             world.materials[z + 1][x + 1] = material
             world.biomes[z + 1][x + 1] = biome
         end
+    end
+    -- Trees are calculated from an immutable terrain snapshot. Reading back
+    -- previously raised crown cells turns leaves into tree roots and lets their
+    -- height grow across the whole biome on every later iteration.
+    local terrain_heights = {}
+    for z = 1, WORLD_SIZE do
+        terrain_heights[z] = {}
+        for x = 1, WORLD_SIZE do terrain_heights[z][x] = world.heights[z][x] end
     end
     -- C's tree pass, adapted to the height-field renderer: trunks and crowns
     -- become visible stepped columns while keeping generation deterministic.
     for z = 2, WORLD_SIZE - 3 do for x = 2, WORLD_SIZE - 3 do
         local biome = world.biomes[z + 1][x + 1]
         local chance = hash2(seed + 11, x, z)
-        local can_grow = biome == "forest" or biome == "taiga" or (biome == "plains" and chance < 0.12)
-        if can_grow and chance > 0.72 then
-            local h = world.heights[z + 1][x + 1]
-            world.heights[z + 1][x + 1], world.materials[z + 1][x + 1] = h + 3, "wood"
+        local can_grow = (biome == "forest" or biome == "taiga") and chance > 0.72
+            or biome == "plains" and chance < 0.12
+        if can_grow then
+            local h = terrain_heights[z + 1][x + 1]
+            local trunk_height = math.min(MAX_COLUMN_HEIGHT, h + 3)
+            if world.heights[z + 1][x + 1] <= trunk_height then
+                world.heights[z + 1][x + 1], world.materials[z + 1][x + 1] = trunk_height, "wood"
+            end
+            local crown_height = math.min(MAX_COLUMN_HEIGHT, h + 4)
             for dz = -1, 1 do for dx = -1, 1 do
-                if math.abs(dx) + math.abs(dz) > 0 and world.heights[z + dz + 1][x + dx + 1] < h + 4 then
-                    world.heights[z + dz + 1][x + dx + 1] = h + 4
+                if math.abs(dx) + math.abs(dz) > 0 and world.heights[z + dz + 1][x + dx + 1] < crown_height then
+                    world.heights[z + dz + 1][x + dx + 1] = crown_height
                     world.materials[z + dz + 1][x + dx + 1] = "leaves"
                 end
             end end
@@ -121,6 +150,13 @@ end
 local function materialAt(world, x, z)
     if x < 0 or z < 0 or x >= world.size or z >= world.size then return "stone" end
     return (world.materials[z + 1] and world.materials[z + 1][x + 1]) or "grass"
+end
+
+local function textureCoordinates(face, hx, hy, hz, side)
+    local function fraction(value) return value - math.floor(value) end
+    if face == "top" or side == 1 then return fraction(hx), fraction(hz) end
+    if side == 0 then return fraction(hz), fraction(hy) end
+    return fraction(hx), fraction(hy)
 end
 
 local function blockHash3(seed, x, z, level)
@@ -159,9 +195,9 @@ function VoxelSession.new(seed)
     local self = setmetatable({
         seed = tonumber(seed) or 12345,
         world = buildWorld(seed),
-        player_x = 11.5,
-        player_z = 5.5,
-        yaw = 0,
+        player_x = START_PLAYER_X,
+        player_z = START_PLAYER_Z,
+        yaw = START_YAW,
         pitch = 0,
         steps = 0,
         last_event = _("Bereit — erkunde die Blockwelt."),
@@ -186,7 +222,7 @@ end
 function VoxelSession:newWorld(seed)
     self.seed = tonumber(seed) or (self.seed + 1)
     self.world = buildWorld(self.seed)
-    self.player_x, self.player_z, self.yaw, self.pitch = 11.5, 5.5, 0, 0
+    self.player_x, self.player_z, self.yaw, self.pitch = START_PLAYER_X, START_PLAYER_Z, START_YAW, 0
     self.steps, self.last_event = 0, _("Neue Welt erzeugt.")
     return true
 end
@@ -225,7 +261,9 @@ function VoxelSession:place()
     local tx = math.floor(self.player_x + math.sin(self.yaw) * 1.6)
     local tz = math.floor(self.player_z + math.cos(self.yaw) * 1.6)
     if tx < 1 or tz < 1 or tx >= self.world.size - 1 or tz >= self.world.size - 1 then return false end
-    self.world.heights[tz + 1][tx + 1] = math.min(14, heightAt(self.world, tx, tz) + 1)
+    local height = heightAt(self.world, tx, tz)
+    if height >= MAX_COLUMN_HEIGHT then self.last_event = _("Dieser Block ist bereits maximal hoch."); return false end
+    self.world.heights[tz + 1][tx + 1] = height + 1
     self.world.materials[tz + 1][tx + 1] = material
     self.inventory[material] = self.inventory[material] - 1
     self.last_event = _("Block platziert.")
@@ -476,24 +514,25 @@ function VoxelCanvas:_drawScene(bb, x, y)
     -- rendered on a small logical grid and enlarged with nearest-neighbour
     -- spans. This is much cheaper and more stable on an E-Ink framebuffer than
     -- projecting hundreds of independent polygons.
-    -- PocketOS itself renders 100x100 logical pixels and stretches them into
-    -- the 480x320 viewport. Matching that layout keeps the C perspective and
-    -- finishes a complete frame instead of leaving a partial high-res redraw.
-    local cols, rows = RENDER_COLS, RENDER_ROWS
+    -- The 100x100 PocketOS grid is bounded by the real canvas. That prevents
+    -- several logical rays from landing on the same E-Ink pixel in a compact
+    -- pane, which otherwise causes noisy overdraw and incomplete refreshes.
+    local cols, rows = renderGridFor(width, height)
     local pixel_w, pixel_h = width / cols, height / rows
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
     local aspect = height / width
     local floor, abs, min, max = math.floor, math.abs, math.min, math.max
-    local world, world_size = session.world, session.world.size
-    local world_heights, world_materials = world.heights, world.materials
+    local world = session.world
     local player_x, player_z = session.player_x, session.player_z
     local pitch = session.pitch or 0
     local cp, sp = math.cos(pitch), math.sin(pitch)
     local cy, sy = math.cos(session.yaw), math.sin(session.yaw)
-    local forward = { sy * cp, cy * cp, sp }
-    local right = { cy, -sy, 0 }
-    local up = { -sy * sp, -cy * sp, cp }
+    -- Keep axes named: the DDA stores world space as X, Z, Y while Lua's
+    -- positional vectors previously mixed Z and Y during ray assembly.
+    local forward = { x = sy * cp, z = cy * cp, y = sp }
+    local right = { x = cy, z = -sy, y = 0 }
+    local up = { x = -sy * sp, z = -cy * sp, y = cp }
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local patterns = {
         grass = "1211121111112111111211111121111111112111111211111111211111111111",
@@ -517,8 +556,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
         if material == "grass" and face ~= "top" then material = "dirt" end
         local pattern = pattern_values[material] or pattern_values.stone
-        local fu, fv = hx - floor(hx), hy - floor(hy)
-        if side == 2 then fu, fv = hz - floor(hz), hy - floor(hy) end
+        local fu, fv = textureCoordinates(face, hx, hy, hz, side)
         local u = max(0, min(7, floor(fu * 8)))
         local v = max(0, min(7, floor(fv * 8)))
         local level = pattern[v * 8 + u + 1]
@@ -539,52 +577,71 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local col_x, col_z, row_x, row_z, row_y = {}, {}, {}, {}, {}
     for rx = 0, cols - 1 do
         local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
-        col_x[rx], col_z[rx] = right[1] * nx, right[2] * nx
+        col_x[rx], col_z[rx] = right.x * nx, right.z * nx
     end
     for ry = 0, rows - 1 do
         local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
-        row_x[ry], row_z[ry], row_y[ry] = up[1] * ny, up[2] * ny, up[3] * ny
+        row_x[ry], row_z[ry], row_y[ry] = up.x * ny, up.z * ny, up.y * ny
     end
-    local function cast(dx, dy, dz)
-        local map_x, map_y, map_z = floor(player_x), floor(player_z), floor(camera_y)
-        local delta_x = abs(dx) < 0.00001 and 1e30 or abs(1 / dx)
-        local delta_y = abs(dy) < 0.00001 and 1e30 or abs(1 / dy)
-        local delta_z = abs(dz) < 0.00001 and 1e30 or abs(1 / dz)
-        local step_x, step_y, step_z = dx < 0 and -1 or 1, dy < 0 and -1 or 1, dz < 0 and -1 or 1
-        local max_x = dx < 0 and (player_x - map_x) * delta_x or (map_x + 1 - player_x) * delta_x
-        local max_y = dy < 0 and (camera_y - map_z) * delta_y or (map_z + 1 - camera_y) * delta_y
-        local max_z = dz < 0 and (player_z - map_y) * delta_z or (map_y + 1 - player_z) * delta_z
+    local function cast(ray_x, ray_z, ray_y)
+        local cell_x, cell_z, cell_y = floor(player_x), floor(player_z), floor(camera_y)
+        local delta_x = abs(ray_x) < 0.00001 and 1e30 or abs(1 / ray_x)
+        local delta_z = abs(ray_z) < 0.00001 and 1e30 or abs(1 / ray_z)
+        local delta_y = abs(ray_y) < 0.00001 and 1e30 or abs(1 / ray_y)
+        local step_x = ray_x < 0 and -1 or 1
+        local step_z = ray_z < 0 and -1 or 1
+        local step_y = ray_y < 0 and -1 or 1
+        local next_x = ray_x < 0 and (player_x - cell_x) * delta_x or (cell_x + 1 - player_x) * delta_x
+        local next_z = ray_z < 0 and (player_z - cell_z) * delta_z or (cell_z + 1 - player_z) * delta_z
+        local next_y = ray_y < 0 and (camera_y - cell_y) * delta_y or (cell_y + 1 - camera_y) * delta_y
         local dist, side = 0, 0
-        for _ = 1, 96 do
-            local material = blockAt(world, map_x, map_y, map_z)
+        for ray_step = 1, 96 do
+            local material = blockAt(world, cell_x, cell_z, cell_y)
             if material then
-                return map_x, map_y, map_z, dist, side, dx, dy, dz, material
+                return cell_x, cell_z, cell_y, dist, side, ray_x, ray_z, ray_y, material
             end
-            if max_x < max_y and max_x < max_z then dist, max_x, map_x, side = max_x, max_x + delta_x, map_x + step_x, 0
-            elseif max_y < max_z then dist, max_y, map_z, side = max_y, max_y + delta_y, map_z + step_y, 1
-            else dist, max_z, map_y, side = max_z, max_z + delta_z, map_y + step_z, 2 end
+            if next_x < next_z and next_x < next_y then
+                dist, next_x, cell_x, side = next_x, next_x + delta_x, cell_x + step_x, 0
+            elseif next_z < next_y then
+                dist, next_z, cell_z, side = next_z, next_z + delta_z, cell_z + step_z, 2
+            else
+                dist, next_y, cell_y, side = next_y, next_y + delta_y, cell_y + step_y, 1
+            end
             if dist > MAX_VIEW_DISTANCE then break end
         end
         return nil
+    end
+    local function paintSpan(start_col, end_col, row, ink)
+        -- Map both span boundaries independently. Deriving width from a
+        -- rounded span length can leave one-pixel seams between neighbours.
+        local left = x + floor(start_col * pixel_w)
+        local right = x + floor(end_col * pixel_w)
+        local top = y + floor(row * pixel_h)
+        local bottom = y + floor((row + 1) * pixel_h)
+        if right > left and bottom > top then
+            bb:paintRect(left, top, right - left, bottom - top, ink)
+        end
     end
     for ry = 0, rows - 1 do
         local row_ink, row_start
         for rx = 0, cols - 1 do
             -- Same column/row decomposition as PocketOS: the horizontal part
             -- is prepared once per column and the vertical part once per row.
-            local dx = forward[1] + col_x[rx] + row_x[ry]
-            local dy = forward[2] + row_y[ry]
-            local dz = forward[3] + col_z[rx] + row_z[ry]
-            local inverse_length = 1 / math.sqrt(dx * dx + dy * dy + dz * dz)
-            dx, dy, dz = dx * inverse_length, dy * inverse_length, dz * inverse_length
-            local bx, bz, by, dist, side, rdx, rdy, rdz, hit_material = cast(dx, dy, dz)
+            local ray_x = forward.x + col_x[rx] + row_x[ry]
+            local ray_z = forward.z + col_z[rx] + row_z[ry]
+            local ray_y = forward.y + row_y[ry]
+            local inverse_length = 1 / math.sqrt(ray_x * ray_x + ray_z * ray_z + ray_y * ray_y)
+            ray_x, ray_z, ray_y = ray_x * inverse_length, ray_z * inverse_length, ray_y * inverse_length
+            local bx, bz, by, dist, side, hit_x, hit_z, hit_y, hit_material = cast(ray_x, ray_z, ray_y)
             local ink
             if bx then
-                local hx, hy, hz = player_x + rdx * dist, camera_y + rdy * dist, player_z + rdz * dist
-                local top = side == 1 and rdy < 0
+                local hx = player_x + hit_x * dist
+                local hy = camera_y + hit_y * dist
+                local hz = player_z + hit_z * dist
+                local top = side == 1 and hit_y < 0
                 ink = blockInk(hit_material, top and "top" or "side", hx, hy, hz, side, rx, ry)
                 if side == 0 and (bx + bz) % 2 == 0 then ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK end
-            elseif dy < 0 and (ry + rx) % 6 == 0 then
+            elseif ray_y < 0 and (ry + rx) % 6 == 0 then
                 ink = Blitbuffer.COLOR_BLACK
             else
                 ink = Blitbuffer.COLOR_WHITE
@@ -592,12 +649,12 @@ function VoxelCanvas:_drawScene(bb, x, y)
             if rx == 0 then
                 row_ink, row_start = ink, rx
             elseif ink ~= row_ink then
-                bb:paintRect(x + math.floor(row_start * pixel_w), y + math.floor(ry * pixel_h), math.max(1, math.floor((rx - row_start) * pixel_w)), math.max(1, math.ceil(pixel_h)), row_ink)
+                paintSpan(row_start, rx, ry, row_ink)
                 row_ink, row_start = ink, rx
             end
         end
         if row_ink then
-            bb:paintRect(x + math.floor(row_start * pixel_w), y + math.floor(ry * pixel_h), math.max(1, math.floor((cols - row_start) * pixel_w)), math.max(1, math.ceil(pixel_h)), row_ink)
+            paintSpan(row_start, cols, ry, row_ink)
         end
     end
     local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
@@ -857,7 +914,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.4.0",
+    version = "2.6.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
@@ -922,12 +979,15 @@ return {
         }
         return pane
     end,
-        _test = {
+    _test = {
         VoxelSession = VoxelSession,
         VoxelCanvas = VoxelCanvas,
         buildWorld = buildWorld,
         heightAt = heightAt,
+        renderGridFor = renderGridFor,
+        textureCoordinates = textureCoordinates,
         WORLD_SIZE = WORLD_SIZE,
+        MAX_COLUMN_HEIGHT = MAX_COLUMN_HEIGHT,
         MAX_VIEW_DISTANCE = MAX_VIEW_DISTANCE,
         RENDER_SCALE = RENDER_SCALE,
         RENDER_COLS = RENDER_COLS,
