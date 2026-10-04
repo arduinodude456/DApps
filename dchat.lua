@@ -313,6 +313,27 @@ local function base64Encode(data)
     return table.concat(output)
 end
 
+local function base64Decode(data)
+    if type(data) ~= "string" then return nil end
+    local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local decoded = {}
+    data = data:gsub("%s", "")
+    if data == "" or #data % 4 ~= 0 or data:find("[^%w%+/=]") or (data:find("=", 1, true) and not (data:match("^[%w%+/]+=$") or data:match("^[%w%+/]+==$"))) then return nil end
+    for index = 1, #data, 4 do
+        local a, b, c, d = data:sub(index, index + 3):match("^(%S)(%S)(%S)(%S)$")
+        local va, vb = alphabet:find(a, 1, true), alphabet:find(b, 1, true)
+        if not va or not vb then return nil end
+        local vc = c == "=" and 0 or (alphabet:find(c, 1, true) or 0) - 1
+        local vd = d == "=" and 0 or (alphabet:find(d, 1, true) or 0) - 1
+        if not vc or not vd then return nil end
+        local n = (va - 1) * 262144 + (vb - 1) * 4096 + vc * 64 + vd
+        decoded[#decoded + 1] = string.char(math.floor(n / 65536) % 256)
+        if c ~= "=" then decoded[#decoded + 1] = string.char(math.floor(n / 256) % 256) end
+        if d ~= "=" then decoded[#decoded + 1] = string.char(n % 256) end
+    end
+    return table.concat(decoded)
+end
+
 local function newestMessageId(messages)
     local newest_id, newest_number = "", -1
     for _, message in ipairs(messages or {}) do
@@ -347,7 +368,7 @@ local function wifiIsOn()
 end
 
 local function stateFor(instance)
-    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false }
+    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
     return instance.dchat
 end
 
@@ -840,14 +861,64 @@ local function dmPreview(text, maximum)
     return text:sub(1, math.max(1, maximum - 3)) .. "..."
 end
 
-local function dmBubble(width, height, message, own, callback)
+local function attachmentFilePath(state, message)
+    if not message or message.attachmentData == "" then return nil end
+    state.attachment_files = state.attachment_files or {}
+    local cached = state.attachment_files[message.id]
+    if cached then
+        local file = io.open(cached, "rb")
+        if file then file:close(); return cached end
+        state.attachment_files[message.id] = nil
+    end
+    local data = base64Decode(message.attachmentData)
+    if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then return nil end
+    local path = os.tmpname()
+    local file = io.open(path, "wb")
+    if not file then return nil end
+    local ok = pcall(function() file:write(data); file:close() end)
+    if not ok then pcall(function() file:close() end); os.remove(path); return nil end
+    state.attachment_files[message.id] = path
+    return path
+end
+
+local DMBubble = InputContainer:extend{ width = nil, height = nil, image_file = nil, body = "", bubble_background = nil, callback = nil }
+function DMBubble:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    local padding = scale(7)
+    local content = {}
+    local content_width = self.width - 2 * padding
+    local image_height = self.image_file and math.max(scale(58), math.min(scale(150), self.height - 2 * padding - scale(28))) or 0
+    if self.image_file then
+        content[#content + 1] = ImageWidget:new{ file = self.image_file, width = content_width, height = image_height, scale_factor = 0, overlap_offset = { padding, padding } }
+    end
+    local text_y = padding + image_height + (self.image_file and scale(4) or 0)
+    if self.body ~= "" then
+        content[#content + 1] = TextBoxWidget:new{ text = self.body, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .18))), width = content_width, height = math.max(scale(20), self.height - text_y - padding), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { padding, text_y } }
+    elseif self.image_file then
+        content[#content + 1] = TextWidget:new{ text = _("Image"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { padding, self.height - padding - scale(16) } }
+    end
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .12)), background = self.bubble_background or Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
+    self.ges_events = { TapDChatBubble = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+end
+function DMBubble:paintTo(bb, x, y)
+    local range = self.ges_events.TapDChatBubble[1].range
+    range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
+    return InputContainer.paintTo(self, bb, x, y)
+end
+function DMBubble:onTapDChatBubble()
+    if self.callback then self.callback() end
+    return true
+end
+
+local function dmBubble(width, height, message, own, callback, state)
     local bubble_width = math.max(math.floor(width * 0.78), width - 40)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
     local body = message.body
-    if message.attachmentData ~= "" then body = (body ~= "" and body .. "\n" or "") .. "[image attachment]" end
+    local image_file = attachmentFilePath(state, message)
+    if message.attachmentData ~= "" and not image_file then body = (body ~= "" and body .. "\n" or "") .. _("Image unavailable") end
     if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
-    return ActionButton:new{ width = bubble_width, height = height, title = "", body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    return DMBubble:new{ width = bubble_width, height = height, body = dmPreview(body, 36), image_file = image_file, callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
@@ -883,10 +954,11 @@ local function dmConversationPane(instance, context)
         local message = state.store.dm_messages[index]
         if y + row_height > end_y then break end
         local own = message.senderDeviceId == state.store.device_id
-        local bubble = dmBubble(width - 2 * margin, row_height, message, own, function() state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
+        local bubble_height = message.attachmentData ~= "" and math.max(row_height, math.min(px(176), math.floor(height * .30))) or row_height
+        local bubble = dmBubble(width - 2 * margin, bubble_height, message, own, function() state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, state)
         bubble.overlap_offset = { margin + (own and math.floor((width - 2 * margin) * 0.22) or 0), y }
         elements[#elements + 1] = bubble
-        y = y + row_height + gap
+        y = y + bubble_height + gap
     end
     if #state.store.dm_messages == 0 then elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } } end
     elements[#elements + 1] = ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Newer"), callback = function() state.dm_page = math.max(1, state.dm_page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
@@ -905,18 +977,23 @@ local function dmMessagePane(instance, context)
     local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(36), math.floor(height / 14))
     local half = math.floor((width - 2 * margin - gap) / 2)
     local full_body = message.body
-    if message.attachmentData ~= "" then full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. _("[Image attachment stored on server]") end
+    local image_file = attachmentFilePath(state, message)
+    if message.attachmentData ~= "" and not image_file then full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. _("[Image unavailable]") end
     if message.senderDeviceId == state.store.device_id then full_body = (message.readAt ~= "" and "✓✓ " or "✓ ") .. full_body end
-    return OverlapGroup:new{
+    local image_height = image_file and math.min(px(220), math.floor(height * .34)) or 0
+    local body_y = margin + px(48) + image_height + (image_file and gap or 0)
+    local elements = {
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
         TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
-        TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = height - 2 * margin - px(50) - button_height - gap, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin + px(48) } },
-        ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
-        ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } },
-        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
     }
+    if image_file then elements[#elements + 1] = ImageWidget:new{ file = image_file, width = width - 2 * margin, height = image_height, scale_factor = 0, overlap_offset = { margin, margin + px(48) } } end
+    elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, body_y } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
+    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
+    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
 local function messagePane(instance, context)
@@ -940,7 +1017,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.3",
+    version = "1.4.4",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -955,5 +1032,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
