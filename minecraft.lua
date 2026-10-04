@@ -23,8 +23,9 @@ local _ = require("gettext")
 
 local Screen = Device.screen
 local TAU = math.pi * 2
-local WORLD_SIZE = 32
-local MAX_VIEW_DISTANCE = 20
+local WORLD_SIZE = 48
+local MAX_VIEW_DISTANCE = 28
+local RENDER_SCALE = 3
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -354,8 +355,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
     -- rendered on a small logical grid and enlarged with nearest-neighbour
     -- spans. This is much cheaper and more stable on an E-Ink framebuffer than
     -- projecting hundreds of independent polygons.
-    local cols = math.max(54, math.min(120, math.floor(width / 4)))
-    local rows = math.max(42, math.min(90, math.floor(height / 4)))
+    local cols = math.max(72, math.min(180, math.floor(width / RENDER_SCALE)))
+    local rows = math.max(54, math.min(120, math.floor(height / RENDER_SCALE)))
     local pixel_w, pixel_h = width / cols, height / rows
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
@@ -635,7 +636,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.8.1",
+    version = "1.9.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
@@ -699,6 +700,8 @@ return {
         buildWorld = buildWorld,
         heightAt = heightAt,
         WORLD_SIZE = WORLD_SIZE,
+        MAX_VIEW_DISTANCE = MAX_VIEW_DISTANCE,
+        RENDER_SCALE = RENDER_SCALE,
         WALK_DISTANCE = WALK_DISTANCE,
         TURN_ANGLE = TURN_ANGLE,
         MOVE_FRAMES = MOVE_FRAMES,
