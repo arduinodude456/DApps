@@ -64,7 +64,7 @@ end
 local app = dofile("minecraft.lua")
 assert(app.id == "minecraft" and app.version == "2.8.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(app._test.WORLD_SIZE == 80 and app._test.MAX_VIEW_DISTANCE == 48 and app._test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
-assert(app._test.RENDER_COLS == 180 and app._test.RENDER_ROWS == 180, "Renderer must use the sharper 180x180 logical render budget")
+assert(app._test.RENDER_COLS == 240 and app._test.RENDER_ROWS == 240, "Renderer must use the sharper 240x240 logical render budget")
 assert(app._test.MOVE_FRAMES == 4 and app._test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 local palette_count = 0
 for _ in pairs(app._test.COLOR_PALETTE) do palette_count = palette_count + 1 end
@@ -73,7 +73,7 @@ assert(app._test.colorForMaterial("grass") == "rgb:45,170,70,255", "Grass must u
 assert(app._test.colorForMaterial("water") == "rgb:55,105,220,255", "Water must use the RGB blue palette color")
 
 local standard_cols, standard_rows = app._test.renderGridFor(210, 126)
-assert(standard_cols == 180 and standard_rows == 126, "A standard 210x126 pane must use all available rows of the 180x180 budget")
+assert(standard_cols == 210 and standard_rows == 126, "A standard 210x126 pane must use all available cells of the 240x240 budget")
 local compact_cols, compact_rows = app._test.renderGridFor(39, 61)
 assert(compact_cols == 39 and compact_rows == 61, "Compact panes must not oversample their assigned canvas")
 
