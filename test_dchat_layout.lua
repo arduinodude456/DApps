@@ -51,6 +51,8 @@ assert(dchat._test.dmPreview(string.rep("x", 40), 36) == string.rep("x", 33) .. 
 assert(dchat._test.base64Encode("Manus") == "TWFudXM=", "attachment base64 encoding failed")
 assert(dchat._test.base64Decode("TWFudXM=") == "Manus", "attachment base64 decoding failed")
 assert(dchat._test.base64Decode("not-base64") == nil, "invalid attachment base64 was accepted")
+assert(dchat._test.imageMimeForPath("/tmp/photo.jpg") == "image/jpeg", "JPG attachment MIME was not detected")
+assert(dchat._test.imageMimeForPath("/tmp/photo.jpeg") == "image/jpeg", "JPEG attachment MIME was not detected")
 local old_dm_instance = { dchat = { store = { recipients = { { deviceId = "dch_legacyrecipient123", displayName = "Legacy" } }, messages = {}, dm_messages = {}, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "", device_secret = "", display_name = "" }, view = "dm", status = "", loading = true } }
 assert(dchat.buildPane(old_dm_instance, { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }), "legacy DM cache pane crashed")
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })

@@ -74,6 +74,14 @@ local function safeText(value, maximum)
     return value
 end
 
+local function imageMimeForPath(path)
+    local lower = tostring(path or ""):lower()
+    if lower:match("%.png$") then return "image/png" end
+    if lower:match("%.jpg$") or lower:match("%.jpeg$") then return "image/jpeg" end
+    if lower:match("%.gif$") then return "image/gif" end
+    if lower:match("%.webp$") then return "image/webp" end
+end
+
 local function cloneMessage(raw)
     if type(raw) ~= "table" then return nil end
     local id = trim(tostring(raw.id or ""))
@@ -678,8 +686,7 @@ local function chooseImageAttachment(state, context)
         local file = io.open(path, "rb")
         if not file then state.status = _("The image could not be opened."); refresh(context); return end
         local data = file:read(MAX_ATTACHMENT_BYTES + 1); file:close()
-        local lower = path:lower()
-        local mime = lower:match("%.png$") and "image/png" or lower:match("%.jpe?g$") and "image/jpeg" or lower:match("%.gif$") and "image/gif" or lower:match("%.webp$") and "image/webp"
+        local mime = imageMimeForPath(path)
         if not mime then state.status = _("Use a PNG, JPEG, GIF or WEBP image."); refresh(context); return end
         if not data or #data > MAX_ATTACHMENT_BYTES then state.status = _("Images are limited to 512 KB."); refresh(context); return end
         sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
@@ -696,7 +703,7 @@ local function chooseImageAttachment(state, context)
         }
         local ok_new, chooser = pcall(function()
             return FileChooser:new{ name = "dchat_attachment", ui = chooser_ui, path = Device.home_dir or "/", show_path = true, file_filter = function(filename)
-                return tostring(filename):lower():match("%.(png|jpe?g|gif|webp)$") ~= nil
+                return imageMimeForPath(filename) ~= nil
             end }
         end)
         if ok_new and chooser then
@@ -1061,7 +1068,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.8",
+    version = "1.4.9",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -1076,5 +1083,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
