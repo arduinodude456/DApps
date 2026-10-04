@@ -138,6 +138,12 @@ Die DApp spielt ausschließlich lokale, vorab geditherte `.bwr`-Dateien ab, biet
 
 > **Bluetooth-Audio:** VideoPlayer verwaltet keine Bluetooth-Paarung. Wenn ein Headset bereits im Betriebssystem verbunden ist und der gerätespezifische Audio-Backend-Pfad verfügbar ist, sendet die DApp den WAV-Ton an genau diese Systemaudio-Ausgabe. Auf Kobo kann dies abhängig von Firmware und Modell GStreamer mit MediaTek-Audioausgabe oder ALSA/aplay sein; andere Geräte benötigen ein verfügbares `aplay` oder `tinyplay`. Bluetooth-Verhalten wurde nicht auf konkreter Hardware getestet.
 
+## Tetris
+
+[`tetris.lua`](tetris.lua) ist eine vollständig lokale Tetris-DApp mit sieben Tetrominoen, Rotation, Wand-Kicks, Hard-Drop, Linienlöschung, Score und Levelprogression. Während des Spiels läuft der Falltimer mit **10 FPS**; die Arena wird direkt neu gezeichnet und ausschließlich mit KOReaders schnellem regionalem `fast`-Refresh aktualisiert.
+
+Die DApp bietet Touch-Schaltflächen sowie Pfeiltasten, wenn das Gerät sie bereitstellt. Auf Farb-E-Ink-Geräten kann die Blockdarstellung über **Color on/off** optional farbig oder kontrastreich monochrom dargestellt werden. Spielstand, Pause und die Farbwahl bleiben in der laufenden DApp-Instanz erhalten; Netzwerkzugriff und Hintergrunddienste werden nicht verwendet.
+
 ## Draw
 
 [`draw.lua`](draw.lua) ist ein mehrseitiges E-Ink-Skizzenbuch für AppDock. Es speichert Striche als bearbeitbare Vektorpunkte in einem eigenen lokalen `.draw.lua`-Format und kann gespeicherte Zeichnungen wieder laden. Jede Zeichnung besitzt mehrere Seiten mit den Hintergrundtypen **blank**, **lined**, **grid** oder einem optionalen Bildhintergrund über einen vom Nutzer eingegebenen PNG-, JPG-, GIF- oder WEBP-Pfad.
