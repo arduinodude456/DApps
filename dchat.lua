@@ -65,10 +65,10 @@ end
 
 local function cloneMessage(raw)
     if type(raw) ~= "table" then return nil end
-    local id = trim(raw.id)
+    local id = trim(tostring(raw.id or ""))
     local author_name = safeText(raw.authorName, MAX_NAME_BYTES)
     local body = safeText(raw.body, MAX_TEXT_BYTES)
-    local created_at = trim(raw.createdAt):sub(1, 48)
+    local created_at = trim(tostring(raw.createdAt or "")):sub(1, 48)
     if not id:match("^%d+$") or not author_name or not body then return nil end
     return { id = id, authorName = author_name, body = body, createdAt = created_at }
 end
@@ -83,12 +83,12 @@ end
 
 local function cloneDirectMessage(raw)
     if type(raw) ~= "table" then return nil end
-    local id = trim(raw.id)
+    local id = trim(tostring(raw.id or ""))
     local author_name = safeText(raw.authorName, MAX_NAME_BYTES)
     local body = safeText(raw.body, MAX_TEXT_BYTES)
-    local created_at = trim(raw.createdAt):sub(1, 48)
+    local created_at = trim(tostring(raw.createdAt or "")):sub(1, 48)
     if not id:match("^%d+$") or not author_name or not body then return nil end
-    return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(raw.senderDeviceId) }
+    return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")) }
 end
 
 local function cloneStore(raw)
@@ -782,7 +782,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.5",
+    version = "1.2.6",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
