@@ -648,7 +648,15 @@ local function chooseImageAttachment(state, context)
     local ok_chooser, FileChooser = pcall(require, "ui/widget/filechooser")
     if not ok_chooser or not FileChooser then state.status = _("File selection is unavailable on this KOReader build."); refresh(context); return end
     local chooser
-    chooser = FileChooser:new{ path = Device.home_dir, show_path = true, file_filter = function(filename)
+    local chooser_ui = {
+        selected_files = {},
+        folder_shortcuts = {
+            getShortcutFullName = function() return nil end,
+            hasShortcut = function() return false end,
+            hasFolderShortcut = function() return false end,
+        },
+    }
+    chooser = FileChooser:new{ name = "dchat_attachment", ui = chooser_ui, path = Device.home_dir or "/", show_path = true, file_filter = function(filename)
         return filename:lower():match("%.(png|jpe?g|gif|webp)$") ~= nil
     end }
     function chooser:onFileSelect(item)
@@ -941,7 +949,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.1",
+    version = "1.4.2",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
