@@ -375,7 +375,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
         leaves = "1210121111121110112111211121111012111121111012111121110112111121",
         water = "1221122211221122122211221122122211221122211221122122211221122122",
     }
-    local function blockInk(material, face, hx, hy, hz, side)
+    local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
+    local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
         if material == "grass" and face ~= "top" then material = "dirt" end
         local pattern = patterns[material] or patterns.stone
         local fu, fv = hx - math.floor(hx), hy - math.floor(hy)
@@ -384,7 +385,14 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local v = math.max(0, math.min(7, math.floor(fv * 8)))
         local level = string.byte(pattern, v * 8 + u + 1) - 48
         if face == "top" then level = level + 1 end
-        return level <= 1 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
+        if side == 0 then level = level - 1 end
+        level = math.max(0, math.min(3, level))
+        -- Convert the four texture luminances into deterministic 1-bit ink.
+        -- This is the ordered Bayer pattern used instead of gray fills: it is
+        -- crisp on E-Ink and does not accumulate a broad gray ghost.
+        local darkness = 3 - level
+        local threshold = bayer4[(math.floor(screen_y or 0) % 4) + 1][(math.floor(screen_x or 0) % 4) + 1]
+        return darkness * 4 > threshold and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
     end
     local function cast(dx, dy, dz)
         local map_x, map_y, map_z = math.floor(session.player_x), math.floor(session.player_z), math.floor(camera_y)
@@ -422,7 +430,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
             if bx then
                 local hx, hy, hz = session.player_x + rdx * dist, camera_y + rdy * dist, session.player_z + rdz * dist
                 local top = side == 1 and rdy < 0
-                ink = blockInk(materialAt(session.world, bx, bz), top and "top" or "side", hx, hy, hz, side)
+                ink = blockInk(materialAt(session.world, bx, bz), top and "top" or "side", hx, hy, hz, side, rx, ry)
                 if side == 0 and (bx + bz) % 2 == 0 then ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK end
             elseif dy < 0 and (ry + rx) % 6 == 0 then
                 ink = Blitbuffer.COLOR_BLACK
@@ -627,7 +635,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.8.0",
+    version = "1.8.1",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
