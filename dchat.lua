@@ -29,8 +29,9 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
 
 local SETTINGS_KEY = "appdock_dchat_v1"
-local DEFAULT_ENDPOINT = "https://dchatdm-qkwwnvdq.manus.space"
 local LEGACY_ENDPOINT = "https://appdock-bd7bcrzm.manus.space"
+local DEFAULT_ENDPOINT = LEGACY_ENDPOINT
+local DEFAULT_DM_ENDPOINT = "https://dchatdm-qkwwnvdq.manus.space"
 local MAX_ENDPOINT_BYTES = 240
 local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
@@ -119,7 +120,7 @@ local function cloneStore(raw)
     local saved_endpoint = trim(raw.endpoint):gsub("/+$", "")
     if saved_endpoint == "" then saved_endpoint = DEFAULT_ENDPOINT end
     local saved_dm_endpoint = trim(raw.dm_endpoint):gsub("/+$", "")
-    if saved_dm_endpoint == "" or saved_dm_endpoint == LEGACY_ENDPOINT then saved_dm_endpoint = DEFAULT_ENDPOINT end
+    if saved_dm_endpoint == "" or saved_dm_endpoint == LEGACY_ENDPOINT then saved_dm_endpoint = DEFAULT_DM_ENDPOINT end
     return {
         endpoint = saved_endpoint:gsub("/+$", ""):sub(1, MAX_ENDPOINT_BYTES),
         dm_endpoint = saved_dm_endpoint:sub(1, MAX_ENDPOINT_BYTES),
@@ -781,7 +782,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.2.4",
+    version = "1.2.5",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
