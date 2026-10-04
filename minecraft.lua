@@ -490,9 +490,13 @@ function VoxelCanvas:_drawScene(bb, x, y)
         -- Convert the four texture luminances into deterministic 1-bit ink.
         -- This is the ordered Bayer pattern used instead of gray fills: it is
         -- crisp on E-Ink and does not accumulate a broad gray ghost.
-        local darkness = 3 - level
-        local threshold = bayer4[(floor(screen_y or 0) % 4) + 1][(floor(screen_x or 0) % 4) + 1]
-        return darkness * 4 > threshold and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
+        -- On a real E-Ink panel a one-pixel Bayer pattern becomes a gray
+        -- haze. Use 2x2 ink cells while keeping the full 480x320 ray grid.
+        local threshold = bayer4[(floor((screen_y or 0) / 2) % 4) + 1][(floor((screen_x or 0) / 2) % 4) + 1]
+        if level <= 0 then return Blitbuffer.COLOR_BLACK end
+        if level == 1 then return threshold < 5 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
+        if level == 2 then return threshold < 2 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
+        return Blitbuffer.COLOR_WHITE
     end
     local col_x, col_z, row_x, row_z, row_y = {}, {}, {}, {}, {}
     for rx = 0, cols - 1 do
@@ -533,6 +537,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
             local dx = forward[1] + col_x[rx] + row_x[ry]
             local dy = forward[2] + row_y[ry]
             local dz = forward[3] + col_z[rx] + row_z[ry]
+            local inverse_length = 1 / math.sqrt(dx * dx + dy * dy + dz * dz)
+            dx, dy, dz = dx * inverse_length, dy * inverse_length, dz * inverse_length
             local bx, bz, by, dist, side, rdx, rdy, rdz = cast(dx, dy, dz)
             local ink
             if bx then
@@ -814,7 +820,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.1.1",
+    version = "2.1.2",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
