@@ -15,6 +15,7 @@ local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
+local FileChooser = require("ui/widget/filechooser")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
@@ -36,6 +37,7 @@ local DEFAULT_DM_ENDPOINT = "https://dchatdm-qkwwnvdq.manus.space"
 local MAX_ENDPOINT_BYTES = 240
 local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
+local MAX_ATTACHMENT_BYTES = 512 * 1024
 local MAX_NOTE_BYTES = 840
 local MAX_RESPONSE_BYTES = 96 * 1024
 local MAX_CACHE_MESSAGES = 60
@@ -86,17 +88,19 @@ local function cloneRecipient(raw)
     local device_id = trim(raw.deviceId):sub(1, 64)
     local display_name = safeText(raw.displayName, MAX_NAME_BYTES)
     if not device_id:match("^dch_[%w_%-]+$") or not display_name then return nil end
-    return { deviceId = device_id, displayName = display_name }
+    return { deviceId = device_id, displayName = display_name, unreadCount = tonumber(raw.unreadCount) or 0 }
 end
 
 local function cloneDirectMessage(raw)
     if type(raw) ~= "table" then return nil end
     local id = trim(tostring(raw.id or ""))
     local author_name = safeText(raw.authorName, MAX_NAME_BYTES)
-    local body = safeText(raw.body, MAX_TEXT_BYTES)
+    local body = safeText(raw.body or "", MAX_TEXT_BYTES) or ""
     local created_at = trim(tostring(raw.createdAt or "")):sub(1, 48)
-    if not id:match("^%d+$") or not author_name or not body then return nil end
-    return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")) }
+    local attachment_mime = trim(tostring(raw.attachmentMime or ""))
+    local attachment_data = trim(tostring(raw.attachmentData or ""))
+    if not id:match("^%d+$") or not author_name or (body == "" and attachment_data == "") then return nil end
+    return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")), readAt = trim(tostring(raw.readAt or "")), attachmentMime = attachment_mime, attachmentData = attachment_data }
 end
 
 local function cloneStore(raw)
@@ -294,6 +298,20 @@ end
 
 local function urlEncode(value)
     return tostring(value):gsub("([^%w%-_%.~])", function(character) return string.format("%%%02X", string.byte(character)) end)
+end
+
+local function base64Encode(data)
+    local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local output = {}
+    for index = 1, #data, 3 do
+        local a, b, c = data:byte(index, index + 2)
+        local n = a * 65536 + (b or 0) * 256 + (c or 0)
+        output[#output + 1] = alphabet:sub(math.floor(n / 262144) % 64 + 1, math.floor(n / 262144) % 64 + 1)
+            .. alphabet:sub(math.floor(n / 4096) % 64 + 1, math.floor(n / 4096) % 64 + 1)
+            .. (b and alphabet:sub(math.floor(n / 64) % 64 + 1, math.floor(n / 64) % 64 + 1) or "=")
+            .. (c and alphabet:sub(n % 64 + 1, n % 64 + 1) or "=")
+    end
+    return table.concat(output)
 end
 
 local function newestMessageId(messages)
@@ -601,11 +619,11 @@ local function promptRecipientSearch(state, context)
     dialog:onShowKeyboard()
 end
 
-local function sendDirectMessage(state, context, text)
+local function sendDirectMessage(state, context, text, attachment)
     local recipient = selectedRecipient(state)
     local message = safeText(text, MAX_TEXT_BYTES)
-    if not recipient or not message then state.status = _("Choose a recipient and use plain text up to 1500 characters."); refresh(context); return end
-    local response, code, err = httpJson(state.store, "POST", "/dms", { recipientDeviceId = recipient.deviceId, text = message }, true, state.store.dm_endpoint)
+    if not recipient or (not message and not attachment) then state.status = _("Choose a recipient and use text or a small image."); refresh(context); return end
+    local response, code, err = httpJson(state.store, "POST", "/dms", { recipientDeviceId = recipient.deviceId, text = message or "", attachment = attachment }, true, state.store.dm_endpoint)
     if not response then state.status = err or _("Private message could not be sent."); refresh(context); return end
     state.status = _("Private message sent. It is stored server-side and is not end-to-end encrypted.")
     fetchConversation(state, context)
@@ -616,8 +634,8 @@ local function promptDirectMessage(state, context, initial_text)
     if not selectedRecipient(state) then state.status = _("Choose a recipient first."); refresh(context); return end
     local dialog
     dialog = InputDialog:new{
-        title = _("Send private message"), input = initial_text or "", input_hint = _("Plain text, up to 1500 characters"),
-        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text) end } } },
+        title = _("Send private message"), input = initial_text or "", input_hint = _("Text or attached image, up to 1500 characters"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text, nil) end } } },
     }
     UIManager:show(dialog)
     dialog:onShowKeyboard()
@@ -625,6 +643,26 @@ end
 
 local function selectedMessage(state)
     for index, message in ipairs(state.store.messages) do if message.id == state.selected_id then return message end end
+end
+
+local function chooseImageAttachment(state, context)
+    local chooser
+    chooser = FileChooser:new{ path = Device.home_dir, show_path = true, file_filter = function(filename)
+        return filename:lower():match("%.(png|jpe?g|gif|webp)$") ~= nil
+    end }
+    function chooser:onFileSelect(item)
+        local file = io.open(item.path, "rb")
+        if not file then UIManager:close(self); state.status = _("The image could not be opened."); refresh(context); return true end
+        local data = file:read(MAX_ATTACHMENT_BYTES + 1)
+        file:close()
+        if not data or #data > MAX_ATTACHMENT_BYTES then UIManager:close(self); state.status = _("Images are limited to 512 KB."); refresh(context); return true end
+        local lower = item.path:lower()
+        local mime = lower:match("%.png$") and "image/png" or lower:match("%.jpe?g$") and "image/jpeg" or lower:match("%.gif$") and "image/gif" or "image/webp"
+        UIManager:close(self)
+        sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
+        return true
+    end
+    UIManager:show(chooser)
 end
 
 local function selectedDirectMessage(state)
@@ -785,7 +823,8 @@ local function dmPane(instance, context)
     else
         for index, recipient in ipairs(state.store.recipients) do
             if y + row_height > end_y then break end
-            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. " · " .. recipient.deviceId, callback = function() state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
+            local unread = recipient.unreadCount > 0 and (" · " .. tostring(recipient.unreadCount) .. " unread") or ""
+            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. unread .. " · " .. recipient.deviceId, callback = function() state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
             y = y + row_height + gap
         end
     end
@@ -803,7 +842,10 @@ local function dmBubble(width, height, message, own, callback)
     local bubble_width = math.max(math.floor(width * 0.78), width - 40)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
-    return ActionButton:new{ width = bubble_width, height = height, title = "", body = dmPreview(message.body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    local body = message.body
+    if message.attachmentData ~= "" then body = (body ~= "" and body .. "\n" or "") .. "[image attachment]" end
+    if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
+    return ActionButton:new{ width = bubble_width, height = height, title = "", body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
@@ -818,11 +860,12 @@ local function dmConversationPane(instance, context)
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = CHAT_BACKGROUND, emptySizedWidget(width, height) },
         FrameContainer:new{ width = width, height = px(56), padding = margin, bordersize = 0, background = CHAT_GREEN, TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(8) } }, TextWidget:new{ text = _("private chat · server stored"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * margin, overlap_offset = { margin, px(31) } } },
     }
-    local quarter = math.floor((width - 2 * margin - 3 * gap) / 4)
-    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Message…"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Send"), primary = true, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + quarter + gap, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("Delete"), callback = function() confirmDeleteConversation(state, context) end, overlap_offset = { margin + 2 * (quarter + gap), px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = quarter, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 3 * (quarter + gap), px(60) } }
+    local fifth = math.floor((width - 2 * margin - 4 * gap) / 5)
+    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Message…"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Send"), primary = true, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + fifth + gap, px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Attach"), callback = function() chooseImageAttachment(state, context) end, overlap_offset = { margin + 2 * (fifth + gap), px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Delete"), callback = function() confirmDeleteConversation(state, context) end, overlap_offset = { margin + 3 * (fifth + gap), px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 4 * (fifth + gap), px(60) } }
     local emoji_height = math.max(px(28), math.floor(button_height * .8))
     local emoji_width = math.floor((width - 2 * margin - 5 * gap) / 6)
     elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function() fetchConversation(state, context) end, overlap_offset = { margin, px(60) + button_height + gap } }
@@ -859,12 +902,15 @@ local function dmMessagePane(instance, context)
     local px = context.px or scale
     local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(36), math.floor(height / 14))
     local half = math.floor((width - 2 * margin - gap) / 2)
+    local full_body = message.body
+    if message.attachmentData ~= "" then full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. _("[Image attachment stored on server]") end
+    if message.senderDeviceId == state.store.device_id then full_body = (message.readAt ~= "" and "✓✓ " or "✓ ") .. full_body end
     return OverlapGroup:new{
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
         TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
-        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = height - 2 * margin - px(50) - button_height - gap, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin + px(48) } },
+        TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = height - 2 * margin - px(50) - button_height - gap, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin + px(48) } },
         ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
@@ -892,7 +938,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.3.4",
+    version = "1.4.0",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -907,5 +953,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
