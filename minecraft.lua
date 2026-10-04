@@ -45,37 +45,69 @@ end
 
 -- A fixed seed keeps the landscape exactly the same across refreshes, which is
 -- important on E-Ink: only camera motion may change a game frame.
-local function buildWorld()
-    local world = { size = WORLD_SIZE, heights = {}, materials = {} }
+local function hash2(seed, x, z)
+    local n = (seed * 1103515245 + x * 374761393 + z * 668265263) % 2147483647
+    n = (n * 1274126177 + 1442695041) % 2147483647
+    return n / 2147483647
+end
+
+local function noise2(seed, x, z, scale_value)
+    local gx, gz = math.floor(x / scale_value), math.floor(z / scale_value)
+    local tx, tz = (x % scale_value) / scale_value, (z % scale_value) / scale_value
+    tx, tz = tx * tx * (3 - 2 * tx), tz * tz * (3 - 2 * tz)
+    local a, b = hash2(seed, gx, gz), hash2(seed, gx + 1, gz)
+    local c, d = hash2(seed, gx, gz + 1), hash2(seed, gx + 1, gz + 1)
+    return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz
+end
+
+local function buildWorld(seed)
+    seed = tonumber(seed) or 12345
+    local world = { size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, biomes = {} }
     for z = 0, WORLD_SIZE - 1 do
-        world.heights[z + 1] = {}
-        world.materials[z + 1] = {}
+        world.heights[z + 1], world.materials[z + 1], world.biomes[z + 1] = {}, {}, {}
         for x = 0, WORLD_SIZE - 1 do
-            -- Keep the floor low and discrete. The previous wave terrain made
-            -- every ray hit a continuous gray wall, hiding the fact that this
-            -- is a block game. Raised columns are deliberately sparse so that
-            -- each projected cube keeps a visible seam.
-            local height = 1
-            local material = "grass"
-            if z > 12 and z < 23 and x > 1 and x < 8 then
-                height, material = 1, "water"
-            elseif (x * 13 + z * 7) % 17 == 0 then
-                height, material = 2, "grass"
-            elseif (x * 5 + z * 11) % 31 == 0 then
-                height, material = 3, "stone"
-            elseif z > 18 and (x + z) % 5 == 0 then
-                height, material = 2, "dirt"
-            end
-            if x >= 9 and x <= 13 and z >= 4 and z <= 7 then height = 1 end
-            local tree = (x == 15 and z == 11) or (x == 23 and z == 15) or (x == 7 and z == 24)
-            local canopy = ((x == 14 or x == 16) and z == 11) or (x == 15 and (z == 10 or z == 12))
-                or ((x == 22 or x == 24) and z == 15) or (x == 23 and (z == 14 or z == 16))
-            if tree then height, material = 4, "wood"
-            elseif canopy then height, material = 5, "leaves" end
-            world.heights[z + 1][x + 1] = clamp(height, 1, 8)
+            local temperature = noise2(seed + 1700, x, z, 26) * 0.72 + noise2(seed, x + 80, z - 31, 9) * 0.28
+            local humidity = noise2(seed + 900, x, z, 22)
+            local rugged = noise2(seed + 2500, x, z, 30)
+            local biome = "plains"
+            if rugged > 0.80 then biome = "mountains"
+            elseif temperature < 0.18 then biome = "tundra"
+            elseif temperature < 0.34 then biome = "taiga"
+            elseif temperature > 0.78 and humidity < 0.35 then biome = "desert"
+            elseif humidity > 0.78 then biome = "swamp"
+            elseif humidity > 0.53 then biome = "forest" end
+            local broad = noise2(seed, x, z, 18)
+            local detail = noise2(seed + 311, x, z - 7, 5)
+            local height = 3 + math.floor(broad * 3 + detail * 2)
+            if biome == "mountains" then height = 8 + math.floor(noise2(seed, x, z, 11) * 9 + noise2(seed + 41, x, z + 7, 3) * 4)
+            elseif biome == "tundra" then height = 5 + math.floor(broad * 3)
+            elseif biome == "swamp" then height = 2 + math.floor(broad * 2) end
+            local lake = (biome == "swamp" and noise2(seed + 77, x, z, 4) < 0.38)
+                or (biome == "plains" and noise2(seed + 77, x, z, 7) < 0.12)
+            if lake then height = math.max(1, height - 1) end
+            local material = lake and "water" or (biome == "desert" and "sand" or (biome == "mountains" and "stone" or (biome == "tundra" and "snow" or "grass")))
+            world.heights[z + 1][x + 1] = clamp(height, 1, 14)
             world.materials[z + 1][x + 1] = material
+            world.biomes[z + 1][x + 1] = biome
         end
     end
+    -- C's tree pass, adapted to the height-field renderer: trunks and crowns
+    -- become visible stepped columns while keeping generation deterministic.
+    for z = 2, WORLD_SIZE - 3 do for x = 2, WORLD_SIZE - 3 do
+        local biome = world.biomes[z + 1][x + 1]
+        local chance = hash2(seed + 11, x, z)
+        local can_grow = biome == "forest" or biome == "taiga" or (biome == "plains" and chance < 0.12)
+        if can_grow and chance > 0.72 then
+            local h = world.heights[z + 1][x + 1]
+            world.heights[z + 1][x + 1], world.materials[z + 1][x + 1] = h + 3, "wood"
+            for dz = -1, 1 do for dx = -1, 1 do
+                if math.abs(dx) + math.abs(dz) > 0 and world.heights[z + dz + 1][x + dx + 1] < h + 4 then
+                    world.heights[z + dz + 1][x + dx + 1] = h + 4
+                    world.materials[z + dz + 1][x + dx + 1] = "leaves"
+                end
+            end end
+        end
+    end end
     return world
 end
 
@@ -92,9 +124,10 @@ end
 local VoxelSession = {}
 VoxelSession.__index = VoxelSession
 
-function VoxelSession.new()
+function VoxelSession.new(seed)
     local self = setmetatable({
-        world = buildWorld(),
+        seed = tonumber(seed) or 12345,
+        world = buildWorld(seed),
         player_x = 11.5,
         player_z = 5.5,
         yaw = 0,
@@ -105,6 +138,10 @@ function VoxelSession.new()
         motion = nil,
         jump_offset = 0,
         jump_frame = nil,
+        inventory_open = false,
+        selected_slot = 1,
+        inventory = { grass = 12, dirt = 8, stone = 6, wood = 3, leaves = 4, sand = 5, snow = 4 },
+        hotbar = { "grass", "dirt", "stone", "wood", "leaves", "sand", "snow", "water", "grass" },
     }, VoxelSession)
     self._motionTick = function() self:tickMotion() end
     self._jumpTick = function() self:tickJump() end
@@ -113,6 +150,55 @@ end
 
 function VoxelSession:groundHeightAtPlayer()
     return heightAt(self.world, math.floor(self.player_x), math.floor(self.player_z))
+end
+
+function VoxelSession:newWorld(seed)
+    self.seed = tonumber(seed) or (self.seed + 1)
+    self.world = buildWorld(self.seed)
+    self.player_x, self.player_z, self.yaw, self.pitch = 11.5, 5.5, 0, 0
+    self.steps, self.last_event = 0, _("Neue Welt erzeugt.")
+    return true
+end
+
+function VoxelSession:selectedMaterial()
+    return self.hotbar[self.selected_slot] or "grass"
+end
+
+function VoxelSession:selectSlot(slot)
+    if slot >= 1 and slot <= #self.hotbar then self.selected_slot = slot; return true end
+    return false
+end
+
+function VoxelSession:toggleInventory()
+    self.inventory_open = not self.inventory_open
+    self.last_event = self.inventory_open and _("Inventar geöffnet.") or _("Inventar geschlossen.")
+    return true
+end
+
+function VoxelSession:mine()
+    local tx = math.floor(self.player_x + math.sin(self.yaw) * 1.6)
+    local tz = math.floor(self.player_z + math.cos(self.yaw) * 1.6)
+    local h = heightAt(self.world, tx, tz)
+    if h <= 1 then self.last_event = _("Hier ist kein Block."); return false end
+    local material = materialAt(self.world, tx, tz)
+    self.world.heights[tz + 1][tx + 1] = h - 1
+    self.world.materials[tz + 1][tx + 1] = h - 1 <= 1 and "grass" or material
+    self.inventory[material] = (self.inventory[material] or 0) + 1
+    self.last_event = _("Block abgebaut.")
+    return true
+end
+
+function VoxelSession:place()
+    local material = self:selectedMaterial()
+    if (self.inventory[material] or 0) <= 0 then self.last_event = _("Inventar leer."); return false end
+    local tx = math.floor(self.player_x + math.sin(self.yaw) * 1.6)
+    local tz = math.floor(self.player_z + math.cos(self.yaw) * 1.6)
+    if tx < 1 or tz < 1 or tx >= self.world.size - 1 or tz >= self.world.size - 1 then return false end
+    self.world.heights[tz + 1][tx + 1] = math.min(14, heightAt(self.world, tx, tz) + 1)
+    self.world.materials[tz + 1][tx + 1] = material
+    self.inventory[material] = self.inventory[material] - 1
+    self.last_event = _("Block platziert.")
+    return true
 end
 
 function VoxelSession:jump()
@@ -211,6 +297,9 @@ function VoxelSession:act(action)
     if action == "forward" then return self:beginMove(1) end
     if action == "back" then return self:beginMove(-1) end
     if action == "jump" then return self:jump() end
+    if action == "mine" then return self:mine() end
+    if action == "place" then return self:place() end
+    if action == "inventory" then return self:toggleInventory() end
     return false
 end
 
@@ -232,6 +321,7 @@ function VoxelCanvas:init()
     self.ges_events = {
         TapMinecraftExplore = { GestureRange:new{ ges = "tap", range = self.dimen } },
         SwipeMinecraftLook = { GestureRange:new{ ges = "swipe", range = self.dimen } },
+        HoldMinecraftMine = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
 end
 
@@ -494,7 +584,9 @@ function VoxelCanvas:onTapMinecraftExplore(gesture)
     if not gesture or not gesture.pos then return true end
     local relative_x = gesture.pos.x - self._origin_x
     local relative_y = gesture.pos.y - self._origin_y
-    if relative_x < self.width * 0.32 then
+    if relative_x > self.width * 0.36 and relative_x < self.width * 0.64 and relative_y > self.height * 0.64 then
+        self:act("place")
+    elseif relative_x < self.width * 0.32 then
         self:act("left")
     elseif relative_x > self.width * 0.68 then
         self:act("right")
@@ -503,6 +595,11 @@ function VoxelCanvas:onTapMinecraftExplore(gesture)
     else
         self:act("back")
     end
+    return true
+end
+
+function VoxelCanvas:onHoldMinecraftMine()
+    self:act("mine")
     return true
 end
 
@@ -581,6 +678,61 @@ function Joystick:onSwipeMinecraftJoystick(_, gesture)
     return true
 end
 
+local Hotbar = InputContainer:extend{ session = nil, width = nil, height = nil, dimen = nil }
+function Hotbar:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    self.ges_events = { TapMinecraftHotbar = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+end
+function Hotbar:paintTo(bb, x, y)
+    local range = self.ges_events.TapMinecraftHotbar[1].range
+    range.x, range.y, range.w, range.h = x, y, self.width, self.height
+    local slot_w = math.max(1, math.floor(self.width / 9))
+    for slot = 1, 9 do
+        local sx = x + (slot - 1) * slot_w + 1
+        local selected = self.session and self.session.selected_slot == slot
+        bb:paintRect(sx, y + 1, slot_w - 2, self.height - 2, selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY)
+        bb:paintRect(sx + 3, y + 3, math.max(1, slot_w - 8), math.max(1, self.height - 8), selected and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_DARK_GRAY)
+    end
+    return true
+end
+function Hotbar:onTapMinecraftHotbar(gesture)
+    local pos = gesture and gesture.pos
+    if not pos or not self.session then return true end
+    local slot = math.floor((pos.x - self.ges_events.TapMinecraftHotbar[1].range.x) / (self.width / 9)) + 1
+    self.session:selectSlot(slot)
+    return true
+end
+
+local InventoryPanel = InputContainer:extend{ session = nil, width = nil, height = nil, dimen = nil }
+function InventoryPanel:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    self.ges_events = { TapMinecraftInventory = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+end
+function InventoryPanel:paintTo(bb, x, y)
+    if not self.session or not self.session.inventory_open then return true end
+    local range = self.ges_events.TapMinecraftInventory[1].range
+    range.x, range.y, range.w, range.h = x, y, self.width, self.height
+    bb:paintRect(x + 8, y + 8, self.width - 16, self.height - 16, Blitbuffer.COLOR_WHITE)
+    bb:paintRect(x + 8, y + 8, self.width - 16, 2, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + 8, y + self.height - 10, self.width - 16, 2, Blitbuffer.COLOR_BLACK)
+    for slot = 1, 9 do
+        local sx = x + 18 + (slot - 1) * math.floor((self.width - 36) / 9)
+        bb:paintRect(sx, y + 32, math.max(8, math.floor((self.width - 44) / 9)), 26, Blitbuffer.COLOR_LIGHT_GRAY)
+        if self.session.selected_slot == slot then bb:paintRect(sx, y + 32, 2, 26, Blitbuffer.COLOR_BLACK) end
+    end
+    return true
+end
+function InventoryPanel:onTapMinecraftInventory(gesture)
+    if not self.session or not self.session.inventory_open then return false end
+    local pos = gesture and gesture.pos
+    if pos and pos.y < 34 then self.session:toggleInventory(); return true end
+    if pos and pos.y > 32 and pos.y < 65 then
+        local slot = math.floor((pos.x - 18) / ((self.width - 36) / 9)) + 1
+        self.session:selectSlot(slot)
+    end
+    return true
+end
+
 local NavButton = InputContainer:extend{
     title = "",
     width = nil,
@@ -645,7 +797,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.0.0",
+    version = "2.1.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
@@ -660,10 +812,14 @@ return {
         local canvas_w = math.max(px(40), width - 2 * margin)
         local canvas_y = header_h
         local controls_y = canvas_y + canvas_h + gap
-        local button_w = math.max(px(30), math.floor((canvas_w - 3 * gap) / 4))
+        local button_w = math.max(px(30), math.floor((canvas_w - 4 * gap) / 5))
         local joystick_size = math.min(px(76), math.floor(canvas_w * 0.22))
         local jump_w, jump_h = px(58), px(30)
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
+        local hotbar = Hotbar:new{ width = canvas_w, height = px(30), session = state.session }
+        local inventory_panel = InventoryPanel:new{ width = canvas_w, height = canvas_h, session = state.session }
+        hotbar.overlap_offset = { margin, canvas_y + px(5) }
+        inventory_panel.overlap_offset = { margin, canvas_y }
         state.session.canvas = canvas
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
         function pane:onDeactivate()
@@ -693,12 +849,15 @@ return {
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = canvas_w, overlap_offset = { margin, px(6) } },
             TextWidget:new{ text = _("Voxelwelt · schnelle regionale Aktualisierung"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, px(29) } },
             canvas,
+            hotbar,
             joystick,
+            inventory_panel,
             NavButton:new{ title = _("Springen"), width = jump_w, height = jump_h, primary = true, callback = function() canvas:act("jump") end, overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) } },
             NavButton:new{ title = _("Links"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
             NavButton:new{ title = _("Vor"), width = button_w, height = controls_h, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
             NavButton:new{ title = _("Zurück"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
             NavButton:new{ title = _("Rechts"), width = button_w, height = controls_h, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
+            NavButton:new{ title = _("Inventar"), width = button_w, height = controls_h, callback = function() canvas:act("inventory") end, overlap_offset = { margin + (button_w + gap) * 4, controls_y } },
             TextWidget:new{ text = _("Joystick bewegen · wischen zum Umsehen · Springen"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, height - px(14) } },
         }
         return pane
