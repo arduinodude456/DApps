@@ -24,10 +24,12 @@ local _ = require("gettext")
 local Screen = Device.screen
 local TAU = math.pi * 2
 local WORLD_SIZE = 24
-local MAX_VIEW_DISTANCE = 11.5
+local MAX_VIEW_DISTANCE = 14
 local PLAYER_EYE_HEIGHT = 1.65
-local WALK_DISTANCE = 0.72
-local TURN_ANGLE = math.pi / 10
+local WALK_DISTANCE = 0.64
+local TURN_ANGLE = math.pi / 12
+local MOVE_FRAMES = 4
+local MOVE_FRAME_SECONDS = 0.045
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
@@ -79,7 +81,9 @@ function VoxelSession.new()
         steps = 0,
         last_event = _("Bereit — erkunde die Blockwelt."),
         canvas = nil,
+        motion = nil,
     }, VoxelSession)
+    self._motionTick = function() self:tickMotion() end
     return self
 end
 
@@ -114,17 +118,54 @@ function VoxelSession:move(direction)
     return true
 end
 
+function VoxelSession:beginMove(direction)
+    if self.motion then return false end
+    local next_x = self.player_x + math.sin(self.yaw) * WALK_DISTANCE * direction
+    local next_z = self.player_z + math.cos(self.yaw) * WALK_DISTANCE * direction
+    if next_x < 1 or next_z < 1 or next_x >= self.world.size - 1 or next_z >= self.world.size - 1 then
+        self.last_event = _("Weltgrenze erreicht.")
+        return false
+    end
+    if heightAt(self.world, math.floor(next_x), math.floor(next_z)) > self:groundHeightAtPlayer() + 1 then
+        self.last_event = _("Dieser Block ist zu hoch.")
+        return false
+    end
+    self.motion = { from_x = self.player_x, from_z = self.player_z, to_x = next_x, to_z = next_z, frame = 0 }
+    self.steps = self.steps + 1
+    self.last_event = direction > 0 and _("Vorwärts.") or _("Rückwärts.")
+    UIManager:unschedule(self._motionTick)
+    UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._motionTick)
+    return true
+end
+
+function VoxelSession:tickMotion()
+    local motion = self.motion
+    if not motion then return end
+    motion.frame = motion.frame + 1
+    local t = math.min(1, motion.frame / MOVE_FRAMES)
+    t = t * t * (3 - 2 * t)
+    self.player_x = motion.from_x + (motion.to_x - motion.from_x) * t
+    self.player_z = motion.from_z + (motion.to_z - motion.from_z) * t
+    if self.canvas then self.canvas:refreshFast() end
+    if motion.frame >= MOVE_FRAMES then
+        self.motion = nil
+    else
+        UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._motionTick)
+    end
+end
+
 function VoxelSession:act(action)
     if action == "left" then return self:turn(-1) end
     if action == "right" then return self:turn(1) end
-    if action == "forward" then return self:move(1) end
-    if action == "back" then return self:move(-1) end
+    if action == "forward" then return self:beginMove(1) end
+    if action == "back" then return self:beginMove(-1) end
     return false
 end
 
--- The renderer deliberately draws broad screen columns instead of a polygon per
--- visible block. It keeps Lua work bounded while retaining depth, block steps,
--- and parallax. Gray levels are rendered as monochrome horizontal dither bands.
+-- The renderer is a small first-person voxel raycaster. Each screen column walks
+-- through grid cells, projects the top and bottom of the hit block, and shades
+-- its two possible side directions differently. This creates real perspective,
+-- visible wall faces and a floor vanishing point without a polygon allocator.
 local VoxelCanvas = InputContainer:extend{
     session = nil,
     width = nil,
@@ -147,8 +188,8 @@ function VoxelCanvas:_paintDitherBand(bb, left, top, width, height, tone, phase)
         bb:paintRect(left, top, width, height, Blitbuffer.COLOR_BLACK)
         return
     end
-    -- A white base plus horizontal black rows survives true one-bit panels and
-    -- avoids depending on a device-specific gray waveform.
+    -- A white base plus sparse rows survives true one-bit panels and avoids
+    -- depending on a device-specific gray waveform.
     bb:paintRect(left, top, width, height, Blitbuffer.COLOR_WHITE)
     local spacing = tone == 2 and 2 or 4
     local bottom = top + height
@@ -159,66 +200,66 @@ function VoxelCanvas:_paintDitherBand(bb, left, top, width, height, tone, phase)
     end
 end
 
+function VoxelCanvas:_project(horizon, focal, camera_y, world_y, distance, y)
+    return math.floor(y + horizon + (camera_y - world_y) * focal / math.max(distance, 0.18))
+end
+
 function VoxelCanvas:_drawScene(bb, x, y)
     local width, height = self.width, self.height
     bb:paintRect(x, y, width, height, Blitbuffer.COLOR_WHITE)
     local session = self.session
     if not session then return end
 
-    local horizon = math.floor(height * 0.43)
-    local focal = math.max(width * 0.76, height * 1.05)
+    local horizon = math.floor(height * 0.40)
+    local focal = math.max(width * 0.88, height * 1.20)
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT
-    local column_step = clamp(math.floor(width / 145), 2, 5)
-    -- A faint horizon is useful when the distant terrain is below the player's
-    -- eye line; the terrain draw will naturally cover it wherever needed.
-    bb:paintRect(x, y + horizon, width, 1, Blitbuffer.COLOR_LIGHT_GRAY)
+    local column_step = clamp(math.floor(width / 175), 2, 4)
+    local sky_bottom = y + horizon
+    bb:paintRect(x, sky_bottom, width, 1, Blitbuffer.COLOR_BLACK)
+    -- Perspective floor guides make the vanishing point explicit even in a
+    -- sparse world and cost only a few short fast-waveform lines.
+    for line = 1, 5 do
+        local line_y = math.floor(sky_bottom + (height - horizon) * (line / 6) ^ 1.65)
+        bb:paintRect(x, line_y, width, 1, Blitbuffer.COLOR_LIGHT_GRAY)
+    end
 
     local right = x + width
     for screen_x = x, right - 1, column_step do
         local band_width = math.min(column_step, right - screen_x)
         local normalized = ((screen_x - x) + band_width * 0.5) / width - 0.5
-        local ray_angle = session.yaw + math.atan(normalized * 1.12)
+        local ray_angle = session.yaw + math.atan(normalized * 1.28)
         local ray_x, ray_z = math.sin(ray_angle), math.cos(ray_angle)
-        local covered_bottom = y + height
-        local distance = 0.42
-        while distance < MAX_VIEW_DISTANCE and covered_bottom > y do
+        local distance = MAX_VIEW_DISTANCE
+        local last_cell = nil
+        while distance >= 0.28 do
             local world_x = math.floor(session.player_x + ray_x * distance)
             local world_z = math.floor(session.player_z + ray_z * distance)
             local block_height = heightAt(session.world, world_x, world_z)
-            if block_height > 0 then
-                local projected = horizon - ((block_height - camera_y) * focal / distance)
-                local top = math.floor(y + projected)
-                if top < covered_bottom then
-                    top = math.max(y, top)
-                    if top < covered_bottom then
-                        local tone
-                        if distance < 2.4 then
-                            tone = 3
-                        elseif distance < 5.7 then
-                            tone = 2
-                        else
-                            tone = 1
-                        end
-                        -- Tall pillars read slightly darker, producing a
-                        -- recognizable Minecraft-like block silhouette.
-                        if block_height >= 6 and tone < 3 then tone = tone + 1 end
-                        self:_paintDitherBand(bb, screen_x, top, band_width, covered_bottom - top, tone, world_x * 3 + world_z * 5)
-                        -- Strong one-pixel caps expose each quantized terrain
-                        -- step as a block edge rather than a smooth hill.
-                        if distance < 7.2 then bb:paintRect(screen_x, top, band_width, 1, Blitbuffer.COLOR_BLACK) end
-                        covered_bottom = top
-                    end
+            local cell_key = world_x * 100 + world_z
+            if block_height > 0 and cell_key ~= last_cell then
+                last_cell = cell_key
+                local top = self:_project(horizon, focal, camera_y, block_height, distance, y)
+                local block_bottom = self:_project(horizon, focal, camera_y, math.max(0, block_height - 1), distance, y)
+                local face_bottom = math.min(y + height, block_bottom)
+                if top < face_bottom then
+                    local tone = distance < 2.6 and 3 or (distance < 6.5 and 2 or 1)
+                    local side = ((world_x + world_z) % 2 == 0) and 1 or 0
+                    if side == 0 and tone > 1 then tone = tone - 1 end
+                    self:_paintDitherBand(bb, screen_x, math.max(y, top), band_width, face_bottom - math.max(y, top), tone, world_x + world_z * 3)
+                    bb:paintRect(screen_x, math.max(y, top), band_width, 1, Blitbuffer.COLOR_BLACK)
+                    -- The exposed horizontal cap is the key visual difference
+                    -- from a flat height silhouette: it is drawn when this
+                    -- column crosses a terrain step.
+                    bb:paintRect(screen_x, math.max(y, top), band_width, 1, Blitbuffer.COLOR_BLACK)
                 end
             end
-            distance = distance + 0.28 + distance * 0.15
+            distance = distance - 0.18 - distance * 0.085
         end
     end
 
-    -- Minimal reticle: it belongs to the canvas and therefore refreshes with
-    -- the same small fast-update region as the terrain.
     local center_x, center_y = x + math.floor(width / 2), y + horizon
-    bb:paintRect(center_x - 4, center_y - 1, 9, 2, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(center_x - 1, center_y - 4, 2, 9, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(center_x - 5, center_y - 1, 11, 2, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(center_x - 1, center_y - 5, 2, 11, Blitbuffer.COLOR_BLACK)
 end
 
 function VoxelCanvas:paintTo(bb, x, y)
@@ -331,7 +372,7 @@ end
 
 return {
     id = "minecraft",
-    version = "1.0.0",
+    version = "1.1.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",
@@ -350,6 +391,12 @@ return {
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
         state.session.canvas = canvas
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
+        function pane:onDeactivate()
+            if state.session.motion then
+                state.session.motion = nil
+                UIManager:unschedule(state.session._motionTick)
+            end
+        end
         local groups = Device.input and Device.input.group or {}
         pane.key_events = {}
         if groups.Left then pane.key_events.MinecraftLeft = { { groups.Left }, event = "MinecraftLeft" } end
@@ -374,7 +421,7 @@ return {
         }
         return pane
     end,
-    _test = {
+        _test = {
         VoxelSession = VoxelSession,
         VoxelCanvas = VoxelCanvas,
         buildWorld = buildWorld,
@@ -382,5 +429,7 @@ return {
         WORLD_SIZE = WORLD_SIZE,
         WALK_DISTANCE = WALK_DISTANCE,
         TURN_ANGLE = TURN_ANGLE,
+        MOVE_FRAMES = MOVE_FRAMES,
+        MOVE_FRAME_SECONDS = MOVE_FRAME_SECONDS,
     },
 }

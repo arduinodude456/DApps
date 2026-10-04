@@ -49,6 +49,8 @@ for _, module in ipairs({
 end
 package.preload["ui/uimanager"] = function()
     return {
+        scheduleIn = function() end,
+        unschedule = function() end,
         widgetRepaint = function() repaint_calls = repaint_calls + 1 end,
         setDirty = function(_, _, waveform, region)
             dirty_calls[#dirty_calls + 1] = { waveform = waveform, region = region }
@@ -59,8 +61,9 @@ package.preload["ui/uimanager"] = function()
 end
 
 local app = dofile("minecraft.lua")
-assert(app.id == "minecraft" and app.version == "1.0.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "1.1.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(app._test.WORLD_SIZE == 24 and app._test.WALK_DISTANCE > 0, "Voxel world constants must be exported")
+assert(app._test.MOVE_FRAMES == 4 and app._test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
 local world = app._test.buildWorld()
 assert(world.size == 24 and #world.heights == 24 and #world.heights[1] == 24, "World must be a complete deterministic block grid")
@@ -74,6 +77,9 @@ assert(session.player_z > original_z, "Forward at zero yaw must increase z")
 local original_yaw = session.yaw
 assert(session:turn(1) and session.yaw > original_yaw, "Turning right must change the camera heading")
 assert(session:act("left") and session:act("back"), "Session actions must support navigation controls")
+assert(session.motion and session.motion.frame == 0, "Interactive movement must begin as an animated step")
+session:tickMotion()
+assert(session.motion and session.motion.frame == 1, "Animated movement must advance one fast-refresh frame at a time")
 
 local canvas = app._test.VoxelCanvas:new{ width = 210, height = 126, session = session }
 local paint_calls = 0
@@ -97,5 +103,5 @@ local split_pane = app.buildPane({}, {
 assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "Minecraft must also fit a compact split pane")
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("minecraft.lua | 1.0.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 1.1.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
