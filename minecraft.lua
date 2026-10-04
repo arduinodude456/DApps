@@ -28,8 +28,10 @@ local MAX_TERRAIN_HEIGHT = 14
 local MAX_COLUMN_HEIGHT = 18
 local MAX_VIEW_DISTANCE = 48
 local RENDER_SCALE = 1
-local RENDER_COLS = 100
-local RENDER_ROWS = 100
+-- Near-native detail for the standard 210x126 AppDock canvas while still
+-- avoiding duplicate logical pixels in compact panes.
+local RENDER_COLS = 180
+local RENDER_ROWS = 108
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -44,8 +46,8 @@ local function clamp(value, low, high) return math.max(low, math.min(high, value
 local function wrapAngle(value) return value % TAU end
 
 -- Render no more logical pixels than the assigned canvas can represent. This
--- avoids overdraw on compact split panes while retaining the 100x100 budget on
--- normal AppDock panes.
+-- avoids overdraw on compact split panes while retaining the 180x108 detail
+-- budget on normal AppDock panes.
 local function renderGridFor(width, height)
     local cols = math.max(1, math.min(RENDER_COLS, math.floor(width)))
     local rows = math.max(1, math.min(RENDER_ROWS, math.floor(height)))
@@ -912,7 +914,7 @@ end
 
 return {
     id = "minecraft",
-    version = "2.5.0",
+    version = "2.6.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle monochrome Voxelwelt",
     symbol = "M",

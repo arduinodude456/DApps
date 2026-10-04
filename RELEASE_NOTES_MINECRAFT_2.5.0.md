@@ -10,4 +10,4 @@ Dieses Release repariert den Renderer nach dem 800×800-Belastungstest von 2.4.0
 - Platzieren an einer maximal hohen Spalte wird sauber abgewiesen, statt die vorhandene Spalte auf 14 Blöcke zu verkürzen.
 - Die deterministische Startposition blickt in eine freie Landschaft, nicht mehr direkt auf eine Nahwand.
 
-Die Sichtweite von 48 Blöcken, der DDA-Blocktreffer, das kontrastreiche 2×2-Dithering und der regionale E-Ink-Refresh bleiben erhalten.
+Die Sichtweite von 48 Blöcken, der DDA-Blocktreffer, das kontrastreiche 2×2-Dithering und der regionale E-Ink-Refresh bleiben erhalten. Die Auflösung wird in Version 2.6.0 auf 180×108 erhöht; siehe `RELEASE_NOTES_MINECRAFT_2.6.0.md`.
