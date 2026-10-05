@@ -681,7 +681,12 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
     -- Decide once per frame: color needs the user's color mode, a working RGB
     -- color constructor and a screen buffer that can actually store color.
-    local color_mode = session.color_enabled and colorHardwareAvailable(bb)
+    -- RGB32 colors must go through KOReader's RGB-aware paint API. The generic
+    -- paintRect path is for luminance colors and may try to treat a RGB cdata
+    -- as a missing/invalid Color argument on some KOReader builds.
+    local color_mode = session.color_enabled
+        and colorHardwareAvailable(bb)
+        and type(bb.paintRectRGB32) == "function"
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
         if color_mode then
             return colorForMaterial(material)
@@ -751,7 +756,11 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local top = y + floor(row * pixel_h)
         local bottom = y + floor((row + 1) * pixel_h)
         if right > left and bottom > top then
-            bb:paintRect(left, top, right - left, bottom - top, ink)
+            if color_mode then
+                bb:paintRectRGB32(left, top, right - left, bottom - top, ink)
+            else
+                bb:paintRect(left, top, right - left, bottom - top, ink)
+            end
         end
     end
     for ry = 0, rows - 1 do
@@ -1050,7 +1059,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.2",
+    version = "3.0.3",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
