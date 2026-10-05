@@ -208,6 +208,13 @@ assert(dchat.buildPane(old_dm_instance, { dimen = { w = 800, h = 600 }, px = fun
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })
 assert(dual_store.endpoint == "https://appdock-bd7bcrzm.manus.space", "public endpoint was not normalized")
 assert(dual_store.dm_endpoint == "https://dchatdm-qkwwnvdq.manus.space", "DM endpoint was not initialized")
+local dedupe_store = { recipients = {} }
+dchat._test.replaceRecipients(dedupe_store, {
+    { deviceId = "dch_duplicate", displayName = "Same account" },
+    { deviceId = "dch_duplicate", displayName = "Same account" },
+    { deviceId = "dch_other", displayName = "Same account" },
+})
+assert(#dedupe_store.recipients == 2, "recipient list did not remove duplicate device accounts")
 for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
     local pane = dchat.buildPane({}, { dimen = dimen, px = function(value) return value end, requestRebuild = function() end, appdock = {} })
 assert(type(pane) == "table", "pane did not build")

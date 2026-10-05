@@ -53,7 +53,7 @@ local RESPONSE_TOO_LARGE = "response too large"
 local CONVERSATION_RETRY_LIMIT = 5
 local MAX_CACHE_MESSAGES = 60
 local MAX_VISIBLE_PER_PAGE = 5
-local MAX_RECIPIENTS = 30
+local MAX_RECIPIENTS = 120
 local CONNECT_TIMEOUT = 10
 local REQUEST_MAX_TIME = 25
 local BACKGROUND_CHECK_SECONDS = 15 * 60
@@ -485,7 +485,7 @@ local function wifiIsOn()
 end
 
 local function stateFor(instance)
-    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
+    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, recipient_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
     prepareAttachmentCache(instance.dchat)
     return instance.dchat
 end
@@ -568,6 +568,37 @@ local function createOrResetIdentity(state, context)
         text = _("Reset this reader's DChat identity?\n\nThe current local device secret cannot be recovered or transferred. You will lose the ability to act as this identity. Public messages already posted remain public."),
         ok_text = _("Reset identity"),
         ok_callback = function() promptIdentity(state, context, true) end,
+    })
+end
+
+local function deleteIdentity(state, context)
+    if not hasIdentity(state.store) then
+        state.status = _("No local DChat identity to delete.")
+        refresh(context)
+        return
+    end
+    local public_response, _, public_err = httpJson(state.store, "DELETE", "/devices", nil, true)
+    local dm_response, _, dm_err = httpJson(state.store, "DELETE", "/devices", nil, true, state.store.dm_endpoint)
+    if not public_response and not dm_response then
+        state.status = public_err or dm_err or _("The DChat account could not be deleted.")
+        refresh(context)
+        return
+    end
+    local partial = not public_response or not dm_response
+    state.store.device_id, state.store.device_secret, state.store.display_name = "", "", ""
+    state.store.recipients, state.store.dm_messages = {}, {}
+    state.store.selected_recipient_id, state.store.selected_recipient_name = "", ""
+    state.recipient_page, state.dm_page, state.view = 1, 1, "settings"
+    saveStore(state.store)
+    state.status = partial and _("The account was deleted from one service; the other service could not be reached.") or _("DChat account deleted. Public messages already posted remain public.")
+    refresh(context)
+end
+
+local function confirmDeleteIdentity(state, context)
+    UIManager:show(ConfirmBox:new{
+        text = _("Delete this DChat account from the public and private services? This removes the account and its server data and cannot be undone. Public messages already posted remain public."),
+        ok_text = _("Delete account"),
+        ok_callback = function() deleteIdentity(state, context) end,
     })
 end
 
@@ -685,6 +716,7 @@ local function fetchRecipients(state, context, query)
         return
     end
     replaceRecipients(state.store, response.recipients)
+    state.recipient_page = 1
     saveStore(state.store)
     state.status = #state.store.recipients == 0 and _("No recipients found.") or _("Recipients refreshed manually.")
     refresh(context)
@@ -985,6 +1017,7 @@ local function settingsPane(instance, context)
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Public address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(181) } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("DM address"), primary = true, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, margin + px(181) } },
         ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + button_height + gap } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Delete my DChat account"), callback = function() confirmDeleteIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + 2 * button_height + 2 * gap } },
         ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(24) } },
     }
@@ -1006,20 +1039,27 @@ local function dmPane(instance, context)
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchRecipients(state, context, "") end, overlap_offset = { margin, px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Search"), button_background = palette.secondary, button_foreground = palette.on_secondary, callback = function() promptRecipientSearch(state, context) end, overlap_offset = { margin + third + gap, px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Public"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), px(60) } }
-    local y, end_y = px(112), height - margin - button_height - gap
+    local y, end_y = px(112), height - margin - 2 * button_height - 2 * gap
     local recipients = state.store.recipients or {}
+    local total_pages = math.max(1, math.ceil(#recipients / MAX_VISIBLE_PER_PAGE))
+    state.recipient_page = math.max(1, math.min(state.recipient_page or 1, total_pages))
+    local start_index = (state.recipient_page - 1) * MAX_VISIBLE_PER_PAGE + 1
     if #recipients == 0 then
         elements[#elements + 1] = TextBoxWidget:new{ text = _("No recipients cached. Tap Search or Refresh."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } }
     else
-        for index, recipient in ipairs(recipients) do
+        for index = start_index, math.min(#recipients, start_index + MAX_VISIBLE_PER_PAGE - 1) do
             if y + row_height > end_y then break end
+            local recipient = recipients[index]
             local unread_count = tonumber(recipient.unreadCount) or 0
             local unread = unread_count > 0 and (" · " .. tostring(unread_count) .. " unread") or ""
             elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. unread .. " · " .. recipient.deviceId, callback = function() clearAttachmentFiles(state); state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
             y = y + row_height + gap
         end
     end
-    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
+    local half = math.floor((width - 2 * margin - gap) / 2)
+    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - 2 * button_height - gap - px(20) } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Newer"), callback = function() state.recipient_page = math.max(1, state.recipient_page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Older ›") .. " " .. state.recipient_page .. "/" .. total_pages, callback = function() state.recipient_page = math.min(total_pages, state.recipient_page + 1); refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
@@ -1225,7 +1265,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.5.3",
+    version = "1.6.0",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
