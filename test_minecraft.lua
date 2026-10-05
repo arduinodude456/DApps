@@ -3,11 +3,8 @@ Minecraft 3D DApp test.
 
 Run with: lua5.1 test_minecraft.lua
 
-The KOReader doubles deliberately model the *real* API: Blitbuffer.ColorRGB32
-is a LuaJIT ctype constructor, i.e. a callable value whose type() is "cdata"
-and never "function". Earlier versions of this test used a plain Lua function
-as the double, which kept a broken `type(Blitbuffer.ColorRGB32) == "function"`
-capability check green while color rendering was dead on every real device.
+The color mock follows the working square.koplugin API: parse CSS hex with
+Blitbuffer.colorFromString and paint RGB spans through paintRectRGB32.
 ]]--
 local function class(base)
     base = base or {}
@@ -57,6 +54,11 @@ package.preload["ffi/blitbuffer"] = function()
         COLOR_LIGHT_GRAY = "light",
         COLOR_DARK_GRAY = "dark",
         ColorRGB32 = MOCK.rgb32_ctor,
+        colorFromString = function(hex)
+            local r, g, b = hex:match("^#(%x%x)(%x%x)(%x%x)$")
+            assert(r and g and b, "colorFromString expects a six-digit RGB hex string")
+            return MOCK.rgb32_ctor(tonumber(r, 16), tonumber(g, 16), tonumber(b, 16), 0xFF)
+        end,
     }
 end
 package.preload["device"] = function()
@@ -99,7 +101,7 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.5" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.6" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
@@ -175,8 +177,16 @@ assert(test.colorRenderingEnabled(), "A color panel with KOReader color renderin
 local color_session = flatSession()
 color_session.color_enabled = true
 local color_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }
-local color_spans, rgb_spans, wrong_ink = 0, 0, 0
+local color_spans, rgb_spans, generic_rgb_spans, wrong_ink = 0, 0, 0, 0
 local function recordColorSpan(_, left, top, width, height, ink)
+    color_spans = color_spans + 1
+    if isRGBInk(ink) then
+        generic_rgb_spans = generic_rgb_spans + 1
+    end
+    assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
+    assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
+end
+local function recordRGB32Span(_, left, top, width, height, ink)
     color_spans = color_spans + 1
     if isRGBInk(ink) then
         rgb_spans = rgb_spans + 1
@@ -185,11 +195,11 @@ local function recordColorSpan(_, left, top, width, height, ink)
     assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
     assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
 end
--- Draw DApp uses this normal KOReader paintRect contract with ColorRGB32 inks;
--- Minecraft must work with the same canvas and must not require another API.
-color_canvas:paintTo({ paintRect = recordColorSpan }, 17, 29)
+-- Square uses this exact path: colorFromString(hex) + paintRectRGB32.
+color_canvas:paintTo({ paintRect = recordColorSpan, paintRectRGB32 = recordRGB32Span }, 17, 29)
 assert(color_spans > 10, "Color rendering must still paint the projected block scene")
 assert(rgb_spans > 0, "Color rendering must paint RGB material colors on a color buffer")
+assert(generic_rgb_spans == 0, "RGB material colors must not go through generic paintRect")
 assert(wrong_ink == 0, "Grass ground must use the RGB grass palette color, not a converted gray")
 
 -- The whole ground plane must appear as one color, not as flat gray blocks.
@@ -205,7 +215,7 @@ local function recordColorPixels(_, left, top, width, height, ink)
         end
     end
 end
-test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }:paintTo({ paintRect = recordColorPixels }, 0, 0)
+test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }:paintTo({ paintRect = recordColorPixels, paintRectRGB32 = recordColorPixels }, 0, 0)
 local function countPixels(value, first_row, last_row)
     local count = 0
     for row = first_row, last_row do
@@ -296,15 +306,15 @@ assert(motion_session.yaw ~= swipe_yaw, "Swipe look must change yaw")
 local original_pitch = motion_session.pitch
 assert(canvas:onSwipeMinecraftLook(nil, { direction = "north" }), "Vertical swipes must look up")
 assert(motion_session.pitch > original_pitch, "Swipe look must change pitch")
-
 dirty_calls, repaint_calls = {}, 0
 canvas._refresh_count = 0
 local paint_calls = 0
-canvas:paintTo({ paintRect = function(_, left, top, width, height)
+local function recordMotionPaint(_, left, top, width, height)
     paint_calls = paint_calls + 1
     assert(width >= 1 and height >= 1, "Renderer spans must have a positive physical size")
     assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
-end }, 17, 29)
+end
+canvas:paintTo({ paintRect = recordMotionPaint, paintRectRGB32 = recordMotionPaint }, 17, 29)
 assert(paint_calls > 30, "Voxel renderer must draw a substantial projected block scene")
 canvas._origin_x, canvas._origin_y = 17, 29
 assert(canvas:refreshFast(), "The game canvas must support a direct fast refresh")
@@ -325,5 +335,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.5 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.6 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

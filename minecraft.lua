@@ -68,15 +68,16 @@ local function colorRenderingEnabled()
     return Screen:isColorEnabled()
 end
 
--- One cached color object per palette entry. Blitbuffer.ColorRGB32 returns a
--- fresh struct on every call and separate structs never compare equal, which
--- would defeat the renderer's span merging in color mode.
+-- Match square.koplugin exactly: parse palette strings with colorFromString
+-- and send them to paintRectRGB32. Cache each parsed color so equal materials
+-- continue to coalesce into renderer spans.
 local rgb_colors = {}
 local function paletteColor(name)
     local color = rgb_colors[name]
     if color == nil then
         local rgb = COLOR_PALETTE[name] or COLOR_PALETTE.black
-        color = Blitbuffer.ColorRGB32(rgb[1], rgb[2], rgb[3], 0xFF)
+        local hex = string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
+        color = Blitbuffer.colorFromString(hex)
         rgb_colors[name] = color
     end
     return color
@@ -680,7 +681,11 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local top = y + floor(row * pixel_h)
         local bottom = y + floor((row + 1) * pixel_h)
         if right > left and bottom > top then
-            bb:paintRect(left, top, right - left, bottom - top, ink)
+            if color_mode then
+                bb:paintRectRGB32(left, top, right - left, bottom - top, ink)
+            else
+                bb:paintRect(left, top, right - left, bottom - top, ink)
+            end
         end
     end
     for ry = 0, rows - 1 do
@@ -979,7 +984,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.5",
+    version = "3.0.6",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
