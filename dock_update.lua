@@ -533,12 +533,10 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.3",
+    version = "1.1.4",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
     logo = "download",
     buildPane = buildPane,
-    backgroundTick = backgroundTick,
-    onAutostart = backgroundTick,
 }
