@@ -76,15 +76,9 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/file_manager.png"] = true, ["assets/logos/help.png"] = true,
     ["assets/logos/network.png"] = true, ["assets/logos/notes.png"] = true,
     ["assets/logos/settings.png"] = true, ["assets/logos/web_browser.png"] = true,
-    ["assets/surfaces/circle_overlay.png"] = true,
-    ["assets/surfaces/container_overlay.png"] = true,
-    ["assets/surfaces/liquid_glass_background.png"] = true,
-    ["assets/surfaces/liquid_glass_circle.png"] = true,
-    ["assets/surfaces/liquid_glass_container.png"] = true,
-    ["assets/surfaces/liquid_glass_pill.png"] = true,
-    ["assets/surfaces/liquid_glass_tile.png"] = true,
-    ["assets/surfaces/pill_overlay.png"] = true,
-    ["assets/surfaces/tile_overlay.png"] = true,
+    ["assets/logos/battery.png"] = true, ["assets/logos/calendar.png"] = true,
+    ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
+    ["assets/logos/music.png"] = true,
 }
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -569,7 +563,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.7",
+    version = "1.1.8",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

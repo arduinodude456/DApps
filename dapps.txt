@@ -11,7 +11,7 @@ video_player.lua | 1.0.3 | gallery
 dreader.lua | 2.2.0 | document
 calendar.lua | 1.0.2 | calendar
 rss_reader.lua | 1.0.2 | rss
-dock_update.lua | 1.1.7 | download
+dock_update.lua | 1.1.8 | download
 appdock_guide.lua | 1.0.0 | help
 dpdf.lua | 1.0.0 | document
 widget_generator.lua | 1.0.0 | settings
