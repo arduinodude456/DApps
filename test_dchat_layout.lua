@@ -51,6 +51,8 @@ local image_widget_files = {}
 local image_widget_cache_modes = {}
 local test_is_android = true
 local deferred_ui_callback
+local appdock_keyboard_attach_count = 0
+local shown_ui_widget
 function Input:paintTo() end
 install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7 })
 install("ui/widget/container/centercontainer", Widget)
@@ -70,12 +72,17 @@ end })
 install("ui/widget/infomessage", Widget)
 install("ui/widget/container/inputcontainer", Input)
 install("ui/widget/inputdialog", Widget)
+install("appdock_keyboard", { attach = function(dialog)
+    appdock_keyboard_attach_count = appdock_keyboard_attach_count + 1
+    dialog.onShowKeyboard = function(self) self.appdock_keyboard_opened = true end
+    return true
+end })
 install("ui/widget/overlapgroup", Widget)
 install("ui/widget/textboxwidget", Widget)
 install("ui/widget/textwidget", Widget)
 local scheduled_ui_callback
 install("ui/uimanager", {
-    show = function() end,
+    show = function(_, widget) shown_ui_widget = widget end,
     close = function() end,
     scheduleIn = function(_, delay, callback)
         scheduled_ui_callback = { delay = delay, callback = callback }
@@ -91,6 +98,22 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
+local native_keyboard_opened = false
+local appdock_input_dialog = { onShowKeyboard = function() native_keyboard_opened = true end }
+dchat._test.showInputDialog(appdock_input_dialog)
+assert(appdock_keyboard_attach_count == 1, "DChat did not attach the AppDock keyboard to text input")
+assert(shown_ui_widget == appdock_input_dialog, "DChat did not show the input dialog")
+assert(appdock_input_dialog.appdock_keyboard_opened and not native_keyboard_opened, "DChat opened KOReader's native keyboard instead of the AppDock keyboard")
+local appdock_keyboard_stub = package.preload["appdock_keyboard"]
+package.preload["appdock_keyboard"] = nil
+package.loaded["appdock_keyboard"] = nil
+local native_fallback_dchat = assert(loadfile("dchat.lua"))()
+local native_fallback_opened = false
+local native_fallback_dialog = { onShowKeyboard = function() native_fallback_opened = true end }
+native_fallback_dchat._test.showInputDialog(native_fallback_dialog)
+assert(native_fallback_opened, "DChat did not fall back to the native keyboard when AppDock keyboard is unavailable")
+package.preload["appdock_keyboard"] = appdock_keyboard_stub
+package.loaded["appdock_keyboard"] = nil
 assert(dchat._test.cloneDirectMessage({ id = 7, authorName = "Test", body = "ok", createdAt = "2026-10-04T00:00:00Z" }).id == "7", "numeric DM id was not normalized")
 assert(dchat._test.cloneDirectMessage({ id = 8, authorName = "Test", body = "", attachmentMime = "image/png", attachmentData = "TWFudXM=", createdAt = "2026-10-04T00:00:00Z" }).attachmentData == "TWFudXM=", "PNG DM attachment was not preserved")
 local oversized_image = dchat._test.cloneDirectMessage({ id = 81, authorName = "Test", body = "", attachmentMime = "image/jpeg", attachmentData = string.rep("A", 700000), createdAt = "2026-10-04T00:00:00Z" })

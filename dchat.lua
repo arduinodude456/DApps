@@ -22,6 +22,10 @@ local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
+local ok_appdock_keyboard, AppDockKeyboard = pcall(require, "appdock_keyboard")
+if not ok_appdock_keyboard or type(AppDockKeyboard) ~= "table" or type(AppDockKeyboard.attach) ~= "function" then
+    AppDockKeyboard = nil
+end
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
@@ -59,6 +63,13 @@ local DM_EMOJIS = { "😀", "😂", "😍", "👍", "❤️" }
 local DM_EMOJI_FILES = { "smile.png", "laugh.png", "heart.png", "thumbs.png", "surprise.png" }
 local DM_EMOJI_LABELS = { ":)", "XD", "<3", "+1", "!!" }
 local DCHAT_SOURCE_DIR = (debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "")
+
+local function showInputDialog(dialog)
+    if AppDockKeyboard then pcall(AppDockKeyboard.attach, dialog) end
+    UIManager:show(dialog)
+    if dialog.onShowKeyboard then dialog:onShowKeyboard() end
+    return dialog
+end
 
 local function scale(value)
     return Device.screen:scaleBySize(value)
@@ -462,8 +473,7 @@ local function setEndpoint(state, context)
             refresh(context)
         end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function setDMEndpoint(state, context)
@@ -480,8 +490,7 @@ local function setDMEndpoint(state, context)
             refresh(context)
         end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function registerIdentity(state, context, display_name)
@@ -514,8 +523,7 @@ local function promptIdentity(state, context, reset)
             registerIdentity(state, context, name)
         end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function createOrResetIdentity(state, context)
@@ -602,8 +610,7 @@ local function promptMessage(state, context)
             sendMessage(state, context, text)
         end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function selectedRecipient(state)
@@ -717,8 +724,7 @@ local function promptRecipientSearch(state, context)
         title = _("Find recipient"), input = "", input_hint = _("Display name or device ID"),
         buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Search"), is_enter_default = true, callback = function() local query = dialog:getInputText(); UIManager:close(dialog); fetchRecipients(state, context, query) end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function sendDirectMessage(state, context, text, attachment)
@@ -739,8 +745,7 @@ local function promptDirectMessage(state, context, initial_text)
         title = _("Send private message"), input = initial_text or "", input_hint = _("Text or attached image, up to 1500 characters"),
         buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text, nil) end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function selectedMessage(state)
@@ -795,8 +800,7 @@ local function chooseImageAttachment(state, context)
             attachPath(path)
         end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local function selectedDirectMessage(state)
@@ -820,8 +824,7 @@ local function promptReport(state, context)
         title = _("Report public message"), input = "", input_hint = _("Optional note for moderation"),
         buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Spam"), callback = function() local note = dialog:getInputText(); UIManager:close(dialog); reportMessage(state, context, "spam", note) end }, { text = _("Abuse"), is_enter_default = true, callback = function() local note = dialog:getInputText(); UIManager:close(dialog); reportMessage(state, context, "abuse", note) end } } },
     }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+    showInputDialog(dialog)
 end
 
 local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "", primary = false, callback = nil }
@@ -1158,7 +1161,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.16",
+    version = "1.4.17",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -1173,5 +1176,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { showInputDialog = showInputDialog, validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
