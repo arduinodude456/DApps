@@ -92,6 +92,13 @@ end
 local DM_EMOJIS = { "😀", "😂", "😍", "👍", "❤️" }
 local DM_EMOJI_FILES = { "smile.png", "laugh.png", "heart.png", "thumbs.png", "surprise.png" }
 local DM_EMOJI_LABELS = { ":)", "XD", "<3", "+1", "!!" }
+local DM_EMOJI_BASE64 = {
+    ["smile.png"] = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACF0lEQVR4nO1b2XUDIQwkeanABbgAl+QCXZIL2ALcQvKlZ6xwSDDiWJjPPYQ0jFjxVji3sbE0vloOdr1ef6XPHsfRxDfTQTQB52BFiInRWODPx0Vs43Z/Ba+jiYAa44FrAs6BE4IiAmLEMnAONBHVBPjBWwbO4RNRQ0Lxi70C56gl4rtk0FGC5+OXfHXUBIwUPKGGBJVkyPgogYdAKSFNB7ECZgjeubd/UiWICEBWdC0h8Vu1Bow++wSNn1kCZpE+hzQVkgTMGjxBQsIPckC/KLEgzcJ+VAHa2ec1emw3V4pS+zkVFFWCHDFnUCRY2g8SMHvuc6RUAF0DJJDMWkvi/ynAavZv95dYsppnpYipALIGxMh6Pi5VwdC7Kfu1gKUABesjFnjK8dA7oWsohULXAHKqxmH/OcvACR9bRkT+c6cRDiNt8u0yZA3gxgmo2eJ2kAsklAAfaKlafRphBFjvA7hdlArMFDALTPcC1jDbC9TAuoxF298p0NuB3oBUgq23zcjxllfABwFUHvZa1a0R+mu0FdDbgd7YBPALZ10HYn+NtwJCF8+mglTPwFZA7MZZVJDrGNkKSN2cXQWSfqGsAmYlQdospUqBWUjQ+CkioFXvPhoSv8UKmCUVtH2C6pkdsVPUufKeYfVn0Dc+ihpqGqaL6oCRSKjtFt/nBRDOLH1ixMeyZ4Y4lj01xrHsucEYRjw5urE6/gA2oELQDpV/nQAAAABJRU5ErkJggg==",
+    ["laugh.png"] = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACF0lEQVR4nO1bO3YDIQwkeal8iO1zvxzD93O/h0ibVDwTBVgJZvgYprOfLaRBAiGEcxsbS+Ot5WDHcfxof3ueZxPdqINYDL4CixCK0JThj/tNLePz6zv6PZoIqDBpuMXgK0hCUERAhDANl0ATUU1AaDzTcImQiBoSiv/Yy3CJWiLeSwYdxXg5fsmuYyZgJOM9akgwuYwXPorhMfiQ0IaD2gNmMN65p35aT1ARgMzoWkKjt2kNGH32PSx6XhIwi+tLaEMhS8CsxntoSPhADhgmJQzSGPKTHmCdfZmjp05zpSiVf+UFRZmgREoZFAlM+VECZo99iZwXQDxgZvwj4NVm3yPlBRAPSJGFIpEpHxYCUhm0B7HkQ/MAdtgw5P/xgFeNf4/YOrB3gd4K9MYmoLcCvbEJ6K1AbyxPACQRYhdCmOMt7wGbgPCDv02pqbSgS2FI+bFbI+pxmI2hjsOzglIPYIVBk7I4Yh1A/B8tL3VrDA0BOSussjhyzUneodcUR2KGjyAn1jMALYl5PO637E1Ozoic1zB2m2wXBaJEhggDxPipjhGKB4TwypcQ0SK/uOyjQRdKNUSgx8r1C6kaiWasFmubpUzbIDvPR8Gip4qAVr37aGj0VnsAKkNkw9onaJ7ZETtFnSvvGTanwqHwUbyhpmG66CwwEgm13eL7vQBCmaVfjIRY9s2QxLKvxiSWfTeYwogvRzdWxy+CSjkaLxz70AAAAABJRU5ErkJggg==",
+    ["heart.png"] = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACEklEQVR4nO1by1XEMAw0POoId4rY+xax1VEE9y2C+6YROPkRvHYsWTOK/eK5kRckzXj82Tw5hImJU+PFM9myLD/Sd9d1damNmkRDuAaWIJSgJeL3j4s4xuX7nn2OFgIaLCWuIVxDKghKCEgQJvEUaCHMAmzJM4mn2AphEaH5H48insIqxGtL0l7Ip/lbdh21AD2Rj7CIoLJMDN4L8RzilJBOB7EDRiAfwl99UieIBECe6DwhqVu1BvQ++hGaOqsCjGL9FNKpsCvAqOQjJCK8sYt4//rMPn9cb6Z3UShuFdbRL5FJ8bjeVO+2YG9rbDoJ1iAlxHxXiqwAltFnFGmNv7cWUBwwEp4E6Hn0LXlKLpgOQAXyGn10vumA7R+jn/xqyK0DEAd42x+ZFyIA86jKzjvXAFQgbxeg8k0HIIN5uQCZZzoAHZDtAnR8igNYIjDi0qYAuliWqP8EiJ+MSs0JWqCKRsXJfRqjL4LW4tlrytwFPJK0jqLHueJJAPQ6EKElgyZf+jQ+p0Du4dEu8Br9EA5wQI2c96/KogAsF3ij1jFyyBpQGuUjviztCsB0QUqWQV7SL1R1wKhTQdospZoCrF2BtepLIBKA2bvPnPeSusUOGGUqaPsE1SPbY6doCO09w+ptcBu8FzdYGqabzgE9iWDtFp/3BRDFnPrGyBanvTOU4rS3xlKc9t5gCT3eHJ04O34B1Is2/ufMI+0AAAAASUVORK5CYII=",
+    ["thumbs.png"] = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACAElEQVR4nO2bzXnDIAyGlT6ZgwG6SW/doCN0gxyyQUfoBr11kw7gRZITT4kCRgJhS0bvMXEAfXz8BAsAx5ma05aVhRBu1GeXZdmkbUMr4QRcY5QgQwotBf56fSeX8Xf5yX4uLYRoYThwTsA1sCBSQogUMjJwjLQQ3QKkwY8MHJMK0SNC8w/3ChzTK8RLS6Vagsf1t6w6bAE0BR/pEYFlmVi4lsBzxCFBHQ5kB1gIHuC/fVQnnCkPtYyt34+v6jNv35/cYlmEEG41J7DmAO29H+G0syqAFetjqENhVQCrwUcoIjTtA45EUQDrvR+pucAdkPvwKL0fWXMBaR8wCspeIWXEvuHJAZp7nytYSskF5uaAHhFymBMAQFYEkwJI8iCA5vEvQW4ecAfs3YC96doHSM/IezC9A5oFOELvA7gDXIAmAY5ifwB3gAvwIEA8Qy8lJwDYtn/urdH0DmDvBPGpjGVHAAgcieWOqSyJkn1vJv23eIQg3PPB0lvj6eeArACU1cASazkD7oDSF5IukD7P55RXyxjZzAFSIkiLuSqA9FzQ23ipmT+FlEhk8bSYmizFGgJWVgVOO0kCbJW7Lw2l3WQHWNkbcPME2T2rMVMUoD1nmL0MpoVrcUNPwnTTPkCTCL3Z4n5fQKIxU98YSZn2zhBm2ltjmGnvDZbQeHPUmZ07QU0KIT9zOsQAAAAASUVORK5CYII=",
+    ["surprise.png"] = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAB+klEQVR4nO1b23UEIQg1OVvHlJIKUlBKSEGpIKVMI8mXJ4aVERQQR+7fvhCuF8UdTCkQ2BovloMdx/FD/e55nia+qQ7CCbgFLUJUjGKBv318kW18f75X35cmQtQYDJwTcAuQECkiRIxoBg4hTcQwAWXwmoFDlESMkND9w1mBQ4wS8dozqJfg4fg9uw6bAE/BZ4yQwJJMNu4l8BpySlDTgayAFYJP6c8/qhJIBEhWdJag+M1aA7zPfgbHzyYBq0gfgpoKlwSsGnwGhYSH5IBlUaJBmoZ9VAHc2Yc1Onaa60Wv/ZYKuipBCMwZKRI07VcJWD33Ia5UIKKAlfFEwN1mPwNTgYgCMLKkSNS0L5YC0BlpBWnZF60DtNNGw/4/Bdw1/zNq60DsArMdmA3RNYAL7bMDBVMIqJWw+T1rIsxToFW/Sx+iWth+DTAlgDq7lioIBcx2YDaCgPJFfppivRJbofbUyFQB1D3eshaIFLAesDW71pVg9Qmq1bHY8iyAPTWeehjy8L9DNQXuthtc9QzEIoh9cBcVtDpGQgFXH66uAkq/UFMBq5JAbZZipcAqJHD8JBFg1bsvDYrfZAWskgrcPkH2zHrsFE2pv2eYvQ2Wxr2oYaRhuqsO8ETCaLd43BeQcGbrGyMltr0zBLHtrTGIbe8NYvB4czSwO34Bxpwg2k0vbIEAAAAASUVORK5CYII=",
+}
 local DCHAT_SOURCE_DIR = (debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "")
 
 local function showInputDialog(dialog)
@@ -1024,15 +1031,8 @@ local function dmPreview(text, maximum)
 end
 
 local function sendEmojiBitmap(state, context, emoji_file)
-    local path = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. emoji_file
-    local file = io.open(path, "rb")
-    if not file then
-        state.status = _("The emoji bitmap could not be opened.")
-        refresh(context)
-        return
-    end
-    local data = file:read(MAX_ATTACHMENT_BYTES + 1)
-    file:close()
+    local encoded = DM_EMOJI_BASE64[emoji_file]
+    local data = encoded and base64Decode(encoded) or nil
     if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then
         state.status = _("The emoji bitmap is too large to send.")
         refresh(context)
@@ -1226,7 +1226,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.5.1",
+    version = "1.5.2",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
