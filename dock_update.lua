@@ -44,7 +44,10 @@ local MAX_METADATA_BYTES = 128 * 1024
 local MAX_FILE_BYTES = 192 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_TOTAL_BYTES = 8 * 1024 * 1024
-local MAX_SOURCE_FILES = 32
+-- A current AppDock release contains the core Lua modules plus bundled
+-- logos, lockscreen art and raster surface assets. Keep the count bounded,
+-- but do not reject that explicit package layout as "too many source files".
+local MAX_SOURCE_FILES = 48
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
@@ -52,6 +55,32 @@ local REQUIRED_FILES = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua",
+}
+local ALLOWED_SOURCE_FILES = {
+    ["_meta.lua"] = true, ["main.lua"] = true,
+    ["appdock_appstore.lua"] = true, ["appdock_boot.lua"] = true,
+    ["appdock_browser.lua"] = true, ["appdock_dapps.lua"] = true,
+    ["appdock_filemanager.lua"] = true, ["appdock_help.lua"] = true,
+    ["appdock_homescreen.lua"] = true, ["appdock_keyboard.lua"] = true,
+    ["appdock_layout.lua"] = true, ["appdock_lockscreen.lua"] = true,
+    ["appdock_logo.lua"] = true, ["appdock_manager.lua"] = true,
+    ["appdock_motion.lua"] = true, ["appdock_notifications.lua"] = true,
+    ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true,
+    ["appdock_sleepscreen.lua"] = true, ["appdock_surface.lua"] = true,
+    ["appdock_theme.lua"] = true, ["appdock_wallpaper.lua"] = true,
+}
+local ALLOWED_ASSET_FILES = {
+    ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
+    ["assets/logos/analog_clock.png"] = true, ["assets/logos/app_store.png"] = true,
+    ["assets/logos/appdock.png"] = true, ["assets/logos/display.png"] = true,
+    ["assets/logos/file_manager.png"] = true, ["assets/logos/help.png"] = true,
+    ["assets/logos/network.png"] = true, ["assets/logos/notes.png"] = true,
+    ["assets/logos/settings.png"] = true, ["assets/logos/web_browser.png"] = true,
+    ["assets/surfaces/circle_overlay.png"] = true,
+    ["assets/surfaces/container_overlay.png"] = true,
+    ["assets/surfaces/liquid_glass_background.png"] = true,
+    ["assets/surfaces/pill_overlay.png"] = true,
+    ["assets/surfaces/tile_overlay.png"] = true,
 }
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -143,17 +172,15 @@ end
 
 local function safeSourcePath(path)
     if type(path) ~= "string" or #path == 0 or #path > 160 then return false end
-    -- AppDock releases are deliberately restricted to the established root Lua
-    -- layout. This blocks paths, native libraries, archives and hidden payloads.
-    if path == "main.lua" or path == "_meta.lua" then return true end
-    return path:match("^appdock_[%w_%-]+%.lua$") ~= nil
+    -- AppDock releases use an explicit module allowlist. This blocks tests,
+    -- documentation, archives and unrelated repository Lua files.
+    return ALLOWED_SOURCE_FILES[path] == true
 end
 
 local function safeAssetPath(path)
     if type(path) ~= "string" or #path == 0 or #path > 160 then return false end
-    -- Only bundled PNGs below the AppDock asset directory are accepted. This
-    -- deliberately excludes arbitrary archives, native files and hidden paths.
-    return path:match("^assets/[%w_%-]+/[%w_%-]+%.png$") ~= nil
+    -- Only the assets used by the current AppDock plugin are accepted.
+    return ALLOWED_ASSET_FILES[path] == true
 end
 
 local function releasePathKind(path)
@@ -538,7 +565,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.5",
+    version = "1.1.6",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
