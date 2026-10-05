@@ -1353,7 +1353,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.7.0",
+    version = "1.7.1",
     title = "DChat",
     subtitle = "WhatsApp-style chats and multi-account profiles",
     symbol = "D",
