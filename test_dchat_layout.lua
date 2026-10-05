@@ -215,6 +215,12 @@ dchat._test.replaceRecipients(dedupe_store, {
     { deviceId = "dch_other", displayName = "Same account" },
 })
 assert(#dedupe_store.recipients == 2, "recipient list did not remove duplicate device accounts")
+local own_filter_store = { device_id = "dch_own", recipients = {} }
+dchat._test.replaceRecipients(own_filter_store, {
+    { deviceId = "dch_own", displayName = "This reader" },
+    { deviceId = "dch_other", displayName = "Other reader" },
+})
+assert(#own_filter_store.recipients == 1 and own_filter_store.recipients[1].deviceId == "dch_other", "recipient list exposed the local device")
 for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
     local pane = dchat.buildPane({}, { dimen = dimen, px = function(value) return value end, requestRebuild = function() end, appdock = {} })
 assert(type(pane) == "table", "pane did not build")

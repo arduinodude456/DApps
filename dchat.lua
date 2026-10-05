@@ -232,7 +232,7 @@ local function cloneStore(raw)
     end
     for index, raw_recipient in ipairs(type(raw.recipients) == "table" and raw.recipients or {}) do
         local recipient = cloneRecipient(raw_recipient)
-        if recipient and not recipient_seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
+        if recipient and recipient.deviceId ~= raw.device_id and not recipient_seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
             recipient_seen[recipient.deviceId] = true
             recipients[#recipients + 1] = recipient
         end
@@ -392,7 +392,7 @@ local function replaceRecipients(store, raw_recipients)
     local recipients, seen = {}, {}
     for _, raw_recipient in ipairs(type(raw_recipients) == "table" and raw_recipients or {}) do
         local recipient = cloneRecipient(raw_recipient)
-        if recipient and not seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
+        if recipient and recipient.deviceId ~= store.device_id and not seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
             seen[recipient.deviceId] = true
             recipients[#recipients + 1] = recipient
         end
@@ -799,8 +799,30 @@ local function sendDirectMessage(state, context, text, attachment)
     local recipient = selectedRecipient(state)
     local message = safeText(text, MAX_TEXT_BYTES)
     if not recipient or (not message and not attachment) then state.status = _("Choose a recipient and use text or a small image."); refresh(context); return end
+    if recipient.deviceId == state.store.device_id then
+        state.store.selected_recipient_id = ""
+        state.store.selected_recipient_name = ""
+        state.view = "dm"
+        state.status = _("You cannot send a private message to this reader. Choose another recipient.")
+        saveStore(state.store)
+        refresh(context)
+        return
+    end
     local response, code, err = httpJson(state.store, "POST", "/dms", { recipientDeviceId = recipient.deviceId, text = message or "", attachment = attachment }, true, state.store.dm_endpoint)
-    if not response then state.status = err or _("Private message could not be sent."); refresh(context); return end
+    if not response then
+        if code == 400 then
+            state.store.selected_recipient_id = ""
+            state.store.selected_recipient_name = ""
+            state.view = "dm"
+            state.status = _("This recipient is no longer available. The recipient list was refreshed.")
+            saveStore(state.store)
+            fetchRecipients(state, context, "")
+            return
+        end
+        state.status = err or _("Private message could not be sent.")
+        refresh(context)
+        return
+    end
     state.status = _("Private message sent. It is stored server-side and is not end-to-end encrypted.")
     fetchConversation(state, context)
 end
