@@ -54,6 +54,7 @@ local CONVERSATION_RETRY_LIMIT = 5
 local MAX_CACHE_MESSAGES = 60
 local MAX_VISIBLE_PER_PAGE = 5
 local MAX_RECIPIENTS = 120
+local MAX_PROFILES = 12
 local CONNECT_TIMEOUT = 10
 local REQUEST_MAX_TIME = 25
 local BACKGROUND_CHECK_SECONDS = 15 * 60
@@ -66,6 +67,7 @@ local CHAT_TEAL = Blitbuffer.COLOR_DARK_CYAN or CHAT_GREEN
 local CHAT_PURPLE = Blitbuffer.COLOR_DARK_MAGENTA or CHAT_GREEN
 local CHAT_GOLD = Blitbuffer.COLOR_DARK_YELLOW or CHAT_GREEN
 local CHAT_MESSAGE = Blitbuffer.COLOR_LIGHT_BLUE or CHAT_LIGHT_GREEN
+local CHAT_CHECK = Blitbuffer.COLOR_DARK_BLUE or CHAT_NAVY
 local CHAT_BACKGROUND = Blitbuffer.COLOR_LIGHT_GRAY
 local active_palette
 
@@ -218,42 +220,75 @@ local function cloneDirectMessage(raw)
     return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")), readAt = trim(tostring(raw.readAt or "")), attachmentMime = attachment_mime, attachmentData = attachment_data }
 end
 
+local function cloneProfile(raw)
+    if type(raw) ~= "table" then return nil end
+    local device_id = trim(raw.device_id or raw.deviceId):sub(1, 52)
+    local device_secret = trim(raw.device_secret or raw.deviceSecret):sub(1, 128)
+    local display_name = safeText(raw.display_name or raw.displayName, MAX_NAME_BYTES)
+    if not device_id:match("^dch_[%w_%-]+$") or not device_secret:match("^[%w_%-]+$") or not display_name then return nil end
+    return { profile_id = device_id, device_id = device_id, device_secret = device_secret, display_name = display_name }
+end
+
 local function cloneStore(raw)
     raw = type(raw) == "table" and raw or {}
     local messages, seen = {}, {}
     local recipients, recipient_seen = {}, {}
     local dm_messages, dm_seen = {}, {}
-    for index, raw_message in ipairs(type(raw.messages) == "table" and raw.messages or {}) do
+    for _, raw_message in ipairs(type(raw.messages) == "table" and raw.messages or {}) do
         local message = cloneMessage(raw_message)
         if message and not seen[message.id] and #messages < MAX_CACHE_MESSAGES then
             seen[message.id] = true
             messages[#messages + 1] = message
         end
     end
-    for index, raw_recipient in ipairs(type(raw.recipients) == "table" and raw.recipients or {}) do
+    for _, raw_recipient in ipairs(type(raw.recipients) == "table" and raw.recipients or {}) do
         local recipient = cloneRecipient(raw_recipient)
         if recipient and not recipient_seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
             recipient_seen[recipient.deviceId] = true
             recipients[#recipients + 1] = recipient
         end
     end
-    for index, raw_dm_message in ipairs(type(raw.dm_messages) == "table" and raw.dm_messages or {}) do
+    for _, raw_dm_message in ipairs(type(raw.dm_messages) == "table" and raw.dm_messages or {}) do
         local message = cloneDirectMessage(raw_dm_message)
         if message and not dm_seen[message.id] and #dm_messages < MAX_CACHE_MESSAGES then
             dm_seen[message.id] = true
             dm_messages[#dm_messages + 1] = message
         end
     end
+    local profiles, profile_seen = {}, {}
+    for _, raw_profile in ipairs(type(raw.profiles) == "table" and raw.profiles or {}) do
+        local profile = cloneProfile(raw_profile)
+        if profile and not profile_seen[profile.profile_id] and #profiles < MAX_PROFILES then
+            profile_seen[profile.profile_id] = true
+            profiles[#profiles + 1] = profile
+        end
+    end
+    -- Migrate the pre-1.7 single-identity format without generating a new ID.
+    local legacy_profile = cloneProfile({ device_id = raw.device_id, device_secret = raw.device_secret, display_name = raw.display_name })
+    if legacy_profile and not profile_seen[legacy_profile.profile_id] and #profiles < MAX_PROFILES then
+        profiles[#profiles + 1] = legacy_profile
+        profile_seen[legacy_profile.profile_id] = true
+    end
+    local active_profile_id = trim(raw.active_profile_id or "")
+    if not profile_seen[active_profile_id] then
+        active_profile_id = profiles[1] and profiles[1].profile_id or ""
+    end
+    local active_profile
+    for _, profile in ipairs(profiles) do
+        if profile.profile_id == active_profile_id then active_profile = profile; break end
+    end
     local saved_endpoint = trim(raw.endpoint):gsub("/+$", "")
     if saved_endpoint == "" then saved_endpoint = DEFAULT_ENDPOINT end
     local saved_dm_endpoint = trim(raw.dm_endpoint):gsub("/+$", "")
     if saved_dm_endpoint == "" or saved_dm_endpoint == LEGACY_ENDPOINT then saved_dm_endpoint = DEFAULT_DM_ENDPOINT end
     return {
-        endpoint = saved_endpoint:gsub("/+$", ""):sub(1, MAX_ENDPOINT_BYTES),
+        endpoint = saved_endpoint:sub(1, MAX_ENDPOINT_BYTES),
         dm_endpoint = saved_dm_endpoint:sub(1, MAX_ENDPOINT_BYTES),
-        device_id = trim(raw.device_id):sub(1, 52),
-        device_secret = trim(raw.device_secret):sub(1, 128),
-        display_name = safeText(raw.display_name, MAX_NAME_BYTES) or "",
+        device_id = active_profile and active_profile.device_id or trim(raw.device_id):sub(1, 52),
+        device_secret = active_profile and active_profile.device_secret or trim(raw.device_secret):sub(1, 128),
+        display_name = active_profile and active_profile.display_name or safeText(raw.display_name, MAX_NAME_BYTES) or "",
+        profiles = profiles,
+        active_profile_id = active_profile_id,
         messages = messages,
         recipients = recipients,
         dm_messages = dm_messages,
@@ -266,11 +301,22 @@ local function cloneStore(raw)
     }
 end
 
+local function syncActiveProfile(store)
+    if type(store.profiles) ~= "table" or store.active_profile_id == "" or not tostring(store.device_id or ""):match("^dch_[%w_%-]+$") or tostring(store.display_name or "") == "" then return end
+    for _, profile in ipairs(store.profiles) do
+        if profile.profile_id == store.active_profile_id then
+            profile.device_id, profile.device_secret, profile.display_name = store.device_id, store.device_secret, store.display_name
+            return
+        end
+    end
+end
+
 local function loadStore()
     return cloneStore(G_reader_settings:readSetting(SETTINGS_KEY, {}))
 end
 
 local function saveStore(store)
+    syncActiveProfile(store)
     G_reader_settings:saveSetting(SETTINGS_KEY, cloneStore(store))
 end
 
@@ -485,7 +531,12 @@ local function wifiIsOn()
 end
 
 local function stateFor(instance)
-    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, recipient_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
+    if not instance.dchat then
+        local store = loadStore()
+        instance.dchat = { store = store, view = "timeline", page = 1, dm_page = 1, recipient_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
+        -- Persist defaults and the legacy single-account migration on first open.
+        saveStore(store)
+    end
     prepareAttachmentCache(instance.dchat)
     return instance.dchat
 end
@@ -529,6 +580,32 @@ local function setDMEndpoint(state, context)
     showInputDialog(dialog)
 end
 
+local function activeProfile(state)
+    for _, profile in ipairs(state.store.profiles or {}) do
+        if profile.profile_id == state.store.active_profile_id then return profile end
+    end
+end
+
+local function profileLabel(profile)
+    if not profile then return _("No local account") end
+    return profile.display_name .. " · …" .. profile.device_id:sub(-6)
+end
+
+local function activateProfile(state, profile_id)
+    for _, profile in ipairs(state.store.profiles or {}) do
+        if profile.profile_id == profile_id then
+            state.store.active_profile_id = profile.profile_id
+            state.store.device_id, state.store.device_secret, state.store.display_name = profile.device_id, profile.device_secret, profile.display_name
+            state.store.recipients, state.store.dm_messages = {}, {}
+            state.store.selected_recipient_id, state.store.selected_recipient_name = "", ""
+            state.recipient_page, state.dm_page, state.view = 1, 1, "settings"
+            saveStore(state.store)
+            return true
+        end
+    end
+    return false
+end
+
 local function registerIdentity(state, context, display_name)
     local name = safeText(display_name, MAX_NAME_BYTES)
     if not name or #name < 3 then state.status = _("Use a display name with 3–24 visible characters."); refresh(context); return end
@@ -536,68 +613,63 @@ local function registerIdentity(state, context, display_name)
     if not device_id then state.status = device_secret; refresh(context); return end
     local draft = cloneStore(state.store)
     draft.device_id, draft.device_secret, draft.display_name = device_id, device_secret, name
-    local response, code, err = httpJson(draft, "POST", "/devices", { deviceId = device_id, deviceSecret = device_secret, displayName = name }, false)
-    if not response then
-        state.status = err or _("DChat identity registration failed.")
-        refresh(context)
-        return
-    end
+    local response, _, err = httpJson(draft, "POST", "/devices", { deviceId = device_id, deviceSecret = device_secret, displayName = name }, false)
+    if not response then state.status = err or _("DChat identity registration failed."); refresh(context); return end
     local dm_response = httpJson(draft, "POST", "/devices", { deviceId = device_id, deviceSecret = device_secret, displayName = name }, false, draft.dm_endpoint)
+    state.store.profiles = state.store.profiles or {}
+    state.store.profiles[#state.store.profiles + 1] = { profile_id = device_id, device_id = device_id, device_secret = device_secret, display_name = name }
+    state.store.active_profile_id = device_id
     state.store.device_id, state.store.device_secret, state.store.display_name = device_id, device_secret, name
+    state.store.recipients, state.store.dm_messages = {}, {}
+    state.store.selected_recipient_id, state.store.selected_recipient_name = "", ""
     saveStore(state.store)
-    state.status = dm_response and _("Local DChat identity registered for public chat and DMs. This identity cannot be recovered after reset.") or _("Public identity registered; DMs will retry registration on first use.")
+    state.status = dm_response and _("Account added. It is now the active DChat account.") or _("Public account added; DMs will retry registration on first use.")
     refresh(context)
 end
 
-local function promptIdentity(state, context, reset)
+local function promptIdentity(state, context)
     local dialog
     dialog = InputDialog:new{
-        title = reset and _("Reset local identity") or _("Create local identity"), input = reset and "" or state.store.display_name, input_hint = _("Display name (3–24 characters)"),
-        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Create"), is_enter_default = true, callback = function()
-            local name = dialog:getInputText()
-            UIManager:close(dialog)
-            registerIdentity(state, context, name)
+        title = _("Add DChat account"), input = "", input_hint = _("Display name (3–24 characters)"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Add"), is_enter_default = true, callback = function()
+            local name = dialog:getInputText(); UIManager:close(dialog); registerIdentity(state, context, name)
         end } } },
     }
     showInputDialog(dialog)
 end
 
 local function createOrResetIdentity(state, context)
-    if not hasIdentity(state.store) then promptIdentity(state, context, false); return end
-    UIManager:show(ConfirmBox:new{
-        text = _("Reset this reader's DChat identity?\n\nThe current local device secret cannot be recovered or transferred. You will lose the ability to act as this identity. Public messages already posted remain public."),
-        ok_text = _("Reset identity"),
-        ok_callback = function() promptIdentity(state, context, true) end,
-    })
+    promptIdentity(state, context)
 end
 
 local function deleteIdentity(state, context)
-    if not hasIdentity(state.store) then
-        state.status = _("No local DChat identity to delete.")
-        refresh(context)
-        return
-    end
+    if not hasIdentity(state.store) then state.status = _("No active DChat account to delete."); refresh(context); return end
     local public_response, _, public_err = httpJson(state.store, "DELETE", "/devices", nil, true)
     local dm_response, _, dm_err = httpJson(state.store, "DELETE", "/devices", nil, true, state.store.dm_endpoint)
-    if not public_response and not dm_response then
-        state.status = public_err or dm_err or _("The DChat account could not be deleted.")
-        refresh(context)
-        return
-    end
-    local partial = not public_response or not dm_response
-    state.store.device_id, state.store.device_secret, state.store.display_name = "", "", ""
+    if not public_response and not dm_response then state.status = public_err or dm_err or _("The DChat account could not be deleted."); refresh(context); return end
+    local deleted_id = state.store.active_profile_id
+    local profiles = {}
+    for _, profile in ipairs(state.store.profiles or {}) do if profile.profile_id ~= deleted_id then profiles[#profiles + 1] = profile end end
+    state.store.profiles = profiles
+    local next_profile = profiles[1]
+    state.store.active_profile_id = next_profile and next_profile.profile_id or ""
+    state.store.device_id = next_profile and next_profile.device_id or ""
+    state.store.device_secret = next_profile and next_profile.device_secret or ""
+    state.store.display_name = next_profile and next_profile.display_name or ""
     state.store.recipients, state.store.dm_messages = {}, {}
     state.store.selected_recipient_id, state.store.selected_recipient_name = "", ""
     state.recipient_page, state.dm_page, state.view = 1, 1, "settings"
     saveStore(state.store)
-    state.status = partial and _("The account was deleted from one service; the other service could not be reached.") or _("DChat account deleted. Public messages already posted remain public.")
+    local partial = not public_response or not dm_response
+    state.status = partial and _("This account was deleted from one service; the other service could not be reached.") or _("The selected DChat account was deleted. Other accounts remain available.")
     refresh(context)
 end
 
 local function confirmDeleteIdentity(state, context)
+    local profile = activeProfile(state)
     UIManager:show(ConfirmBox:new{
-        text = _("Delete this DChat account from the public and private services? This removes the account and its server data and cannot be undone. Public messages already posted remain public."),
-        ok_text = _("Delete account"),
+        text = profile and (_("Delete the selected account ") .. profileLabel(profile) .. _(" from the public and private services? This cannot be undone. Other local accounts will remain.")) or _("No active account is available."),
+        ok_text = _("Delete selected account"),
         ok_callback = function() deleteIdentity(state, context) end,
     })
 end
@@ -998,29 +1070,37 @@ local function settingsPane(instance, context)
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
-    local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(38), math.floor(height / 13))
-    local endpoint_status = state.store.endpoint ~= "" and state.store.endpoint or _("Public service address missing")
-    local dm_endpoint_status = state.store.dm_endpoint ~= "" and state.store.dm_endpoint or _("DM service address missing")
-    local identity_status = hasIdentity(state.store) and (_("Identity: ") .. state.store.display_name) or _("No local identity")
+    local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(6), math.floor(width / 110)), math.max(px(34), math.floor(height / 14))
+    local profiles = state.store.profiles or {}
+    local current = activeProfile(state)
     local permissions = context.appdock and context.appdock.getDAppPermissions and context.appdock:getDAppPermissions("dchat") or {}
-    local background_status = permissions.background and _("Background checks: on · Wi-Fi only · every 15 minutes") or _("Background checks: off · enable in DApp permissions")
-    return OverlapGroup:new{
-        dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-        FrameContainer:new{ width = width, height = px(56), padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, px(56)) },
-        TextWidget:new{ text = _("DChat settings"), face = Font:getFace("cfont", px(20)), fgcolor = palette.on_secondary, bold = true, overlap_offset = { margin, margin } },
-        TextBoxWidget:new{ text = _("DChat has a public room and server-stored private chats. Private messages are not end-to-end encrypted. Do not share sensitive data. There is no account recovery or identity transfer."), face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = px(67), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + px(31) } },
-        TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(108) } },
-        TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(126) } },
-        TextWidget:new{ text = background_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(143) } },
-        TextWidget:new{ text = dm_endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(160) } },
-        ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Public address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(181) } },
-        ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("DM address"), primary = true, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, margin + px(181) } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + button_height + gap } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Delete my DChat account"), callback = function() confirmDeleteIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + 2 * button_height + 2 * gap } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
-        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(24) } },
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = px(56), padding = 0, bordersize = 0, background = palette.primary, emptySizedWidget(width, px(56)) },
+        TextWidget:new{ text = _("DChat accounts"), face = Font:getFace("cfont", px(20)), fgcolor = palette.on_primary, bold = true, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = current and (_("Active: ") .. profileLabel(current)) or _("No active account"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_primary, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(29) } },
+        TextBoxWidget:new{ text = _("Each account keeps its own device ID and secret. Switch accounts before chatting, or delete only the selected account. Public messages remain public after account deletion."), face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = px(54), line_height = 0.32, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, px(67) } },
     }
+    local y = px(126)
+    local half = math.floor((width - 2 * margin - gap) / 2)
+    for _, profile in ipairs(profiles) do
+        local is_current = profile.profile_id == state.store.active_profile_id
+        elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = (is_current and "✓ " or "") .. profileLabel(profile), primary = is_current, callback = function()
+            activateProfile(state, profile.profile_id); state.status = _("Active account switched."); refresh(context)
+        end, overlap_offset = { margin, y } }
+        y = y + button_height + gap
+        if y > height - px(160) then break end
+    end
+    local add_y = math.min(y, height - px(150))
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("＋ Add account"), button_background = palette.secondary, button_foreground = palette.on_secondary, callback = function() promptIdentity(state, context) end, overlap_offset = { margin, add_y } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Delete selected"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() confirmDeleteIdentity(state, context) end, overlap_offset = { margin + half + gap, add_y } }
+    local service_y = add_y + button_height + gap
+    elements[#elements + 1] = TextWidget:new{ text = permissions.background and _("Background checks: on · Wi-Fi only · every 15 minutes") or _("Background checks: off · enable in DApp permissions"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, service_y } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Public address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setEndpoint(state, context) end, overlap_offset = { margin, service_y + px(20) } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DM address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin + half + gap, service_y + px(20) } }
+    elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
+    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
+    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
 local function dmPane(instance, context)
@@ -1107,7 +1187,7 @@ local function attachmentFilePath(state, message)
     return path
 end
 
-local DMBubble = InputContainer:extend{ width = nil, height = nil, image_file = nil, body = "", bubble_background = nil, callback = nil }
+local DMBubble = InputContainer:extend{ width = nil, height = nil, image_file = nil, body = "", status = "", own = false, bubble_background = nil, callback = nil }
 function DMBubble:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     local padding = scale(7)
@@ -1118,11 +1198,17 @@ function DMBubble:init()
     if image then content[#content + 1] = image end
     local text_y = padding + (image and image_height or 0) + (image and scale(4) or 0)
     if self.body ~= "" then
-        content[#content + 1] = TextBoxWidget:new{ text = self.body, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .18))), width = content_width, height = math.max(scale(20), self.height - text_y - padding), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { padding, text_y } }
+        content[#content + 1] = TextBoxWidget:new{ text = self.body, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .18))), width = content_width, height = math.max(scale(20), self.height - text_y - padding - scale(13)), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { padding, text_y } }
     elseif image then
         content[#content + 1] = TextWidget:new{ text = _("Image"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { padding, self.height - padding - scale(16) } }
     end
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .12)), background = self.bubble_background or Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
+    if self.status ~= "" then
+        content[#content + 1] = TextWidget:new{ text = self.status, face = Font:getFace("smallinfofont", scale(9)), fgcolor = CHAT_CHECK, max_width = scale(28), overlap_offset = { self.width - padding - scale(28), self.height - padding - scale(12) } }
+    end
+    -- The small corner glyph gives the rounded rectangle the familiar chat-tail silhouette.
+    local tail = self.own and "◢" or "◣"
+    content[#content + 1] = TextWidget:new{ text = tail, face = Font:getFace("smallinfofont", scale(11)), fgcolor = self.bubble_background or Blitbuffer.COLOR_WHITE, overlap_offset = { self.own and self.width - scale(9) or -scale(1), self.height - scale(10) } }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(5, math.floor(self.height * .18)), background = self.bubble_background or Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
     self.ges_events = { TapDChatBubble = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function DMBubble:paintTo(bb, x, y)
@@ -1136,7 +1222,7 @@ function DMBubble:onTapDChatBubble()
 end
 
 local function dmBubble(width, height, message, own, callback)
-    local bubble_width = math.max(math.floor(width * 0.78), width - 40)
+    local bubble_width = math.max(math.floor(width * 0.70), width - 54)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
     local body = message.body
@@ -1144,8 +1230,8 @@ local function dmBubble(width, height, message, own, callback)
         local notice = isAndroidDevice() and _("Image attached; preview disabled on Android") or _("Image attachment · tap to view")
         body = (body ~= "" and body .. "\n" or "") .. notice
     end
-    if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
-    return DMBubble:new{ width = bubble_width, height = height, body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    local status = own and (message.readAt ~= "" and "✓✓" or "✓") or ""
+    return DMBubble:new{ width = bubble_width, height = height, body = dmPreview(body, 120), status = status, own = own, callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
@@ -1160,7 +1246,7 @@ local function dmConversationPane(instance, context)
     local button_height, row_height = math.max(px(32), math.floor(height / 16)), math.max(px(42), math.floor(height / 9))
     local elements = {
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = CHAT_BACKGROUND, emptySizedWidget(width, height) },
-        FrameContainer:new{ width = width, height = px(56), padding = margin, bordersize = 0, background = palette.primary, TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_primary, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(8) } }, TextWidget:new{ text = _("private chat · server stored"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_primary, max_width = width - 2 * margin, overlap_offset = { margin, px(31) } } },
+        FrameContainer:new{ width = width, height = px(56), padding = margin, bordersize = 0, background = palette.primary, TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_primary, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(8) } }, TextWidget:new{ text = _("online · private chat"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_primary, max_width = width - 2 * margin, overlap_offset = { margin, px(31) } } },
     }
     local fifth = math.floor((width - 2 * margin - 4 * gap) / 5)
     elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Message…"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, px(60) } }
@@ -1265,9 +1351,9 @@ end
 
 return {
     id = "dchat",
-    version = "1.6.0",
+    version = "1.7.0",
     title = "DChat",
-    subtitle = "Public Lounge and private device chats",
+    subtitle = "WhatsApp-style chats and multi-account profiles",
     symbol = "D",
     logo = "rss",
     buildPane = function(instance, context)
@@ -1280,5 +1366,5 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
-    _test = { showInputDialog = showInputDialog, validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { showInputDialog = showInputDialog, validEndpoint = validEndpoint, cloneStore = cloneStore, cloneProfile = cloneProfile, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }

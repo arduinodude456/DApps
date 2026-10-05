@@ -208,6 +208,13 @@ assert(dchat.buildPane(old_dm_instance, { dimen = { w = 800, h = 600 }, px = fun
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })
 assert(dual_store.endpoint == "https://appdock-bd7bcrzm.manus.space", "public endpoint was not normalized")
 assert(dual_store.dm_endpoint == "https://dchatdm-qkwwnvdq.manus.space", "DM endpoint was not initialized")
+local migrated_profiles = dchat._test.cloneStore({ device_id = "dch_legacyprofile", device_secret = "legacysecret", display_name = "Legacy" })
+assert(#migrated_profiles.profiles == 1 and migrated_profiles.active_profile_id == "dch_legacyprofile", "legacy identity was not migrated into a profile")
+local multi_profile_store = dchat._test.cloneStore({ profiles = {
+    { profile_id = "dch_one", device_id = "dch_one", device_secret = "secretone", display_name = "Alice" },
+    { profile_id = "dch_two", device_id = "dch_two", device_secret = "secrettwo", display_name = "Alice" },
+}, active_profile_id = "dch_two" })
+assert(#multi_profile_store.profiles == 2 and multi_profile_store.device_id == "dch_two", "multiple same-name profiles were not kept distinct")
 local dedupe_store = { recipients = {} }
 dchat._test.replaceRecipients(dedupe_store, {
     { deviceId = "dch_duplicate", displayName = "Same account" },
