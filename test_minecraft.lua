@@ -25,6 +25,11 @@ end
 local Widget = class({})
 local InputContainer = Widget:extend({})
 local dirty_calls, repaint_calls = {}, 0
+local shown_widget
+local InputDialog = Widget:extend({})
+function InputDialog:getInputText() return self.input or "" end
+function InputDialog:onShowKeyboard() self.keyboard_shown = true end
+local InfoMessage = Widget:extend({})
 
 -- Mutable device state, so one run can cover a color panel, a color panel with
 -- KOReader's "Color rendering" switched off, and a grayscale panel.
@@ -119,6 +124,8 @@ for _, module in ipairs({
 }) do
     package.preload[module] = function() return InputContainer end
 end
+package.preload["ui/widget/inputdialog"] = function() return InputDialog end
+package.preload["ui/widget/infomessage"] = function() return InfoMessage end
 package.preload["ui/uimanager"] = function()
     return {
         scheduleIn = function() end,
@@ -129,12 +136,14 @@ package.preload["ui/uimanager"] = function()
         end,
         forceRePaint = function() end,
         yieldToEPDC = function() end,
+        show = function(_, widget) shown_widget = widget end,
+        close = function(_, widget) if shown_widget == widget then shown_widget = nil end end,
     }
 end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.8" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.9" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.COLOR_RENDER_SAMPLE == 2, "Color mode must use a finer ray grid so texture dithering stays crisp")
@@ -167,8 +176,27 @@ assert(compact_cols == 7 and compact_rows == 12, "Compact panes must not oversam
 local world = test.buildWorld()
 assert(world.size == 80 and #world.heights == 80 and #world.heights[1] == 80, "World must be a complete deterministic block grid")
 assert(world.materials and world.materials[1][1], "World must contain block materials")
+assert(world.block_planes and test.blockAt(world, 0, 0, world.heights[1][1] - 1) == world.materials[1][1], "Cached voxel planes must preserve the visible surface block")
 assert(test.heightAt(world, -1, 0) == 0 and test.heightAt(world, 0, -1) == 0, "Outside terrain must be empty")
 assert(test.heightAt(world, 11, 5) >= 1 and world.biomes[6][12], "Seeded biome world must remain walkable")
+assert(test.parseWorldSeed(" 6789 ") == 6789 and test.parseWorldSeed("") == nil and test.parseWorldSeed("seed") == false, "Seed input must accept integers, leave blank for random, and reject invalid text")
+local spawn_x, spawn_z, spawn_yaw, spawn_tree = test.findSpawn(world)
+local spawn_material = world.materials[math.floor(spawn_z) + 1][math.floor(spawn_x) + 1]
+assert(spawn_material ~= "wood" and spawn_material ~= "leaves", "The default spawn must not start inside a tree canopy")
+assert(spawn_tree, "The default seed should select a tree to face")
+local tree_dx, tree_dz = spawn_tree.x - spawn_x, spawn_tree.z - spawn_z
+local tree_distance = math.sqrt(tree_dx * tree_dx + tree_dz * tree_dz)
+assert(tree_distance >= 6 and tree_distance <= 20, "The default spawn should have a nearby visible trunk")
+assert(test.hasClearTreeView(world, spawn_x, spawn_z, world.heights[math.floor(spawn_z) + 1][math.floor(spawn_x) + 1], spawn_tree, tree_distance), "The selected spawn-to-tree view must not be blocked by terrain")
+local facing_dot = (tree_dx * math.sin(spawn_yaw) + tree_dz * math.cos(spawn_yaw)) / tree_distance
+assert(facing_dot > 0.99, "The default spawn should face its visible tree")
+local alternate_world = test.buildWorld(6789)
+local alt_x, alt_z, alt_yaw, alt_tree = test.findSpawn(alternate_world)
+assert(alt_tree, "The alternate seed should also select a visible tree")
+local alt_dx, alt_dz = alt_tree.x - alt_x, alt_tree.z - alt_z
+local alt_distance = math.sqrt(alt_dx * alt_dx + alt_dz * alt_dz)
+assert(test.hasClearTreeView(alternate_world, alt_x, alt_z, alternate_world.heights[math.floor(alt_z) + 1][math.floor(alt_x) + 1], alt_tree, alt_distance)
+    and (alt_dx * math.sin(alt_yaw) + alt_dz * math.cos(alt_yaw)) / alt_distance > 0.99, "Alternate seeds must also spawn facing an unobstructed tree")
 local max_height = 0
 local plains_tree_cells = 0
 for z = 1, world.size do
@@ -197,6 +225,13 @@ place_session.player_x, place_session.player_z, place_session.yaw = 40.5, 40.5, 
 place_session.world.heights[43][41] = test.MAX_COLUMN_HEIGHT
 place_session.world.materials[43][41] = "stone"
 assert(not place_session:place() and place_session.world.heights[43][41] == test.MAX_COLUMN_HEIGHT, "Placing on a maximum-height column must not lower it")
+local edit_session = test.VoxelSession.new(12345)
+edit_session.player_x, edit_session.player_z, edit_session.yaw = 40.5, 40.5, 0
+edit_session.world.heights[43][41], edit_session.world.materials[43][41] = 3, "grass"
+test.rebuildWorldBlocks(edit_session.world)
+assert(edit_session:mine() and test.blockAt(edit_session.world, 40, 42, 1) == "grass" and test.blockAt(edit_session.world, 40, 42, 2) == nil, "Mining must update the cached top and remove the old voxel")
+edit_session:selectSlot(4)
+assert(edit_session:place() and test.blockAt(edit_session.world, 40, 42, 2) == "wood", "Placing must update the cached voxel plane")
 
 local function flatSession()
     local flat = test.VoxelSession.new()
@@ -206,6 +241,7 @@ local function flatSession()
             flat.world.materials[z][x] = "grass"
         end
     end
+    test.rebuildWorldBlocks(flat.world)
     flat.player_x, flat.player_z, flat.yaw, flat.pitch = 40.5, 40.5, 0, 0
     return flat
 end
@@ -255,9 +291,10 @@ for row = 0, 125 do
     for col = 0, 209 do color_pixels[row + 1][col + 1] = "white" end
 end
 local function recordColorPixels(_, left, top, width, height, ink)
+    local pixel_value = isRGBInk(ink) and ink.r == 0 and ink.g == 0 and ink.b == 0 and "black" or (isRGBInk(ink) and "color" or tostring(ink))
     for row = math.max(0, top), math.min(125, top + height - 1) do
         for col = math.max(0, left), math.min(209, left + width - 1) do
-            color_pixels[row + 1][col + 1] = isRGBInk(ink) and "color" or tostring(ink)
+            color_pixels[row + 1][col + 1] = pixel_value
         end
     end
 end
@@ -366,18 +403,47 @@ assert(repaint_calls == 1 and #dirty_calls == 1, "Fast refresh must repaint exac
 assert(dirty_calls[1].waveform == "fast", "Arena redraw must request KOReader's fast waveform")
 assert(dirty_calls[1].region.x == 17 and dirty_calls[1].region.y == 29 and dirty_calls[1].region.w == 210 and dirty_calls[1].region.h == 126, "Fast refresh region must match the canvas only")
 
-local pane = app.buildPane({}, {
+local pane_instance, rebuild_count = {}, 0
+local pane_context = {
     dimen = { w = 600, h = 420 },
     px = function(value) return value end,
-})
+    requestRebuild = function() rebuild_count = rebuild_count + 1 end,
+}
+local pane = app.buildPane(pane_instance, pane_context)
 assert(pane and pane.dimen.w == 600 and pane.dimen.h == 420, "Minecraft must build inside its assigned AppDock pane")
-local split_pane = app.buildPane({}, {
+local world_button
+for _, widget in ipairs(pane[1]) do
+    if widget.title == "Welt" then world_button = widget; break end
+end
+assert(world_button and world_button.width > 0, "The pane must expose a world/seed control")
+world_button.callback()
+local seed_dialog = shown_widget
+assert(seed_dialog and seed_dialog.title == "Neue Welt erzeugen" and seed_dialog.keyboard_shown, "World creation must prompt for a seed with the keyboard ready")
+seed_dialog.input = "6789"
+seed_dialog.buttons[1][2].callback()
+assert(pane_instance.minecraft.session.seed == 6789 and pane_instance.minecraft.session.world.seed == 6789, "Creating a world with an entered seed must reproduce that seed")
+assert(rebuild_count == 1 and shown_widget == nil, "Creating a seeded world must close the dialog and rebuild the pane")
+local repeated_world = test.buildWorld(6789)
+assert(repeated_world.heights[20][20] == pane_instance.minecraft.session.world.heights[20][20]
+    and repeated_world.materials[30][30] == pane_instance.minecraft.session.world.materials[30][30], "The same seed must reproduce the same terrain")
+world_button.callback()
+local invalid_dialog = shown_widget
+invalid_dialog.input = "not-a-number"
+invalid_dialog.buttons[1][2].callback()
+assert(pane_instance.minecraft.session.seed == 6789 and rebuild_count == 1 and shown_widget.text:find("ganze Zahl", 1, true), "Invalid seed input must explain the error without replacing the world")
+world_button.callback()
+seed_dialog = shown_widget
+seed_dialog.input = ""
+seed_dialog.buttons[1][2].callback()
+assert(pane_instance.minecraft.session.seed ~= 6789 and rebuild_count == 2, "An empty seed must create a distinct random-seed world")
+local split_pane = app.buildPane(pane_instance, {
     dimen = { w = 600, h = 350 },
     px = function(value) return value end,
+    requestRebuild = pane_context.requestRebuild,
 })
 assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "Minecraft must also fit a compact split pane")
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.8 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.9 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

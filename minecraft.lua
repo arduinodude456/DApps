@@ -16,6 +16,8 @@ local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
+local InfoMessage = require("ui/widget/infomessage")
+local InputDialog = require("ui/widget/inputdialog")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextWidget = require("ui/widget/textwidget")
@@ -28,6 +30,7 @@ local WORLD_SIZE = 80
 local MAX_TERRAIN_HEIGHT = 14
 local MAX_COLUMN_HEIGHT = 18
 local MAX_VIEW_DISTANCE = 24
+local MAX_WORLD_SEED = 2147483647
 local RENDER_SCALE = 1
 -- 600x600 output target. The renderer samples 5x5 output pixels as one
 -- logical ray. This keeps the requested 600x600 canvas while reducing the
@@ -74,6 +77,18 @@ local START_YAW = math.pi / 2
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 local function wrapAngle(value) return value % TAU end
+local function normalizeSeed(seed)
+    seed = tonumber(seed)
+    if not seed or seed ~= seed or seed == math.huge or seed == -math.huge then return 12345 end
+    return math.floor(seed) % MAX_WORLD_SEED
+end
+
+local function nextWorldSeed(current_seed)
+    local now = os.time and os.time() or 0
+    local seed = math.floor((now * 31 + current_seed * 17 + 1) % MAX_WORLD_SEED)
+    if seed == current_seed then seed = (seed + 7919) % MAX_WORLD_SEED end
+    return seed
+end
 
 local function colorRenderingEnabled()
     -- No separate device/constructor probe. Use KOReader's own mode query like
@@ -143,17 +158,24 @@ local function paletteMixForRGB(target_r, target_g, target_b)
     return cached
 end
 
+local material_mix_cache = {}
 local function paletteMixForMaterial(material, level)
+    local shades = material_mix_cache[material]
+    local shade_index = level + 1
+    if shades and shades[shade_index] then return shades[shade_index] end
     local source = MATERIAL_TARGET_RGB[material] or COLOR_PALETTE[MATERIAL_COLORS[material] or "black"]
     local factor = SHADE_FACTORS[level + 1] or 1
-    return paletteMixForRGB(source[1] * factor, source[2] * factor, source[3] * factor)
+    local mix = paletteMixForRGB(source[1] * factor, source[2] * factor, source[3] * factor)
+    shades = shades or {}
+    shades[shade_index] = mix
+    material_mix_cache[material] = shades
+    return mix
 end
 
 local function texturedColorInk(material, level, screen_x, screen_y)
     local mix = paletteMixForMaterial(material, level)
     local threshold = BAYER4[(screen_y % 4) + 1][(screen_x % 4) + 1]
-    local color_name = threshold < mix.second_pixels and mix.second or mix.first
-    return paletteColor(color_name)
+    return threshold < mix.second_pixels and mix.second or mix.first
 end
 
 -- Bound the DDA ray count while allowing each caller to select sampling density:
@@ -189,8 +211,9 @@ local function noise2(seed, x, z, scale_value)
     return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz
 end
 
+local rebuildWorldBlocks
 local function buildWorld(seed)
-    seed = tonumber(seed) or 12345
+    seed = normalizeSeed(seed)
     local world = { size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, biomes = {} }
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1], world.materials[z + 1], world.biomes[z + 1] = {}, {}, {}
@@ -250,7 +273,113 @@ local function buildWorld(seed)
             end end
         end
     end end
+    if rebuildWorldBlocks then rebuildWorldBlocks(world) end
     return world
+end
+
+local function yawToward(dx, dz)
+    local angle
+    if math.atan2 then
+        angle = math.atan2(dx, dz)
+    elseif dz == 0 then
+        angle = dx >= 0 and math.pi / 2 or -math.pi / 2
+    else
+        angle = math.atan(dx / dz)
+        if dz < 0 then angle = angle + (dx >= 0 and math.pi or -math.pi) end
+    end
+    return wrapAngle(angle)
+end
+
+local function hasClearTreeView(world, x, z, ground_height, trunk, distance)
+    local camera_y = ground_height + PLAYER_EYE_HEIGHT
+    local target_y = trunk.height - 0.25
+    local sample_count = math.floor(distance * 2 - 4)
+    for sample = 2, sample_count do
+        local fraction = sample / (distance * 2)
+        local sample_x = x + (trunk.x - x) * fraction
+        local sample_z = z + (trunk.z - z) * fraction
+        local column_x, column_z = math.floor(sample_x), math.floor(sample_z)
+        local obstruction_height = world.heights[column_z + 1][column_x + 1]
+        local ray_height = camera_y + (target_y - camera_y) * fraction
+        if obstruction_height > ray_height then return false end
+    end
+    return true
+end
+
+-- Avoid spawning inside a generated tree canopy. Prefer an open grass cell with
+-- a nearby trunk in view; seeds without a suitable tree fall back to a smooth,
+-- clear patch of terrain near the world center.
+local function findSpawn(world)
+    local size = world.size
+    local trunks = {}
+    for z = 2, size - 3 do
+        local materials = world.materials[z + 1]
+        for x = 2, size - 3 do
+            if materials[x + 1] == "wood" then
+                trunks[#trunks + 1] = { x = x + 0.5, z = z + 0.5, height = world.heights[z + 1][x + 1] }
+            end
+        end
+    end
+
+    local center = (size - 1) / 2
+    local best_tree_spawn, best_open_spawn
+    for z = 3, size - 4 do
+        local material_row = world.materials[z + 1]
+        local height_row = world.heights[z + 1]
+        for x = 3, size - 4 do
+            if material_row[x + 1] == "grass" then
+                local clear = true
+                for dz = -2, 2 do
+                    local nearby = world.materials[z + dz + 1]
+                    for dx = -2, 2 do
+                        local material = nearby[x + dx + 1]
+                        if material == "wood" or material == "leaves" then clear = false; break end
+                    end
+                    if not clear then break end
+                end
+                if clear then
+                    local height = height_row[x + 1]
+                    local roughness = 0
+                    for dz = -1, 1 do
+                        local neighbor_heights = world.heights[z + dz + 1]
+                        for dx = -1, 1 do
+                            roughness = math.max(roughness, math.abs(neighbor_heights[x + dx + 1] - height))
+                        end
+                    end
+                    local center_distance = math.sqrt((x - center) ^ 2 + (z - center) ^ 2)
+                    local open_score = center_distance + roughness * 2
+                    if not best_open_spawn or open_score < best_open_spawn.score then
+                        best_open_spawn = { x = x, z = z, score = open_score }
+                    end
+
+                    local nearest, nearest_distance2
+                    for _, trunk in ipairs(trunks) do
+                        local dx, dz = trunk.x - x, trunk.z - z
+                        local distance2 = dx * dx + dz * dz
+                        if distance2 >= 36 and distance2 <= 400
+                            and (not nearest_distance2 or distance2 < nearest_distance2) then
+                            local distance = math.sqrt(distance2)
+                            if hasClearTreeView(world, x + 0.5, z + 0.5, height, trunk, distance) then
+                                nearest, nearest_distance2 = trunk, distance2
+                            end
+                        end
+                    end
+                    if nearest_distance2 and nearest_distance2 >= 36 and nearest_distance2 <= 400 then
+                        local distance = math.sqrt(nearest_distance2)
+                        local score = math.abs(distance - 10) + center_distance * 0.12 + roughness * 1.4
+                        if not best_tree_spawn or score < best_tree_spawn.score then
+                            best_tree_spawn = { x = x, z = z, tree = nearest, score = score }
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local spawn = best_tree_spawn or best_open_spawn
+    if not spawn then return START_PLAYER_X, START_PLAYER_Z, START_YAW, nil end
+    local yaw = spawn.tree and yawToward(spawn.tree.x - spawn.x - 0.5, spawn.tree.z - spawn.z - 0.5) or START_YAW
+    return spawn.x + 0.5, spawn.z + 0.5, yaw, spawn.tree
 end
 
 local function heightAt(world, x, z)
@@ -264,10 +393,9 @@ local function materialAt(world, x, z)
 end
 
 local function textureCoordinates(face, hx, hy, hz, side)
-    local function fraction(value) return value - math.floor(value) end
-    if face == "top" or side == 1 then return fraction(hx), fraction(hz) end
-    if side == 0 then return fraction(hz), fraction(hy) end
-    return fraction(hx), fraction(hy)
+    if face == "top" or side == 1 then return hx - math.floor(hx), hz - math.floor(hz) end
+    if side == 0 then return hz - math.floor(hz), hy - math.floor(hy) end
+    return hx - math.floor(hx), hy - math.floor(hy)
 end
 
 local function blockHash3(seed, x, z, level)
@@ -277,13 +405,13 @@ local function blockHash3(seed, x, z, level)
 end
 
 -- The C program raycasts individual blocks, not just a column silhouette.
--- Keep the same layered rule in Lua so the DDA sees surface, dirt, stone and
--- sparse ore blocks at separate heights.
-local function blockAt(world, x, z, level)
+-- Keep its layered surface/dirt/stone/ore rule, then cache each voxel plane so
+-- the hot DDA loop does not redo nested table lookups and ore hashing per ray.
+local function rawBlockAt(world, x, z, level)
     if x < 0 or z < 0 or x >= world.size or z >= world.size or level < 0 then return nil end
-    local height = heightAt(world, x, z)
+    local height = world.heights[z + 1][x + 1] or 0
     if level >= height then return nil end
-    local surface = materialAt(world, x, z)
+    local surface = world.materials[z + 1][x + 1] or "grass"
     if level == height - 1 then return surface end
     if surface == "wood" or surface == "leaves" then
         return level >= math.max(0, height - 3) and surface or "dirt"
@@ -299,16 +427,53 @@ local function blockAt(world, x, z, level)
     return "dirt"
 end
 
+rebuildWorldBlocks = function(world)
+    local planes, size = {}, world.size
+    for level = 0, MAX_COLUMN_HEIGHT - 1 do
+        local plane = {}
+        for z = 0, size - 1 do
+            local index = z * size
+            for x = 0, size - 1 do
+                local material = rawBlockAt(world, x, z, level)
+                if material then plane[index + x + 1] = material end
+            end
+        end
+        planes[level + 1] = plane
+    end
+    world.block_planes = planes
+end
+
+local function rebuildBlockColumn(world, x, z)
+    local planes, index = world.block_planes, z * world.size + x + 1
+    if not planes then return end
+    for level = 0, MAX_COLUMN_HEIGHT - 1 do
+        planes[level + 1][index] = rawBlockAt(world, x, z, level)
+    end
+end
+
+local function blockAt(world, x, z, level)
+    if x < 0 or z < 0 or x >= world.size or z >= world.size or level < 0 then return nil end
+    local planes = world.block_planes
+    if planes then
+        local plane = planes[level + 1]
+        return plane and plane[z * world.size + x + 1] or nil
+    end
+    return rawBlockAt(world, x, z, level)
+end
+
 local VoxelSession = {}
 VoxelSession.__index = VoxelSession
 
 function VoxelSession.new(seed)
+    seed = normalizeSeed(seed)
+    local world = buildWorld(seed)
+    local player_x, player_z, yaw = findSpawn(world)
     local self = setmetatable({
-        seed = tonumber(seed) or 12345,
-        world = buildWorld(seed),
-        player_x = START_PLAYER_X,
-        player_z = START_PLAYER_Z,
-        yaw = START_YAW,
+        seed = seed,
+        world = world,
+        player_x = player_x,
+        player_z = player_z,
+        yaw = yaw,
         pitch = 0,
         steps = 0,
         last_event = _("Bereit — erkunde die Blockwelt."),
@@ -332,10 +497,14 @@ function VoxelSession:groundHeightAtPlayer()
 end
 
 function VoxelSession:newWorld(seed)
-    self.seed = tonumber(seed) or (self.seed + 1)
+    if self.motion then UIManager:unschedule(self._motionTick) end
+    if self.jump_frame then UIManager:unschedule(self._jumpTick) end
+    if seed == nil then self.seed = nextWorldSeed(self.seed) else self.seed = normalizeSeed(seed) end
     self.world = buildWorld(self.seed)
-    self.player_x, self.player_z, self.yaw, self.pitch = START_PLAYER_X, START_PLAYER_Z, START_YAW, 0
-    self.steps, self.last_event = 0, _("Neue Welt erzeugt.")
+    self.player_x, self.player_z, self.yaw = findSpawn(self.world)
+    self.pitch = 0
+    self.motion, self.jump_frame, self.jump_offset = nil, nil, 0
+    self.steps, self.last_event = 0, _("Neue Welt erzeugt. Seed: ") .. tostring(self.seed)
     return true
 end
 
@@ -375,6 +544,7 @@ function VoxelSession:mine()
     local material = materialAt(self.world, tx, tz)
     self.world.heights[tz + 1][tx + 1] = h - 1
     self.world.materials[tz + 1][tx + 1] = h - 1 <= 1 and "grass" or material
+    rebuildBlockColumn(self.world, tx, tz)
     self.inventory[material] = (self.inventory[material] or 0) + 1
     self.last_event = _("Block abgebaut.")
     return true
@@ -390,6 +560,7 @@ function VoxelSession:place()
     if height >= MAX_COLUMN_HEIGHT then self.last_event = _("Dieser Block ist bereits maximal hoch."); return false end
     self.world.heights[tz + 1][tx + 1] = height + 1
     self.world.materials[tz + 1][tx + 1] = material
+    rebuildBlockColumn(self.world, tx, tz)
     self.inventory[material] = self.inventory[material] - 1
     self.last_event = _("Block platziert.")
     return true
@@ -668,15 +839,10 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local aspect = height / width
     local floor, abs, min, max = math.floor, math.abs, math.min, math.max
     local world = session.world
+    local voxel_planes, world_size = world.block_planes, world.size
     local player_x, player_z = session.player_x, session.player_z
     local pitch = session.pitch or 0
-    local cp, sp = math.cos(pitch), math.sin(pitch)
-    local cy, sy = math.cos(session.yaw), math.sin(session.yaw)
-    -- Keep axes named: the DDA stores world space as X, Z, Y while Lua's
-    -- positional vectors previously mixed Z and Y during ray assembly.
-    local forward = { x = sy * cp, z = cy * cp, y = sp }
-    local right = { x = cy, z = -sy, y = 0 }
-    local up = { x = -sy * sp, z = -cy * sp, y = cp }
+    local yaw = session.yaw
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
@@ -704,14 +870,34 @@ function VoxelCanvas:_drawScene(bb, x, y)
         if level == 2 then return threshold < 2 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
         return Blitbuffer.COLOR_WHITE
     end
-    local col_x, col_z, row_x, row_z, row_y = {}, {}, {}, {}, {}
-    for rx = 0, cols - 1 do
-        local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
-        col_x[rx], col_z[rx] = right.x * nx, right.z * nx
-    end
-    for ry = 0, rows - 1 do
-        local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
-        row_x[ry], row_z[ry], row_y[ry] = up.x * ny, up.z * ny, up.y * ny
+    -- Camera directions depend on view geometry, not player position. Movement
+    -- animates four redraws at the same yaw/pitch, so cache normalized rays and
+    -- avoid repeating trigonometry plus one square root for every output cell.
+    local ray_cache = self._ray_cache
+    if not ray_cache or ray_cache.width ~= width or ray_cache.height ~= height
+        or ray_cache.cols ~= cols or ray_cache.rows ~= rows
+        or ray_cache.yaw ~= yaw or ray_cache.pitch ~= pitch then
+        local cp, sp = math.cos(pitch), math.sin(pitch)
+        local cy, sy = math.cos(yaw), math.sin(yaw)
+        local forward_x, forward_z, forward_y = sy * cp, cy * cp, sp
+        local right_x, right_z = cy, -sy
+        local up_x, up_z, up_y = -sy * sp, -cy * sp, cp
+        local ray_x, ray_z, ray_y = {}, {}, {}
+        for ry = 0, rows - 1 do
+            local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
+            local row_x, row_z, row_y = up_x * ny, up_z * ny, up_y * ny
+            for rx = 0, cols - 1 do
+                local nx = ((rx + 0.5) / cols * 2 - 1) * tan_half
+                local dir_x = forward_x + right_x * nx + row_x
+                local dir_z = forward_z + right_z * nx + row_z
+                local dir_y = forward_y + row_y
+                local inverse_length = 1 / math.sqrt(dir_x * dir_x + dir_z * dir_z + dir_y * dir_y)
+                local index = ry * cols + rx + 1
+                ray_x[index], ray_z[index], ray_y[index] = dir_x * inverse_length, dir_z * inverse_length, dir_y * inverse_length
+            end
+        end
+        ray_cache = { width = width, height = height, cols = cols, rows = rows, yaw = yaw, pitch = pitch, x = ray_x, z = ray_z, y = ray_y }
+        self._ray_cache = ray_cache
     end
     local function cast(ray_x, ray_z, ray_y)
         local cell_x, cell_z, cell_y = floor(player_x), floor(player_z), floor(camera_y)
@@ -726,7 +912,12 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local next_y = ray_y < 0 and (camera_y - cell_y) * delta_y or (cell_y + 1 - camera_y) * delta_y
         local dist, side = 0, 0
         for ray_step = 1, 24 do
-            local material = blockAt(world, cell_x, cell_z, cell_y)
+            local material
+            if cell_x >= 0 and cell_z >= 0 and cell_x < world_size and cell_z < world_size
+                and cell_y >= 0 and cell_y < MAX_COLUMN_HEIGHT then
+                local plane = voxel_planes[cell_y + 1]
+                material = plane[cell_z * world_size + cell_x + 1]
+            end
             if material then
                 return cell_x, cell_z, cell_y, dist, side, ray_x, ray_z, ray_y, material
             end
@@ -750,23 +941,20 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local bottom = y + floor((row + 1) * pixel_h)
         if right > left and bottom > top then
             if color_mode then
-                bb:paintRectRGB32(left, top, right - left, bottom - top, ink)
+                local rgb_ink = ink == "white" and Blitbuffer.COLOR_WHITE or paletteColor(ink)
+                bb:paintRectRGB32(left, top, right - left, bottom - top, rgb_ink)
             else
                 bb:paintRect(left, top, right - left, bottom - top, ink)
             end
         end
     end
+    local ray_x, ray_z, ray_y = ray_cache.x, ray_cache.z, ray_cache.y
     for ry = 0, rows - 1 do
         local row_ink, row_start
         for rx = 0, cols - 1 do
-            -- Same column/row decomposition as PocketOS: the horizontal part
-            -- is prepared once per column and the vertical part once per row.
-            local ray_x = forward.x + col_x[rx] + row_x[ry]
-            local ray_z = forward.z + col_z[rx] + row_z[ry]
-            local ray_y = forward.y + row_y[ry]
-            local inverse_length = 1 / math.sqrt(ray_x * ray_x + ray_z * ray_z + ray_y * ray_y)
-            ray_x, ray_z, ray_y = ray_x * inverse_length, ray_z * inverse_length, ray_y * inverse_length
-            local bx, bz, by, dist, side, hit_x, hit_z, hit_y, hit_material = cast(ray_x, ray_z, ray_y)
+            local index = ry * cols + rx + 1
+            local dir_x, dir_z, dir_y = ray_x[index], ray_z[index], ray_y[index]
+            local bx, bz, by, dist, side, hit_x, hit_z, hit_y, hit_material = cast(dir_x, dir_z, dir_y)
             local ink
             if bx then
                 local hx = player_x + hit_x * dist
@@ -779,10 +967,10 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 if not color_mode and side == 0 and (bx + bz) % 2 == 0 then
                     ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
                 end
-            elseif ray_y < 0 and (ry + rx) % 6 == 0 then
-                ink = Blitbuffer.COLOR_BLACK
+            elseif dir_y < 0 and (ry + rx) % 6 == 0 then
+                ink = color_mode and "black" or Blitbuffer.COLOR_BLACK
             else
-                ink = Blitbuffer.COLOR_WHITE
+                ink = color_mode and "white" or Blitbuffer.COLOR_WHITE
             end
             if rx == 0 then
                 row_ink, row_start = ink, rx
@@ -1050,9 +1238,44 @@ local function stateFor(instance)
     return state
 end
 
+local function parseWorldSeed(value)
+    local text = tostring(value or ""):match("^%s*(.-)%s*$")
+    if text == "" then return nil end
+    if not text:match("^[+-]?%d+$") then return false end
+    local seed = tonumber(text)
+    if not seed or seed < -MAX_WORLD_SEED or seed >= MAX_WORLD_SEED then return false end
+    return normalizeSeed(seed)
+end
+
+local function promptNewWorld(state, context)
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Neue Welt erzeugen"),
+        input = tostring(state.session.seed),
+        input_hint = _("Seed als Ganzzahl; leer = neuer Zufalls-Seed"),
+        buttons = {
+            {
+                { text = _("Abbrechen"), callback = function() UIManager:close(dialog) end },
+                { text = _("Erstellen"), is_enter_default = true, callback = function()
+                    local seed = parseWorldSeed(dialog:getInputText())
+                    if seed == false then
+                        UIManager:show(InfoMessage:new{ text = _("Bitte gib eine ganze Zahl zwischen -2147483647 und 2147483646 ein.") })
+                        return
+                    end
+                    UIManager:close(dialog)
+                    state.session:newWorld(seed)
+                    if context.requestRebuild then context.requestRebuild("ui") end
+                end },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
 return {
     id = "minecraft",
-    version = "3.0.8",
+    version = "3.0.9",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
@@ -1070,7 +1293,11 @@ return {
         local button_w = math.max(px(30), math.floor((canvas_w - 4 * gap) / 5))
         local joystick_size = math.min(px(76), math.floor(canvas_w * 0.22))
         local jump_w, jump_h = px(58), px(30)
-        local color_button_w = math.min(px(58), canvas_w)
+        local world_button_w = math.max(px(8), math.min(px(38), math.floor(canvas_w * 0.22)))
+        local header_gap = math.min(gap, math.floor(canvas_w * 0.04))
+        local color_button_w = math.max(0, math.min(px(58), canvas_w - world_button_w - header_gap))
+        local heading_w = math.max(px(1), canvas_w - color_button_w - world_button_w - header_gap - px(8))
+        local heading_size = heading_w < px(105) and px(14) or px(18)
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
         local hotbar = Hotbar:new{ width = canvas_w, height = px(30), session = state.session }
         local inventory_panel = InventoryPanel:new{ width = canvas_w, height = canvas_h, session = state.session }
@@ -1102,9 +1329,10 @@ return {
             dimen = pane.dimen,
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-            TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = math.max(px(40), canvas_w - color_button_w - px(8)), overlap_offset = { margin, px(6) } },
-            TextWidget:new{ text = _("Voxelwelt · monochrom oder 7 Farben"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = math.max(px(40), canvas_w - color_button_w - px(8)), overlap_offset = { margin, px(29) } },
+            TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", heading_size), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = heading_w, overlap_offset = { margin, px(6) } },
+            TextWidget:new{ text = _("Seed: ") .. tostring(state.session.seed), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w, overlap_offset = { margin, px(29) } },
             NavButton:new{ title = _("Farbe"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
+            NavButton:new{ title = _("Welt"), width = world_button_w, height = px(25), callback = function() promptNewWorld(state, context) end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
             hotbar,
             joystick,
@@ -1123,6 +1351,11 @@ return {
         VoxelSession = VoxelSession,
         VoxelCanvas = VoxelCanvas,
         buildWorld = buildWorld,
+        findSpawn = findSpawn,
+        hasClearTreeView = hasClearTreeView,
+        blockAt = blockAt,
+        rebuildWorldBlocks = rebuildWorldBlocks,
+        parseWorldSeed = parseWorldSeed,
         heightAt = heightAt,
         renderGridFor = renderGridFor,
         textureCoordinates = textureCoordinates,
