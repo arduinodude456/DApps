@@ -134,9 +134,10 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.7" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.8" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
+assert(test.COLOR_RENDER_SAMPLE == 2, "Color mode must use a finer ray grid so texture dithering stays crisp")
 assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
 -- Color mode follows only KOReader's public screen setting; there is no separate
@@ -149,9 +150,17 @@ local grass_rgb, water_rgb = test.colorForMaterial("grass"), test.colorForMateri
 assert(isRGBInk(grass_rgb) and grass_rgb.r == 45 and grass_rgb.g == 170 and grass_rgb.b == 70, "Grass must use the RGB green palette color")
 assert(isRGBInk(water_rgb) and water_rgb.r == 55 and water_rgb.g == 105 and water_rgb.b == 220, "Water must use the RGB blue palette color")
 assert(test.paletteColor("green") == grass_rgb, "Palette colors must be cached so color spans can be merged")
+local brown_mix = test.paletteMixForRGB(137, 90, 59)
+assert(brown_mix.first ~= brown_mix.second and brown_mix.second_pixels > 0 and brown_mix.second_pixels < 16, "A brown target color must be approximated by dithering two of the seven fast inks")
+assert(test.COLOR_PALETTE[brown_mix.first] and test.COLOR_PALETTE[brown_mix.second], "Dithered output must stay within the seven supported fast-refresh inks")
+local dirt_texture_mix = test.paletteMixForMaterial("dirt", 1)
+local brighter_dirt_texture_mix = test.paletteMixForMaterial("dirt", 2)
+assert(brighter_dirt_texture_mix.second_pixels > dirt_texture_mix.second_pixels, "Different existing texture levels must produce different perceived color shades")
 
 local standard_cols, standard_rows = test.renderGridFor(210, 126)
 assert(standard_cols == 42 and standard_rows == 25, "A 210x126 pane must map to a 42x25 ray grid of 5x5 pixel cells")
+local color_cols, color_rows = test.renderGridFor(210, 126, test.COLOR_RENDER_SAMPLE)
+assert(color_cols == 105 and color_rows == 63, "Color mode must use 2x2 output pixels per ray")
 local compact_cols, compact_rows = test.renderGridFor(39, 61)
 assert(compact_cols == 7 and compact_rows == 12, "Compact panes must not oversample their assigned canvas")
 
@@ -210,7 +219,8 @@ assert(test.colorRenderingEnabled(), "A color panel with KOReader color renderin
 local color_session = flatSession()
 color_session.color_enabled = true
 local color_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }
-local color_spans, rgb_spans, generic_rgb_spans, wrong_ink = 0, 0, 0, 0
+local color_spans, rgb_spans, generic_rgb_spans, green_spans = 0, 0, 0, 0
+local palette_inks_seen = {}
 local function recordColorSpan(_, left, top, width, height, ink)
     color_spans = color_spans + 1
     if isRGBInk(ink) then
@@ -223,7 +233,8 @@ local function recordRGB32Span(_, left, top, width, height, ink)
     color_spans = color_spans + 1
     if isRGBInk(ink) then
         rgb_spans = rgb_spans + 1
-        if ink.r ~= 45 or ink.g ~= 170 or ink.b ~= 70 then wrong_ink = wrong_ink + 1 end
+        palette_inks_seen[ink.r .. "," .. ink.g .. "," .. ink.b] = true
+        if ink.r == 45 and ink.g == 170 and ink.b == 70 then green_spans = green_spans + 1 end
     end
     assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
     assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
@@ -233,9 +244,11 @@ color_canvas:paintTo({ paintRect = recordColorSpan, paintRectRGB32 = recordRGB32
 assert(color_spans > 10, "Color rendering must still paint the projected block scene")
 assert(rgb_spans > 0, "Color rendering must paint RGB material colors on a color buffer")
 assert(generic_rgb_spans == 0, "RGB material colors must not go through generic paintRect")
-assert(wrong_ink == 0, "Grass ground must use the RGB grass palette color, not a converted gray")
+assert(green_spans > 0, "Grass texture must retain the RGB green palette ink among its dithered shades")
+assert(palette_inks_seen["220,45,45"] and palette_inks_seen["45,170,70"], "Grass target RGB must be visibly approximated by dithering red and green fast inks")
 
--- The whole ground plane must appear as one color, not as flat gray blocks.
+-- The existing grass texture should now contain both palette-green and dither
+-- pixels, rather than replacing every texture with one uniform material color.
 local color_pixels = {}
 for row = 0, 125 do
     color_pixels[row + 1] = {}
@@ -257,9 +270,7 @@ local function countPixels(value, first_row, last_row)
     return count
 end
 assert(countPixels("color", 42, 125) > 8000, "Color ground must cover the lower view instead of collapsing into one edge row")
--- The monochrome renderer dithers about 1600 black pixels into that band. In
--- color mode only the aiming cross and the sparse ray-miss fill may stay black.
-assert(countPixels("black", 42, 125) < 400, "Color mode must not shade RGB ground with monochrome dithering")
+assert(countPixels("black", 42, 125) > 100, "Color mode must dither existing texture shades with fast black ink")
 assert(countPixels("color", 0, 41) == 0, "The sky above the horizon must stay unpainted")
 
 
@@ -368,5 +379,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.7 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.8 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

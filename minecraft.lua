@@ -35,6 +35,8 @@ local RENDER_SCALE = 1
 local RENDER_COLS = 600
 local RENDER_ROWS = 600
 local RENDER_SAMPLE = 5
+local COLOR_RENDER_SAMPLE = 2
+local BAYER4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
     red = { 220, 45, 45 },
@@ -49,6 +51,17 @@ local MATERIAL_COLORS = {
     stone = "blue", water = "blue", snow = "cyan", sand = "yellow",
     coal = "black", iron = "cyan", gold = "yellow",
 }
+-- Intended material colors are richer than the seven inks supported by the
+-- fast-refresh mode. The ordered dither below approximates them from that set.
+local MATERIAL_TARGET_RGB = {
+    grass = { 87, 156, 65 }, leaves = { 48, 136, 52 },
+    dirt = { 137, 90, 59 }, wood = { 158, 106, 51 },
+    stone = { 132, 132, 134 }, water = { 42, 94, 177 },
+    snow = { 25, 175, 185 }, sand = { 188, 153, 72 },
+    coal = { 0, 0, 0 }, iron = { 154, 155, 140 }, gold = { 214, 157, 38 },
+}
+local COLOR_PALETTE_ORDER = { "black", "red", "green", "blue", "cyan", "magenta", "yellow" }
+local SHADE_FACTORS = { 0, 0.69, 0.875, 1 }
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -90,11 +103,65 @@ local function colorForMaterial(material)
     return paletteColor(MATERIAL_COLORS[material] or "black")
 end
 
--- Render an 800x800 target without doing one expensive DDA ray per output
--- pixel. A 2x2 sample is expanded to the final canvas, cutting ray casts by 4x.
-local function renderGridFor(width, height)
-    local cols = math.max(1, math.min(RENDER_COLS, math.floor(width / RENDER_SAMPLE)))
-    local rows = math.max(1, math.min(RENDER_ROWS, math.floor(height / RENDER_SAMPLE)))
+-- Approximate any target RGB color with a pair of the seven fast-refresh inks.
+-- Bayer coverage chooses between them, creating intermediate perceived colors
+-- without asking the panel to refresh unsupported RGB values.
+local color_mix_cache = {}
+local function paletteMixForRGB(target_r, target_g, target_b)
+    target_r = clamp(math.floor(target_r + 0.5), 0, 255)
+    target_g = clamp(math.floor(target_g + 0.5), 0, 255)
+    target_b = clamp(math.floor(target_b + 0.5), 0, 255)
+    local key = target_r .. ":" .. target_g .. ":" .. target_b
+    local cached = color_mix_cache[key]
+    if cached then return cached end
+
+    local tr, tg, tb = target_r, target_g, target_b
+    local best_error, best_first, best_second, best_amount = math.huge, "black", "black", 0
+    for first_index = 1, #COLOR_PALETTE_ORDER do
+        local first_name = COLOR_PALETTE_ORDER[first_index]
+        local first = COLOR_PALETTE[first_name]
+        for second_index = first_index, #COLOR_PALETTE_ORDER do
+            local second_name = COLOR_PALETTE_ORDER[second_index]
+            local second = COLOR_PALETTE[second_name]
+            local dr, dg, db = second[1] - first[1], second[2] - first[2], second[3] - first[3]
+            local length2 = dr * dr + dg * dg + db * db
+            local amount = 0
+            if length2 > 0 then
+                amount = clamp(((tr - first[1]) * dr + (tg - first[2]) * dg + (tb - first[3]) * db) / length2, 0, 1)
+            end
+            local er = tr - (first[1] + dr * amount)
+            local eg = tg - (first[2] + dg * amount)
+            local eb = tb - (first[3] + db * amount)
+            local error = er * er + eg * eg + eb * eb
+            if error < best_error then
+                best_error, best_first, best_second, best_amount = error, first_name, second_name, amount
+            end
+        end
+    end
+    cached = { first = best_first, second = best_second, second_pixels = math.floor(best_amount * 16 + 0.5) }
+    color_mix_cache[key] = cached
+    return cached
+end
+
+local function paletteMixForMaterial(material, level)
+    local source = MATERIAL_TARGET_RGB[material] or COLOR_PALETTE[MATERIAL_COLORS[material] or "black"]
+    local factor = SHADE_FACTORS[level + 1] or 1
+    return paletteMixForRGB(source[1] * factor, source[2] * factor, source[3] * factor)
+end
+
+local function texturedColorInk(material, level, screen_x, screen_y)
+    local mix = paletteMixForMaterial(material, level)
+    local threshold = BAYER4[(screen_y % 4) + 1][(screen_x % 4) + 1]
+    local color_name = threshold < mix.second_pixels and mix.second or mix.first
+    return paletteColor(color_name)
+end
+
+-- Bound the DDA ray count while allowing each caller to select sampling density:
+-- color mode uses finer cells for Bayer shading; monochrome uses fewer rays.
+local function renderGridFor(width, height, sample)
+    sample = sample or RENDER_SAMPLE
+    local cols = math.max(1, math.min(RENDER_COLS, math.floor(width / sample)))
+    local rows = math.max(1, math.min(RENDER_ROWS, math.floor(height / sample)))
     return cols, rows
 end
 
@@ -590,9 +657,11 @@ function VoxelCanvas:_drawScene(bb, x, y)
     bb:paintRect(x, y, width, height, Blitbuffer.COLOR_WHITE)
     if not session then return end
 
-    -- Ultra-fast column/row DDA renderer. The 600x600 output is sampled at 5x5
-    -- cells so the expensive 3D ray traversal is reduced by 25x.
-    local cols, rows = renderGridFor(width, height)
+    local color_mode = session.color_enabled and colorRenderingEnabled()
+    local sample = color_mode and COLOR_RENDER_SAMPLE or RENDER_SAMPLE
+    -- The color path uses a finer grid so ordered shade dithering stays crisp;
+    -- monochrome keeps the lower-cost 5x5 sampling and its existing textures.
+    local cols, rows = renderGridFor(width, height, sample)
     local pixel_w, pixel_h = width / cols, height / rows
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
@@ -610,16 +679,10 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local up = { x = -sy * sp, z = -cy * sp, y = cp }
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
-    local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
-    -- Match Draw's proven color path: Screen:isColorEnabled() selects an RGB
-    -- ColorRGB32 ink, then the normal widget BlitBuffer paints it via paintRect.
-    local color_mode = session.color_enabled and colorRenderingEnabled()
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
-        if color_mode then
-            return colorForMaterial(material)
-        end
-        if material == "grass" and face ~= "top" then material = "dirt" end
-        local pattern = pattern_values[material] or pattern_values.stone
+        local texture_material = material
+        if not color_mode and texture_material == "grass" and face ~= "top" then texture_material = "dirt" end
+        local pattern = pattern_values[texture_material] or pattern_values.stone
         local fu, fv = textureCoordinates(face, hx, hy, hz, side)
         local u = max(0, min(7, floor(fu * 8)))
         local v = max(0, min(7, floor(fv * 8)))
@@ -627,12 +690,15 @@ function VoxelCanvas:_drawScene(bb, x, y)
         if face == "top" then level = level + 1 end
         if side == 0 then level = level - 1 end
         level = max(0, min(3, level))
+        if color_mode then
+            return texturedColorInk(material, level, screen_x, screen_y)
+        end
         -- Convert the four texture luminances into deterministic 1-bit ink.
         -- This is the ordered Bayer pattern used instead of gray fills: it is
         -- crisp on E-Ink and does not accumulate a broad gray ghost.
         -- On a real E-Ink panel a one-pixel Bayer pattern becomes a gray
         -- haze. Use 2x2 ink cells while keeping the full 480x320 ray grid.
-        local threshold = bayer4[(floor((screen_y or 0) / 2) % 4) + 1][(floor((screen_x or 0) / 2) % 4) + 1]
+        local threshold = BAYER4[(floor((screen_y or 0) / 2) % 4) + 1][(floor((screen_x or 0) / 2) % 4) + 1]
         if level <= 0 then return Blitbuffer.COLOR_BLACK end
         if level == 1 then return threshold < 5 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
         if level == 2 then return threshold < 2 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
@@ -986,7 +1052,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.7",
+    version = "3.0.8",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
@@ -1061,6 +1127,8 @@ return {
         renderGridFor = renderGridFor,
         textureCoordinates = textureCoordinates,
         colorForMaterial = colorForMaterial,
+        paletteMixForRGB = paletteMixForRGB,
+        paletteMixForMaterial = paletteMixForMaterial,
         colorRenderingEnabled = colorRenderingEnabled,
         paletteColor = paletteColor,
         COLOR_PALETTE = COLOR_PALETTE,
@@ -1071,6 +1139,7 @@ return {
         RENDER_COLS = RENDER_COLS,
         RENDER_ROWS = RENDER_ROWS,
         RENDER_SAMPLE = RENDER_SAMPLE,
+        COLOR_RENDER_SAMPLE = COLOR_RENDER_SAMPLE,
         WALK_DISTANCE = WALK_DISTANCE,
         TURN_ANGLE = TURN_ANGLE,
         MOVE_FRAMES = MOVE_FRAMES,
