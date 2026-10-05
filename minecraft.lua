@@ -62,21 +62,96 @@ local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 local function wrapAngle(value) return value % TAU end
 
-local function colorHardwareAvailable()
-    -- Some KOReader builds expose ColorRGB32 but do not expose
-    -- Screen:isColorEnabled(). Do not disable color just because the
-    -- optional capability query is missing.
-    if type(Blitbuffer.ColorRGB32) ~= "function" then return false end
-    if type(Screen.isColorEnabled) == "function" then
-        return Screen:isColorEnabled()
+-- KOReader hands RGB colors out through Blitbuffer.ColorRGB32, which is a
+-- LuaJIT ctype constructor: type() reports "cdata" for it, never "function".
+-- A `type(Blitbuffer.ColorRGB32) == "function"` guard therefore switched color
+-- rendering off on every real device, while Lua test doubles (plain functions)
+-- kept it passing. Probe the constructor by building one color and cache it.
+local rgb_color_supported
+local function canBuildRGBColor()
+    if rgb_color_supported == nil then
+        local constructor = Blitbuffer.ColorRGB32
+        local kind = type(constructor)
+        if kind == "function" or kind == "cdata" or kind == "table" or kind == "userdata" then
+            local ok, color = pcall(constructor, 0, 0, 0, 0xFF)
+            rgb_color_supported = ok and color ~= nil
+        else
+            rgb_color_supported = false
+        end
     end
-    return true
+    return rgb_color_supported
+end
+
+-- KOReader's "Color rendering" setting. Reading it is optional: older builds
+-- only expose the panel capability, so report whether the query existed.
+local function colorSettingEnabled()
+    local is_enabled = Screen and Screen.isColorEnabled
+    if type(is_enabled) == "function" then
+        local ok, enabled = pcall(is_enabled, Screen)
+        if ok then return enabled and true or false, true end
+    end
+    return false, false
+end
+
+-- Panel capability. Devices expose it either as a boolean field or as a
+-- method, so read whichever exists.
+local function colorScreenAvailable()
+    local is_color_screen = Screen and Screen.isColorScreen
+    if type(is_color_screen) == "function" then
+        local ok, enabled = pcall(is_color_screen, Screen)
+        if ok then return enabled and true or false end
+    elseif type(is_color_screen) == "boolean" then
+        return is_color_screen
+    end
+    local enabled = colorSettingEnabled()
+    return enabled == true
+end
+
+-- Screen:isColorEnabled() already falls back to the panel capability when the
+-- setting was never touched, so it is the primary answer.
+local function colorRenderingEnabled()
+    local enabled, known = colorSettingEnabled()
+    if known then return enabled end
+    return colorScreenAvailable()
+end
+
+-- Color is only *visible* when the screen buffer really stores RGB values. On a
+-- color panel with KOReader's "Color rendering" switched off, KOReader keeps an
+-- 8bpp buffer: RGB colors would collapse into flat gray blocks and look worse
+-- than the monochrome renderer. The buffer is the ground truth.
+local function colorBufferAvailable(bb)
+    bb = bb or (Screen and Screen.bb)
+    local is_rgb = bb and bb.isRGB
+    if type(is_rgb) == "function" then
+        local ok, value = pcall(is_rgb, bb)
+        if ok then return value and true or false end
+    end
+    -- Builds without the buffer query: trust KOReader's setting.
+    return colorRenderingEnabled()
+end
+
+local function colorHardwareAvailable(bb)
+    return canBuildRGBColor() and colorBufferAvailable(bb)
+end
+
+-- One cached color object per palette entry. Blitbuffer.ColorRGB32 returns a
+-- fresh struct on every call and separate structs never compare equal, which
+-- would defeat the renderer's span merging in color mode.
+local rgb_colors = {}
+local function paletteColor(name)
+    local color = rgb_colors[name]
+    if color == nil then
+        local rgb = COLOR_PALETTE[name] or COLOR_PALETTE.black
+        local ok, created = pcall(Blitbuffer.ColorRGB32, rgb[1], rgb[2], rgb[3], 0xFF)
+        color = (ok and created ~= nil) and created or Blitbuffer.COLOR_BLACK
+        rgb_colors[name] = color
+    end
+    return color
 end
 
 local function colorForMaterial(material)
-    local rgb = COLOR_PALETTE[MATERIAL_COLORS[material] or "black"]
     if not colorHardwareAvailable() then return Blitbuffer.COLOR_BLACK end
-    return Blitbuffer.ColorRGB32(rgb[1], rgb[2], rgb[3], 0xFF)
+    return paletteColor(MATERIAL_COLORS[material] or "black")
 end
 
 -- Render an 800x800 target without doing one expensive DDA ray per output
@@ -277,6 +352,17 @@ function VoxelSession:toggleInventory()
 end
 
 function VoxelSession:toggleColor()
+    -- Never claim "Farbrendering aktiviert." when the device cannot show it.
+    if not canBuildRGBColor() or not colorScreenAvailable() then
+        self.color_enabled = false
+        self.last_event = _("Dieses Gerät kann keine Farben darstellen.")
+        return false
+    end
+    if not colorBufferAvailable() then
+        self.color_enabled = false
+        self.last_event = _("Farbrendering ist in KOReader ausgeschaltet (Bildschirm → Farbrendering).")
+        return false
+    end
     self.color_enabled = not self.color_enabled
     self.last_event = self.color_enabled and _("Farbrendering aktiviert.") or _("Monochromes Rendering aktiviert.")
     return true
@@ -593,8 +679,11 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
     local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
+    -- Decide once per frame: color needs the user's color mode, a working RGB
+    -- color constructor and a screen buffer that can actually store color.
+    local color_mode = session.color_enabled and colorHardwareAvailable(bb)
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
-        if session.color_enabled and colorHardwareAvailable() then
+        if color_mode then
             return colorForMaterial(material)
         end
         if material == "grass" and face ~= "top" then material = "dirt" end
@@ -685,8 +774,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 ink = blockInk(hit_material, top and "top" or "side", hx, hy, hz, side, rx, ry)
                 -- Do not replace an RGB material color with monochrome
                 -- black/white shading. Keep the material color intact.
-                if (not session.color_enabled or not colorHardwareAvailable())
-                    and side == 0 and (bx + bz) % 2 == 0 then
+                if not color_mode and side == 0 and (bx + bz) % 2 == 0 then
                     ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
                 end
             elseif ray_y < 0 and (ry + rx) % 6 == 0 then
@@ -962,7 +1050,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.1",
+    version = "3.0.2",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
@@ -1037,6 +1125,12 @@ return {
         renderGridFor = renderGridFor,
         textureCoordinates = textureCoordinates,
         colorForMaterial = colorForMaterial,
+        canBuildRGBColor = canBuildRGBColor,
+        colorRenderingEnabled = colorRenderingEnabled,
+        colorScreenAvailable = colorScreenAvailable,
+        colorBufferAvailable = colorBufferAvailable,
+        colorHardwareAvailable = colorHardwareAvailable,
+        paletteColor = paletteColor,
         COLOR_PALETTE = COLOR_PALETTE,
         WORLD_SIZE = WORLD_SIZE,
         MAX_COLUMN_HEIGHT = MAX_COLUMN_HEIGHT,

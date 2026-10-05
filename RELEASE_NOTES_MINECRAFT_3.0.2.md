@@ -1,0 +1,8 @@
+# Minecraft 3D 3.0.2
+Behebt das Farbrendering der Voxelwelt. Die Farbfähigkeit wurde bisher mit `type(Blitbuffer.ColorRGB32) == "function"` geprüft. KOReader liefert `Blitbuffer.ColorRGB32` jedoch als LuaJIT-ctype aus, dessen `type()` immer `cdata` lautet. Die Prüfung schlug damit auf jedem realen Gerät fehl, sodass die Welt dauerhaft monochrom blieb, während die Schaltfläche **Farbe** weiterhin „Farbrendering aktiviert." meldete. Die Testdoubles des Repos bildeten `ColorRGB32` als normale Lua-Funktion nach und verdeckten den Fehler.
+
+- Die Farbfähigkeit wird jetzt ermittelt, indem tatsächlich eine Farbe erzeugt wird. Akzeptiert werden Lua-Funktionen, ctypes/cdata und `__call`-Tabellen.
+- Farbe wird nur gezeichnet, wenn der Bildschirmpuffer wirklich RGB speichert (`bb:isRGB()`). Auf einem 8-bpp-Puffer würde RGB nur zu flachen Grauwerten verflachen, deshalb bleibt dort der kontrastreiche Schwarz-Weiß-Renderer aktiv.
+- Die Palettenfarben werden pro Eintrag zwischengespeichert. Identische Materialfarben werden dadurch als ein Span gezeichnet, was die Zahl der `paintRect`-Aufrufe pro Frame deutlich senkt.
+- Die Schaltfläche **Farbe** meldet ehrlich: „Dieses Gerät kann keine Farben darstellen." auf monochromen Panels und „Farbrendering ist in KOReader ausgeschaltet (Bildschirm → Farbrendering).", wenn KOReader die Farbausgabe abgeschaltet hat. Ein abgelehnter Wechsel behauptet keinen aktiven Farbmodus mehr.
+- `test_minecraft.lua` bildet die echte KOReader-API nach (`ColorRGB32` als aufrufbares Nicht-Funktionsobjekt) und prüft Farbpanel, 8-bpp-Puffer und monochromes Panel. Eine erneute `type(...) == "function"`-Prüfung lässt den Test jetzt scheitern.
