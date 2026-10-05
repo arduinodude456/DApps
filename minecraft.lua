@@ -75,6 +75,24 @@ local START_PLAYER_X = 44.5
 local START_PLAYER_Z = 52.5
 local START_YAW = math.pi / 2
 
+-- A Minecraft-like sky is painted only on color displays. The monochrome path
+-- keeps its crisp black/white behavior for fast E-Ink refreshes.
+local SCENE_COLORS = {
+    sky_top = { 62, 139, 211 }, sky_mid = { 119, 190, 229 },
+    sky_horizon = { 188, 221, 232 }, cloud = { 246, 247, 238 },
+    distant_ground = { 83, 119, 71 },
+}
+local scene_rgb_colors = {}
+local function sceneColor(name)
+    local color = scene_rgb_colors[name]
+    if not color then
+        local rgb = SCENE_COLORS[name]
+        color = Blitbuffer.colorFromString(string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3]))
+        scene_rgb_colors[name] = color
+    end
+    return color
+end
+
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 local function wrapAngle(value) return value % TAU end
@@ -851,7 +869,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
     -- monochrome keeps the lower-cost 5x5 sampling and its existing textures.
     local cols, rows = renderGridFor(width, height, sample)
     local pixel_w, pixel_h = width / cols, height / rows
-    local fov = math.rad(130)
+    -- The old 130° fisheye made the landscape look unlike Minecraft. A
+    -- narrower 90° perspective gives recognizable block proportions.
+    local fov = math.rad(90)
     local tan_half = math.tan(fov / 2)
     local aspect = height / width
     local floor, abs, min, max, sqrt = math.floor, math.abs, math.min, math.max, math.sqrt
@@ -922,7 +942,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local bottom = y + floor((row + 1) * pixel_h)
         if right > left and bottom > top then
             if color_mode then
-                local rgb_ink = ink == "white" and Blitbuffer.COLOR_WHITE or paletteColor(ink)
+                local rgb_ink = ink == "white" and Blitbuffer.COLOR_WHITE
+                    or (SCENE_COLORS[ink] and sceneColor(ink) or paletteColor(ink))
                 bb:paintRectRGB32(left, top, right - left, bottom - top, rgb_ink)
             else
                 bb:paintRect(left, top, right - left, bottom - top, ink)
@@ -976,7 +997,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 local hz = player_z + dir_z * hit_dist
                 local top = hit_side == 1 and dir_y < 0
                 local texture_material = hit_material
-                if not color_mode and texture_material == "grass" and not top then texture_material = "dirt" end
+                -- Minecraft grass blocks have a green cap and brown dirt sides
+                -- on both color and monochrome displays.
+                if texture_material == "grass" and not top then texture_material = "dirt" end
                 local pattern = pattern_values[texture_material] or pattern_values.stone
                 local fu, fv
                 if hit_side == 1 then
@@ -993,7 +1016,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 if hit_side == 0 then level = level - 1 end
                 level = max(0, min(3, level))
                 if color_mode then
-                    local mix = material_mix_cache[hit_material][level + 1]
+                    local mix = material_mix_cache[texture_material][level + 1]
                     ink = dither_threshold < mix.second_pixels and mix.second or mix.first
                 elseif level <= 0 then
                     ink = Blitbuffer.COLOR_BLACK
@@ -1009,10 +1032,28 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 if not color_mode and hit_side == 0 and (bx + bz) % 2 == 0 then
                     ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
                 end
+            elseif color_mode then
+                -- Give the empty part of the view a blue gradient, a pale
+                -- horizon and a few stable square clouds instead of a blank
+                -- white canvas. This is the strongest visual cue for the
+                -- Minecraft-like outdoor world.
+                local sky_position = ry / math.max(1, rows - 1)
+                if dir_y < 0 then
+                    -- Keep a sparse dark pixel pattern at the far ground line;
+                    -- it reads as the familiar Minecraft horizon on E-Ink
+                    -- color panels without turning the whole distance black.
+                    ink = ((rx + ry) % 6 == 0) and "black" or "distant_ground"
+                elseif sky_position < 0.27 then
+                    ink = ((floor(rx / 11) + floor(ry / 5)) % 13 == 0) and "cloud" or "sky_top"
+                elseif sky_position < 0.58 then
+                    ink = ((floor(rx / 15) + floor(ry / 4)) % 17 == 0) and "cloud" or "sky_mid"
+                else
+                    ink = "sky_horizon"
+                end
             elseif dir_y < 0 and (ry + rx) % 6 == 0 then
-                ink = color_mode and "black" or Blitbuffer.COLOR_BLACK
+                ink = Blitbuffer.COLOR_BLACK
             else
-                ink = color_mode and "white" or Blitbuffer.COLOR_WHITE
+                ink = Blitbuffer.COLOR_WHITE
             end
             if rx == 0 then
                 row_ink, row_start = ink, rx
@@ -1317,7 +1358,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.10",
+    version = "3.1.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
