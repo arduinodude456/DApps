@@ -12,6 +12,7 @@ an HTTPS request and stores a one-way hash.
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local ConfirmBox = require("ui/widget/confirmbox")
+local DataStorage = require("datastorage")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -27,6 +28,8 @@ local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
+local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+if not ok_lfs then lfs = require("lfs") end
 
 local SETTINGS_KEY = "appdock_dchat_v1"
 local LEGACY_ENDPOINT = "https://appdock-bd7bcrzm.manus.space"
@@ -36,6 +39,9 @@ local MAX_ENDPOINT_BYTES = 240
 local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
 local MAX_ATTACHMENT_BYTES = 512 * 1024
+local MAX_ATTACHMENT_BASE64_BYTES = 4 * math.ceil(MAX_ATTACHMENT_BYTES / 3)
+local ATTACHMENT_CACHE_DIR = DataStorage:getDataDir() .. "/appdock_dchat_images"
+local attachment_cache_prepared = false
 local MAX_NOTE_BYTES = 840
 local MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 local RESPONSE_TOO_LARGE = "response too large"
@@ -66,8 +72,45 @@ local function safeImageWidget(options)
     if isAndroidDevice() then return nil end
     local loaded, ImageWidget = pcall(require, "ui/widget/imagewidget")
     if not loaded or not ImageWidget then return nil end
+    -- DM images are user-supplied and can be much larger when decoded than on the wire.
+    -- Keep them out of KOReader's small shared ImageWidget cache.
+    options.file_do_cache = false
     local ok, widget = pcall(function() return ImageWidget:new(options) end)
     return ok and widget or nil
+end
+
+local function clearAttachmentFiles(state)
+    if type(state.attachment_files) == "table" then
+        for _, path in pairs(state.attachment_files) do
+            if type(path) == "string" then pcall(os.remove, path) end
+        end
+    end
+    state.attachment_files = {}
+end
+
+local function ensureAttachmentCacheDir()
+    local ok, attr = pcall(lfs.attributes, ATTACHMENT_CACHE_DIR)
+    if ok and attr and attr.mode == "directory" then return true end
+    local made_ok, made = pcall(lfs.mkdir, ATTACHMENT_CACHE_DIR)
+    if made_ok and made then return true end
+    local check_ok, check = pcall(lfs.attributes, ATTACHMENT_CACHE_DIR)
+    return check_ok and check ~= nil and check.mode == "directory"
+end
+
+local function prepareAttachmentCache(state)
+    if attachment_cache_prepared then return end
+    clearAttachmentFiles(state)
+    if ensureAttachmentCacheDir() then
+        local ok, iterator, directory, initial = pcall(lfs.dir, ATTACHMENT_CACHE_DIR)
+        if ok and type(iterator) == "function" then
+            for name in iterator, directory, initial do
+                if type(name) == "string" and name:match("^dchat_[%w_%-]+_%d+%.[%w]+$") then
+                    pcall(os.remove, ATTACHMENT_CACHE_DIR .. "/" .. name)
+                end
+            end
+        end
+    end
+    attachment_cache_prepared = true
 end
 
 local function trim(value)
@@ -119,6 +162,11 @@ local function cloneDirectMessage(raw)
     local created_at = trim(tostring(raw.createdAt or "")):sub(1, 48)
     local attachment_mime = trim(tostring(raw.attachmentMime or ""))
     local attachment_data = trim(tostring(raw.attachmentData or ""))
+    if #attachment_data > MAX_ATTACHMENT_BASE64_BYTES then
+        local notice = _("[Image attachment omitted: larger than the 512 KiB DChat limit]")
+        body = body == "" and notice or body:sub(1, math.max(0, MAX_TEXT_BYTES - #notice)) .. notice
+        attachment_data, attachment_mime = "", ""
+    end
     if not id:match("^%d+$") or not author_name or (body == "" and attachment_data == "") then return nil end
     return { id = id, authorName = author_name, body = body, createdAt = created_at, senderDeviceId = trim(tostring(raw.senderDeviceId or "")), readAt = trim(tostring(raw.readAt or "")), attachmentMime = attachment_mime, attachmentData = attachment_data }
 end
@@ -391,10 +439,7 @@ end
 
 local function stateFor(instance)
     instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
-    if isAndroidDevice() and type(instance.dchat.attachment_files) == "table" then
-        for _, path in pairs(instance.dchat.attachment_files) do pcall(os.remove, path) end
-        instance.dchat.attachment_files = {}
-    end
+    prepareAttachmentCache(instance.dchat)
     return instance.dchat
 end
 
@@ -640,6 +685,7 @@ local function deleteConversation(state, context)
         return
     end
     state.store.dm_messages = {}
+    clearAttachmentFiles(state)
     state.store.selected_recipient_id = ""
     state.store.selected_recipient_name = ""
     state.selected_dm_id = nil
@@ -660,6 +706,7 @@ end
 
 local function openPrivateChats(state, context)
     if not hasIdentity(state.store) then state.status = _("Create a local identity before opening private chats."); refresh(context); return end
+    clearAttachmentFiles(state)
     state.view = "dm"
     fetchRecipients(state, context, "")
 end
@@ -918,7 +965,7 @@ local function dmPane(instance, context)
             if y + row_height > end_y then break end
             local unread_count = tonumber(recipient.unreadCount) or 0
             local unread = unread_count > 0 and (" · " .. tostring(unread_count) .. " unread") or ""
-            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. unread .. " · " .. recipient.deviceId, callback = function() state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
+            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. unread .. " · " .. recipient.deviceId, callback = function() clearAttachmentFiles(state); state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
             y = y + row_height + gap
         end
     end
@@ -945,11 +992,16 @@ local function attachmentFilePath(state, message)
     if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then return nil end
     local extension = ({ ["image/png"] = ".png", ["image/jpeg"] = ".jpg", ["image/gif"] = ".gif", ["image/webp"] = ".webp" })[message.attachmentMime]
     if not extension then return nil end
-    local path = os.tmpname() .. extension
+    if not ensureAttachmentCacheDir() then return nil end
+    local recipient_id = tostring(state.store and state.store.selected_recipient_id or ""):match("^dch_[%w_%-]+$") or "unknown"
+    local message_id = tostring(message.id or "")
+    if not message_id:match("^%d+$") then return nil end
+    local path = ATTACHMENT_CACHE_DIR .. "/dchat_" .. recipient_id .. "_" .. message_id .. extension
     local file = io.open(path, "wb")
     if not file then return nil end
-    local ok = pcall(function() file:write(data); file:close() end)
-    if not ok then pcall(function() file:close() end); os.remove(path); return nil end
+    local write_ok, write_result = pcall(file.write, file, data)
+    local close_ok, close_result = pcall(file.close, file)
+    if not write_ok or not write_result or not close_ok or not close_result then pcall(os.remove, path); return nil end
     state.attachment_files[message.id] = path
     return path
 end
@@ -982,24 +1034,23 @@ function DMBubble:onTapDChatBubble()
     return true
 end
 
-local function dmBubble(width, height, message, own, callback, state)
+local function dmBubble(width, height, message, own, callback)
     local bubble_width = math.max(math.floor(width * 0.78), width - 40)
     local x = own and width - bubble_width or 0
     local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
     local body = message.body
-    local image_file = attachmentFilePath(state, message)
-    if message.attachmentData ~= "" and not image_file then
-        local notice = isAndroidDevice() and _("Image attached; preview disabled on Android") or _("Image attachment unavailable · tap to view")
+    if message.attachmentData ~= "" then
+        local notice = isAndroidDevice() and _("Image attached; preview disabled on Android") or _("Image attachment · tap to view")
         body = (body ~= "" and body .. "\n" or "") .. notice
     end
     if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
-    return DMBubble:new{ width = bubble_width, height = height, image_file = image_file, body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    return DMBubble:new{ width = bubble_width, height = height, body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
 end
 
 local function dmConversationPane(instance, context)
     local state = stateFor(instance)
     local recipient = selectedRecipient(state)
-    if not recipient then state.view = "dm"; return dmPane(instance, context) end
+    if not recipient then clearAttachmentFiles(state); state.view = "dm"; return dmPane(instance, context) end
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
     local margin, gap = math.max(px(8), math.floor(width / 70)), math.max(px(5), math.floor(width / 130))
@@ -1013,12 +1064,13 @@ local function dmConversationPane(instance, context)
     elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Send"), primary = true, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + fifth + gap, px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Attach"), callback = function() chooseImageAttachment(state, context) end, overlap_offset = { margin + 2 * (fifth + gap), px(60) } }
     elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Delete"), callback = function() confirmDeleteConversation(state, context) end, overlap_offset = { margin + 3 * (fifth + gap), px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("‹ Chats"), callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + 4 * (fifth + gap), px(60) } }
+    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("‹ Chats"), callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + 4 * (fifth + gap), px(60) } }
     local emoji_height = math.max(px(28), math.floor(button_height * .8))
     local emoji_width = math.floor((width - 2 * margin - 5 * gap) / 6)
     elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function()
         UIManager:scheduleIn(0.1, function()
             if state.view ~= "dm_conversation" or state.store.selected_recipient_id == "" then return end
+            clearAttachmentFiles(state)
             fetchConversation(state, context)
         end)
     end, overlap_offset = { margin, px(60) + button_height + gap } }
@@ -1028,6 +1080,11 @@ local function dmConversationPane(instance, context)
     end
     local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
     state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
+    local attachment_page_key = tostring(state.store.selected_recipient_id) .. ":" .. tostring(state.dm_page)
+    if state.attachment_cache_page_key ~= attachment_page_key then
+        clearAttachmentFiles(state)
+        state.attachment_cache_page_key = attachment_page_key
+    end
     local start_index = (state.dm_page - 1) * MAX_VISIBLE_PER_PAGE + 1
     local y, end_y = px(60) + button_height + emoji_height + 3 * gap, height - margin - 2 * button_height - 2 * gap
     for index = start_index, math.min(#(state.store.dm_messages or {}), start_index + MAX_VISIBLE_PER_PAGE - 1) do
@@ -1035,7 +1092,7 @@ local function dmConversationPane(instance, context)
         if y + row_height > end_y then break end
         local own = message.senderDeviceId == state.store.device_id
         local bubble_height = message.attachmentData ~= "" and math.max(row_height, math.min(px(176), math.floor(height * .30))) or row_height
-        local bubble = dmBubble(width - 2 * margin, bubble_height, message, own, function() state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, state)
+        local bubble = dmBubble(width - 2 * margin, bubble_height, message, own, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
         bubble.overlap_offset = { margin + (own and math.floor((width - 2 * margin) * 0.22) or 0), y }
         elements[#elements + 1] = bubble
         y = y + bubble_height + gap
@@ -1051,7 +1108,7 @@ end
 local function dmMessagePane(instance, context)
     local state = stateFor(instance)
     local message = selectedDirectMessage(state)
-    if not message then state.view = "dm_conversation"; return dmConversationPane(instance, context) end
+    if not message then clearAttachmentFiles(state); state.view = "dm_conversation"; return dmConversationPane(instance, context) end
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
     local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(36), math.floor(height / 14))
@@ -1061,7 +1118,7 @@ local function dmMessagePane(instance, context)
     local image_height = image_file and math.min(px(220), math.floor(height * .34)) or 0
     local image = image_file and safeImageWidget{ file = image_file, width = width - 2 * margin, height = image_height, scale_factor = 0, overlap_offset = { margin, margin + px(48) } }
     if message.attachmentData ~= "" and not image then
-        local notice = isAndroidDevice() and _("Image preview is disabled on Android.") or _("[Image unavailable]")
+        local notice = isAndroidDevice() and _("Image preview is disabled on Android.") or _("Image preview unavailable. Check available cache/storage space and retry.")
         full_body = (full_body ~= "" and full_body .. "\n\n" or "") .. notice
     end
     if message.senderDeviceId == state.store.device_id then full_body = (message.readAt ~= "" and "✓✓ " or "✓ ") .. full_body end
@@ -1074,8 +1131,8 @@ local function dmMessagePane(instance, context)
     }
     if image then elements[#elements + 1] = image end
     elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, body_y } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() clearAttachmentFiles(state); state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
     elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
@@ -1101,7 +1158,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.4.15",
+    version = "1.4.16",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
