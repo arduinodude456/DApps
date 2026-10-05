@@ -78,7 +78,8 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/settings.png"] = true, ["assets/logos/web_browser.png"] = true,
     ["assets/logos/battery.png"] = true, ["assets/logos/calendar.png"] = true,
     ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
-    ["assets/logos/music.png"] = true,
+    ["assets/logos/music.png"] = true, ["assets/logos/dchat.png"] = true,
+    ["assets/logos/dockupdate.png"] = true, ["assets/logos/minecraft.png"] = true,
 }
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -563,11 +564,11 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.8",
+    version = "1.1.9",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
-    logo = "download",
+    logo = "dockupdate",
     buildPane = buildPane,
     backgroundTick = safeBackgroundTick,
     onAutostart = safeBackgroundTick,

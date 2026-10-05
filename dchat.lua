@@ -1291,7 +1291,7 @@ return {
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
-    logo = "rss",
+    logo = "dchat",
     buildPane = function(instance, context)
         local state = stateFor(instance)
         if state.view == "settings" then return settingsPane(instance, context) end

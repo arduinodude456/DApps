@@ -133,7 +133,7 @@ for _, name in ipairs(required) do
 end
 
 local app = dofile("/home/ubuntu/dapps-store-repo/dock_update.lua")
-assert(app.id == "dock_update" and app.version == "1.1.8" and app.logo == "download", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.1.9" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open("/home/ubuntu/work/DApps/dock_update.lua", "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 192 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 local context = {

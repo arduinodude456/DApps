@@ -1436,7 +1436,7 @@ return {
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
-    logo = "other",
+    logo = "minecraft",
     buildPane = function(instance, context)
         local state = stateFor(instance)
         local width, height = context.dimen.w, context.dimen.h

@@ -11,7 +11,7 @@ video_player.lua | 1.0.3 | gallery
 dreader.lua | 2.2.0 | document
 calendar.lua | 1.0.2 | calendar
 rss_reader.lua | 1.0.2 | rss
-dock_update.lua | 1.1.8 | download
+dock_update.lua | 1.1.9 | dockupdate
 appdock_guide.lua | 1.0.0 | help
 dpdf.lua | 1.0.0 | document
 widget_generator.lua | 1.0.0 | settings
@@ -27,7 +27,7 @@ reading_stats_widget.lua | 1.0.0 | reading | widget
 analog_clock_widget.lua | 1.0.0 | analog_clock | widget
 calendar_widget.lua | 1.0.0 | calendar | widget
 random_book_covers_widget.lua | 1.0.0 | reading | widget
-dchat.lua | 1.7.3 | rss
+dchat.lua | 1.7.3 | dchat
 dbasic.lua | 1.0.0 | code
 focus_timer.lua | 1.0.0 | calendar
 quick_notes.lua | 1.0.0 | notes
@@ -40,4 +40,4 @@ designs/coffee.appdock-design | 1.0.0 | palette | design
 designs/old-paper.appdock-design | 1.0.0 | palette | design
 designs/ozean.appdock-design | 1.0.0 | palette | design
 tetris.lua | 1.0.0 | other
-minecraft.lua | 3.2.1 | other
+minecraft.lua | 3.2.1 | minecraft
