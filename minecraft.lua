@@ -230,10 +230,34 @@ local function noise2(seed, x, z, scale_value)
     return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz
 end
 
+-- Nicht jede Minecraft-Struktur ist eine Säule. Diese Sparse-Map hält Blöcke
+-- über dem Terrain (aktuell Bäume), damit Stämme und Blattkronen wirklich aus
+-- einzelnen Voxeln bestehen und die Bodenhöhe nicht künstlich mitwächst.
+local function extraBlockKey(x, z, level)
+    return x .. ":" .. z .. ":" .. level
+end
+
+local function putExtraBlock(world, x, z, level, material)
+    if x < 0 or z < 0 or x >= world.size or z >= world.size
+        or level < 0 or level >= MAX_COLUMN_HEIGHT then return end
+    local key = extraBlockKey(x, z, level)
+    if not world.extra_blocks[key] then
+        world.extra_blocks[key] = material
+    end
+end
+
+local function putBox(world, x1, z1, y1, x2, z2, y2, material)
+    for level = y1, y2 do
+        for z = z1, z2 do
+            for x = x1, x2 do putExtraBlock(world, x, z, level, material) end
+        end
+    end
+end
+
 local rebuildWorldBlocks
 local function buildWorld(seed)
     seed = normalizeSeed(seed)
-    local world = { size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, biomes = {} }
+    local world = { size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, biomes = {}, extra_blocks = {} }
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1], world.materials[z + 1], world.biomes[z + 1] = {}, {}, {}
         for x = 0, WORLD_SIZE - 1 do
@@ -255,23 +279,22 @@ local function buildWorld(seed)
             elseif biome == "swamp" then height = 2 + math.floor(broad * 2) end
             local lake = (biome == "swamp" and noise2(seed + 77, x, z, 4) < 0.38)
                 or (biome == "plains" and noise2(seed + 77, x, z, 7) < 0.12)
-            if lake then height = math.max(1, height - 1) end
+            if lake then height = math.max(2, math.min(height - 1, 4)) end
             local material = lake and "water" or (biome == "desert" and "sand" or (biome == "mountains" and "stone" or (biome == "tundra" and "snow" or "grass")))
+            if not lake and height <= 5 and noise2(seed + 77, x, z, 7) < 0.16 then material = "sand" end
             world.heights[z + 1][x + 1] = clamp(height, 1, MAX_TERRAIN_HEIGHT)
             world.materials[z + 1][x + 1] = material
             world.biomes[z + 1][x + 1] = biome
         end
     end
-    -- Trees are calculated from an immutable terrain snapshot. Reading back
-    -- previously raised crown cells turns leaves into tree roots and lets their
-    -- height grow across the whole biome on every later iteration.
+    -- Trees are calculated from an immutable terrain snapshot. They are stored
+    -- as real blocks above the ground instead of raising neighbouring terrain
+    -- columns (the old approach made every tree look like a grass pillar).
     local terrain_heights = {}
     for z = 1, WORLD_SIZE do
         terrain_heights[z] = {}
         for x = 1, WORLD_SIZE do terrain_heights[z][x] = world.heights[z][x] end
     end
-    -- C's tree pass, adapted to the height-field renderer: trunks and crowns
-    -- become visible stepped columns while keeping generation deterministic.
     for z = 2, WORLD_SIZE - 3 do for x = 2, WORLD_SIZE - 3 do
         local biome = world.biomes[z + 1][x + 1]
         local chance = hash2(seed + 11, x, z)
@@ -279,17 +302,52 @@ local function buildWorld(seed)
             or biome == "plains" and chance < 0.12
         if can_grow then
             local h = terrain_heights[z + 1][x + 1]
-            local trunk_height = math.min(MAX_COLUMN_HEIGHT, h + 3)
-            if world.heights[z + 1][x + 1] <= trunk_height then
-                world.heights[z + 1][x + 1], world.materials[z + 1][x + 1] = trunk_height, "wood"
+            local trunk_height = math.min(MAX_COLUMN_HEIGHT - 1, h + 4)
+            for level = h, trunk_height - 1 do putExtraBlock(world, x, z, level, "wood") end
+            -- A stepped, cross-shaped canopy is recognisably Minecraft-like and
+            -- leaves enough gaps to see the trunk and sky through it.
+            for level = trunk_height - 2, trunk_height do
+                local radius = level == trunk_height and 1 or 2
+                for dz = -radius, radius do for dx = -radius, radius do
+                    if math.abs(dx) + math.abs(dz) <= radius + 1
+                        and not (level == trunk_height - 2 and dx == 0 and dz == 0) then
+                        putExtraBlock(world, x + dx, z + dz, level, "leaves")
+                    end
+                end end
             end
-            local crown_height = math.min(MAX_COLUMN_HEIGHT, h + 4)
-            for dz = -1, 1 do for dx = -1, 1 do
-                if math.abs(dx) + math.abs(dz) > 0 and world.heights[z + dz + 1][x + dx + 1] < crown_height then
-                    world.heights[z + dz + 1][x + dx + 1] = crown_height
-                    world.materials[z + dz + 1][x + dx + 1] = "leaves"
+        end
+    end end
+    -- Deterministische Landmarke: drei kleine Häuser geben der Welt einen
+    -- sichtbaren Ort statt einer endlosen Ansammlung von Terrain-Säulen.
+    local village_x = 15 + math.floor(hash2(seed + 500, 0, 0) * 35)
+    local village_z = 15 + math.floor(hash2(seed + 700, 0, 0) * 35)
+    for house = 0, 2 do
+        local hx, hz = village_x + (house % 2) * 8, village_z + math.floor(house / 2) * 8
+        if hx > 3 and hz > 3 and hx < WORLD_SIZE - 5 and hz < WORLD_SIZE - 5 then
+            local biome = world.biomes[hz + 1][hx + 1]
+            if biome ~= "mountains" and biome ~= "swamp" then
+                local ground = world.heights[hz + 1][hx + 1]
+                putBox(world, hx - 2, hz - 2, ground, hx + 2, hz + 2, ground, "stone")
+                for level = ground + 1, ground + 3 do
+                    for dz = -2, 2 do for dx = -2, 2 do
+                        local wall = math.abs(dx) == 2 or math.abs(dz) == 2
+                        local door = dx == 0 and dz == -2 and level <= ground + 2
+                        if wall and not door then putExtraBlock(world, hx + dx, hz + dz, level, "wood") end
+                    end end
                 end
-            end end
+                putBox(world, hx - 3, hz - 2, ground + 4, hx + 3, hz + 2, ground + 4, "wood")
+            end
+        end
+    end
+    -- Kleine, billige Biome-Signaturen: Kakteen und Sumpfgras.
+    for z = 3, WORLD_SIZE - 4 do for x = 3, WORLD_SIZE - 4 do
+        local biome, chance = world.biomes[z + 1][x + 1], hash2(seed + 901, x, z)
+        local ground = world.heights[z + 1][x + 1]
+        if biome == "desert" and chance > 0.94 then
+            putExtraBlock(world, x, z, ground, "wood")
+            if chance > 0.975 then putExtraBlock(world, x, z, ground + 1, "wood") end
+        elseif biome == "swamp" and chance > 0.90 then
+            putExtraBlock(world, x, z, ground, "leaves")
         end
     end end
     if rebuildWorldBlocks then rebuildWorldBlocks(world) end
@@ -331,14 +389,12 @@ end
 local function findSpawn(world)
     local size = world.size
     local trunks = {}
-    for z = 2, size - 3 do
-        local materials = world.materials[z + 1]
-        for x = 2, size - 3 do
-            if materials[x + 1] == "wood" then
-                trunks[#trunks + 1] = { x = x + 0.5, z = z + 0.5, height = world.heights[z + 1][x + 1] }
-            end
+    for z = 2, size - 3 do for x = 2, size - 3 do
+        local ground = world.heights[z + 1][x + 1]
+        if world.extra_blocks[extraBlockKey(x, z, ground)] == "wood" then
+            trunks[#trunks + 1] = { x = x + 0.5, z = z + 0.5, height = ground + 4 }
         end
-    end
+    end end
 
     local center = (size - 1) / 2
     local best_tree_spawn, best_open_spawn
@@ -428,6 +484,8 @@ end
 -- a padded linear view so the hot DDA loop avoids repeated table/hash lookups.
 local function rawBlockAt(world, x, z, level)
     if x < 0 or z < 0 or x >= world.size or z >= world.size or level < 0 then return nil end
+    local extra = world.extra_blocks and world.extra_blocks[extraBlockKey(x, z, level)]
+    if extra then return extra end
     local height = world.heights[z + 1][x + 1] or 0
     if level >= height then return nil end
     local surface = world.materials[z + 1][x + 1] or "grass"
@@ -1358,7 +1416,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.1.0",
+    version = "3.2.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",

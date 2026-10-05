@@ -143,7 +143,7 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.1.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.2.0" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.COLOR_RENDER_SAMPLE == 2, "Color mode must use a finer ray grid so texture dithering stays crisp")
@@ -222,13 +222,14 @@ local plains_tree_cells = 0
 for z = 1, world.size do
     for x = 1, world.size do
         max_height = math.max(max_height, world.heights[z][x])
-        if world.biomes[z][x] == "plains" and (world.materials[z][x] == "wood" or world.materials[z][x] == "leaves") then
-            plains_tree_cells = plains_tree_cells + 1
-        end
     end
+end
+for key, material in pairs(world.extra_blocks) do
+    if material == "wood" or material == "leaves" then plains_tree_cells = plains_tree_cells + 1 end
 end
 assert(max_height <= test.MAX_COLUMN_HEIGHT, "Tree generation must not cascade into unbounded columns")
 assert(plains_tree_cells > 0, "Seeded plains must retain their low-probability trees")
+assert(plains_tree_cells > 10, "Trees must be made from freestanding blocks above the terrain")
 local top_u, top_v = test.textureCoordinates("top", 3.25, 5.5, 9.75, 1)
 local x_side_u, x_side_v = test.textureCoordinates("side", 3.25, 5.5, 9.75, 0)
 local z_side_u, z_side_v = test.textureCoordinates("side", 3.25, 5.5, 9.75, 2)
@@ -258,6 +259,7 @@ assertFlatBlockCacheMatches(edit_session.world)
 
 local function flatSession()
     local flat = test.VoxelSession.new()
+    flat.world.extra_blocks = {}
     for z = 1, flat.world.size do
         for x = 1, flat.world.size do
             flat.world.heights[z][x] = 1
@@ -468,5 +470,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.1.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.2.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
