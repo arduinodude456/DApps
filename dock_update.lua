@@ -422,6 +422,11 @@ local function backgroundTick(instance, context)
     return true
 end
 
+local function safeBackgroundTick(instance, context)
+    local ok, result = pcall(backgroundTick, instance, context)
+    return ok and result or false
+end
+
 local function prepareRelease(state)
     if not state.release then return nil, _("Check for an AppDock release first.") end
     if state.files then return state.files end
@@ -533,10 +538,12 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.4",
+    version = "1.1.5",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
     logo = "download",
     buildPane = buildPane,
+    backgroundTick = safeBackgroundTick,
+    onAutostart = safeBackgroundTick,
 }
