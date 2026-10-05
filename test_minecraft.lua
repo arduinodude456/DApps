@@ -42,22 +42,55 @@ local function ctypeLikeRGB32()
     })
 end
 MOCK.rgb32_ctor = ctypeLikeRGB32()
+local ffi_ok, ffi = pcall(require, "ffi")
+if ffi_ok then
+    ffi.cdef[[typedef struct { uint8_t r; uint8_t g; uint8_t b; uint8_t alpha; uint8_t rgb32; } MinecraftTestRGB32;]]
+    ffi.metatype("MinecraftTestRGB32", {
+        __index = {
+            getColorRGB32 = function(self) return self end,
+            getR = function(self) return self.r end,
+            getG = function(self) return self.g end,
+            getB = function(self) return self.b end,
+            getAlpha = function(self) return self.alpha end,
+        },
+        __eq = function(self, color)
+            local c = color:getColorRGB32()
+            return self.r == c:getR() and self.g == c:getG() and self.b == c:getB() and self.alpha == c:getAlpha()
+        end,
+        __tostring = function(self)
+            if self.rgb32 == 1 then return string.format("rgb(%d,%d,%d)", self.r, self.g, self.b) end
+            if self.r == 0 and self.g == 0 and self.b == 0 then return "black" end
+            if self.r == 255 and self.g == 255 and self.b == 255 then return "white" end
+            return string.format("gray(%d)", self.r)
+        end,
+    })
+    MOCK.rgb32_ctor = ffi.typeof("MinecraftTestRGB32")
+end
 
 local function isRGBInk(ink)
-    return type(ink) == "table" and ink.rgb32 == true
+    return (type(ink) == "cdata" and ink.rgb32 == 1) or (type(ink) == "table" and ink.rgb32 == true)
 end
+
+local function colorConstant(name, r, g, b)
+    if ffi_ok then return MOCK.rgb32_ctor(r, g, b, 0xFF, 0) end
+    return name
+end
+local COLOR_WHITE = colorConstant("white", 255, 255, 255)
+local COLOR_BLACK = colorConstant("black", 0, 0, 0)
+local COLOR_LIGHT_GRAY = colorConstant("light", 192, 192, 192)
+local COLOR_DARK_GRAY = colorConstant("dark", 64, 64, 64)
 
 package.preload["ffi/blitbuffer"] = function()
     return {
-        COLOR_WHITE = "white",
-        COLOR_BLACK = "black",
-        COLOR_LIGHT_GRAY = "light",
-        COLOR_DARK_GRAY = "dark",
+        COLOR_WHITE = COLOR_WHITE,
+        COLOR_BLACK = COLOR_BLACK,
+        COLOR_LIGHT_GRAY = COLOR_LIGHT_GRAY,
+        COLOR_DARK_GRAY = COLOR_DARK_GRAY,
         ColorRGB32 = MOCK.rgb32_ctor,
         colorFromString = function(hex)
             local r, g, b = hex:match("^#(%x%x)(%x%x)(%x%x)$")
             assert(r and g and b, "colorFromString expects a six-digit RGB hex string")
-            return MOCK.rgb32_ctor(tonumber(r, 16), tonumber(g, 16), tonumber(b, 16), 0xFF)
+            return MOCK.rgb32_ctor(tonumber(r, 16), tonumber(g, 16), tonumber(b, 16), 0xFF, 1)
         end,
     }
 end
@@ -101,7 +134,7 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.6" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.7" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
@@ -236,7 +269,7 @@ and the color button must not claim a color mode that the panel cannot show.
 ]]--
 MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = false, false, false
 assert(not test.colorRenderingEnabled(), "A grayscale panel must use monochrome rendering")
-assert(test.colorForMaterial("grass") == "black", "With KOReader color rendering off, the palette must fall back to black")
+assert(tostring(test.colorForMaterial("grass")) == "black", "With KOReader color rendering off, the palette must fall back to black")
 local mono_session = flatSession()
 assert(mono_session.color_enabled, "Color mode stays requested by default; only rendering falls back")
 assert(not mono_session:act("color"), "A color toggle on a grayscale panel must report false")
@@ -335,5 +368,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.6 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.7 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

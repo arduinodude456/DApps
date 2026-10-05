@@ -74,7 +74,9 @@ end
 local rgb_colors = {}
 local function paletteColor(name)
     local color = rgb_colors[name]
-    if color == nil then
+    -- Do not compare a cached LuaJIT cdata color to nil: KOReader's ColorRGB32
+    -- __eq metamethod indexes its argument and crashes on that comparison.
+    if not color then
         local rgb = COLOR_PALETTE[name] or COLOR_PALETTE.black
         local hex = string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
         color = Blitbuffer.colorFromString(hex)
@@ -984,7 +986,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.6",
+    version = "3.0.7",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
