@@ -52,6 +52,8 @@ local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-1.8.1' }\n"
 packaged_sources["_meta.lua"] = "return { version = '1.8.1' }\n"
+local png_signature = "\137PNG\r\n\26\nfixture"
+packaged_sources["assets/logos/appdock.png"] = png_signature
 local tree_mode = "valid"
 
 package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "white", COLOR_BLACK = "black", COLOR_DARK_GRAY = "dark", COLOR_LIGHT_GRAY = "light", COLOR_GRAY_8 = "g8" } end
@@ -83,6 +85,7 @@ package.preload["json"] = function()
                 for _, name in ipairs(required) do tree[#tree + 1] = { type = "blob", path = name, size = #sources[name] } end
                 tree[#tree + 1] = { type = "blob", path = "README.md", size = 4096 }
                 for _, name in ipairs(required) do tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/" .. name, size = #packaged_sources[name] } end
+                tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/assets/logos/appdock.png", size = #packaged_sources["assets/logos/appdock.png"] }
                 return { tree = tree }
             end
             error("unexpected JSON fixture: " .. tostring(body))
@@ -112,8 +115,9 @@ package.preload["ssl.https"] = function()
         elseif request.url:find("/git/trees/", 1, true) then request.sink("tree")
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
-            local name = request.url:match("/([^/]+%.lua)$")
-            local source = packaged and packaged_sources[name] or sources[name]
+            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$")
+            local relative = request.url:match("/1%.7%.0/appdock%.koplugin/(.+)$")
+            local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
             request.sink(source)
         end
@@ -129,7 +133,7 @@ for _, name in ipairs(required) do
 end
 
 local app = dofile("/home/ubuntu/dapps-store-repo/dock_update.lua")
-assert(app.id == "dock_update" and app.version == "1.1.2" and app.logo == "download", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.1.3" and app.logo == "download", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open("/home/ubuntu/work/DApps/dock_update.lua", "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 192 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 local context = {
@@ -162,11 +166,13 @@ assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit co
 log.shown.ok_callback()
 local new_main = assert(io.open(active .. "/main.lua", "rb")):read("*a")
 assert(new_main:find("packaged main", 1, true), "DockUpdate must atomically replace the active AppDock folder with the current packaged sources")
+local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
+assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")
 local backup = active .. ".appdock-backup-1.6.0"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 18, "DockUpdate must fetch only release metadata, one tree, and the validated sixteen source files")
+assert(#log.requests == 19, "DockUpdate must fetch only release metadata, one tree, sixteen source files, and the validated PNG asset")
 
 -- A malformed tree must be rejected before confirmation and leave the active release intact.
 tree_mode = "bad"

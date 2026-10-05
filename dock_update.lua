@@ -3,9 +3,10 @@ DockUpdate for AppDock.
 
 A local, explicit-confirmation updater for the AppDock core plugin. It reads
 release metadata only from the pinned public GitHub repository, displays the
-release notes, validates a small root-level Lua release tree, stages every
-source file, and atomically swaps the active plugin folder only after the user
-confirms. The previous plugin folder is kept as a nearby rollback backup.
+release notes, validates a small root-level Lua release tree plus bundled PNG
+assets, stages every file, and atomically swaps the active plugin folder only
+after the user confirms. The previous plugin folder is kept as a nearby
+rollback backup.
 --]]--
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -41,7 +42,8 @@ local MAX_METADATA_BYTES = 128 * 1024
 -- Keep enough headroom for the growing AppDock DApp host while retaining a
 -- strict per-file bound for downloaded Lua source.
 local MAX_FILE_BYTES = 192 * 1024
-local MAX_TOTAL_BYTES = 768 * 1024
+local MAX_ASSET_BYTES = 3 * 1024 * 1024
+local MAX_TOTAL_BYTES = 8 * 1024 * 1024
 local MAX_SOURCE_FILES = 32
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
@@ -147,6 +149,19 @@ local function safeSourcePath(path)
     return path:match("^appdock_[%w_%-]+%.lua$") ~= nil
 end
 
+local function safeAssetPath(path)
+    if type(path) ~= "string" or #path == 0 or #path > 160 then return false end
+    -- Only bundled PNGs below the AppDock asset directory are accepted. This
+    -- deliberately excludes arbitrary archives, native files and hidden paths.
+    return path:match("^assets/[%w_%-]+/[%w_%-]+%.png$") ~= nil
+end
+
+local function releasePathKind(path)
+    if safeSourcePath(path) then return "source" end
+    if safeAssetPath(path) then return "asset" end
+    return nil
+end
+
 local function sourceTreeFromJSON(body)
     local raw, err = decodeJSON(body)
     if not raw then return nil, err end
@@ -161,7 +176,7 @@ local function sourceTreeFromJSON(body)
     for item_index, item in ipairs(raw.tree) do
         if type(item) == "table" and item.type == "blob" and type(item.path) == "string" then
             local inner = item.path:match("^appdock%.koplugin/(.+)$")
-            if inner and safeSourcePath(inner) then packaged[inner] = true end
+            if inner and releasePathKind(inner) then packaged[inner] = true end
         end
     end
     local use_packaged = true
@@ -185,13 +200,15 @@ local function sourceTreeFromJSON(body)
                 end
             end
             if path and not path:match("%.md$") then
-                if not safeSourcePath(path) then return nil, _("The release contains an unsupported file: ") .. tostring(original_path) end
-                if not size or size < 1 or size > MAX_FILE_BYTES then return nil, _("A release source file has an invalid size.") end
+                local kind = releasePathKind(path)
+                if not kind then return nil, _("The release contains an unsupported file: ") .. tostring(original_path) end
+                local max_size = kind == "asset" and MAX_ASSET_BYTES or MAX_FILE_BYTES
+                if not size or size < 1 or size > max_size then return nil, kind == "asset" and _("A release PNG asset has an invalid size.") or _("A release source file has an invalid size.") end
                 if seen[path] then return nil, _("The release contains duplicate source files.") end
                 seen[path] = true
                 total = total + size
                 if total > MAX_TOTAL_BYTES then return nil, _("The release source package is too large.") end
-                entries[#entries + 1] = { path = path, source_path = source_path, size = size }
+                entries[#entries + 1] = { path = path, source_path = source_path, size = size, kind = kind }
                 if #entries > MAX_SOURCE_FILES then return nil, _("The release contains too many source files.") end
             end
         end
@@ -226,6 +243,24 @@ local function writeFile(path, content)
     return true
 end
 
+local function ensureParentDirectories(root, path)
+    local current = root
+    local parts = {}
+    for part in path:gmatch("([^/]+)") do parts[#parts + 1] = part end
+    for index = 1, #parts - 1 do
+        current = current .. "/" .. parts[index]
+        if not lfs.attributes(current, "mode") then
+            local created, mkdir_err = lfs.mkdir(current)
+            if not created then return nil, mkdir_err end
+        end
+    end
+    return true
+end
+
+local function isPng(content)
+    return type(content) == "string" and content:sub(1, 8) == "\137PNG\r\n\26\n"
+end
+
 local function activePlugin(context)
     local appdock = context and context.manager and context.manager.appdock
     local path = appdock and appdock.path
@@ -245,19 +280,38 @@ local function stageRelease(release, entries, target)
     if not created then return nil, mkdir_err or _("The update staging folder could not be created.") end
 
     for entry_index, entry in ipairs(entries) do
-        local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), MAX_FILE_BYTES, "text/plain,text/x-lua;q=0.9,*/*;q=0.1")
+        local is_asset = entry.kind == "asset"
+        local max_size = is_asset and MAX_ASSET_BYTES or MAX_FILE_BYTES
+        local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
+        local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
-        if #source ~= entry.size then removeTree(stage); return nil, _("Downloaded source size does not match release metadata: ") .. entry.path end
-        local chunk, syntax_err = loadstring(source, "@dockupdate/" .. entry.path)
-        if not chunk then removeTree(stage); return nil, _("Downloaded source has invalid Lua syntax: ") .. entry.path .. "\n" .. tostring(syntax_err) end
+        if #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
+        if is_asset then
+            if not isPng(source) then removeTree(stage); return nil, _("Downloaded PNG asset has an invalid signature: ") .. entry.path end
+        else
+            local chunk, syntax_err = loadstring(source, "@dockupdate/" .. entry.path)
+            if not chunk then removeTree(stage); return nil, _("Downloaded source has invalid Lua syntax: ") .. entry.path .. "\n" .. tostring(syntax_err) end
+        end
+        local parent_ok, parent_err = ensureParentDirectories(stage, entry.path)
+        if not parent_ok then removeTree(stage); return nil, _("Could not create the asset directory for ") .. entry.path .. ": " .. tostring(parent_err) end
         local saved, save_err = writeFile(stage .. "/" .. entry.path, source)
         if not saved then removeTree(stage); return nil, _("Could not stage ") .. entry.path .. ": " .. tostring(save_err) end
     end
 
     -- Verify the staged files once more from disk before touching the active plugin.
     for entry_index, entry in ipairs(entries) do
-        local chunk, syntax_err = loadfile(stage .. "/" .. entry.path)
-        if not chunk then removeTree(stage); return nil, _("Staged source validation failed: ") .. entry.path .. "\n" .. tostring(syntax_err) end
+        if entry.kind == "asset" then
+            local file = io.open(stage .. "/" .. entry.path, "rb")
+            local content = file and file:read("*a") or nil
+            if file then file:close() end
+            if not content or #content ~= entry.size or not isPng(content) then
+                removeTree(stage)
+                return nil, _("Staged PNG asset validation failed: ") .. entry.path
+            end
+        else
+            local chunk, syntax_err = loadfile(stage .. "/" .. entry.path)
+            if not chunk then removeTree(stage); return nil, _("Staged source validation failed: ") .. entry.path .. "\n" .. tostring(syntax_err) end
+        end
     end
     return stage
 end
@@ -479,7 +533,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.2",
+    version = "1.1.3",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
