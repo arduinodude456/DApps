@@ -38,7 +38,9 @@ local API_ROOT = "https://api.github.com/repos/" .. REPOSITORY
 local RAW_ROOT = "https://raw.githubusercontent.com/" .. REPOSITORY
 local RELEASE_URL = API_ROOT .. "/releases/latest"
 local MAX_METADATA_BYTES = 128 * 1024
-local MAX_FILE_BYTES = 160 * 1024
+-- Keep enough headroom for the growing AppDock DApp host while retaining a
+-- strict per-file bound for downloaded Lua source.
+local MAX_FILE_BYTES = 192 * 1024
 local MAX_TOTAL_BYTES = 768 * 1024
 local MAX_SOURCE_FILES = 32
 local MAX_RELEASE_NOTES = 16 * 1024
@@ -477,7 +479,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.1",
+    version = "1.1.2",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
