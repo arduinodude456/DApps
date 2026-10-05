@@ -295,12 +295,25 @@ local function buildWorld(seed)
         terrain_heights[z] = {}
         for x = 1, WORLD_SIZE do terrain_heights[z][x] = world.heights[z][x] end
     end
+    local tree_sites = {}
     for z = 2, WORLD_SIZE - 3 do for x = 2, WORLD_SIZE - 3 do
         local biome = world.biomes[z + 1][x + 1]
         local chance = hash2(seed + 11, x, z)
-        local can_grow = (biome == "forest" or biome == "taiga") and chance > 0.72
-            or biome == "plains" and chance < 0.12
+        -- Minecraft forests are wooded, not solid walls of leaves. Select a
+        -- sparse set of tree sites and keep a generous clearing around each.
+        local can_grow = (biome == "forest" or biome == "taiga") and chance > 0.91
+            or biome == "plains" and chance < 0.035
         if can_grow then
+            local spacing = biome == "plains" and 7 or 6
+            for _, site in ipairs(tree_sites) do
+                if math.abs(site.x - x) < spacing and math.abs(site.z - z) < spacing then
+                    can_grow = false
+                    break
+                end
+            end
+        end
+        if can_grow then
+            tree_sites[#tree_sites + 1] = { x = x, z = z }
             local h = terrain_heights[z + 1][x + 1]
             local trunk_height = math.min(MAX_COLUMN_HEIGHT - 1, h + 4)
             for level = h, trunk_height - 1 do putExtraBlock(world, x, z, level, "wood") end
