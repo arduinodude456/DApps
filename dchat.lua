@@ -1203,12 +1203,14 @@ function DMBubble:init()
         content[#content + 1] = TextWidget:new{ text = _("Image"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { padding, self.height - padding - scale(16) } }
     end
     if self.status ~= "" then
-        content[#content + 1] = TextWidget:new{ text = self.status, face = Font:getFace("smallinfofont", scale(9)), fgcolor = CHAT_CHECK, max_width = scale(28), overlap_offset = { self.width - padding - scale(28), self.height - padding - scale(12) } }
+        content[#content + 1] = TextWidget:new{ text = self.status, face = Font:getFace("smallinfofont", scale(10)), fgcolor = CHAT_CHECK or Blitbuffer.COLOR_BLACK, max_width = scale(32), overlap_offset = { self.width - padding - scale(32), self.height - padding - scale(13) } }
     end
-    -- The small corner glyph gives the rounded rectangle the familiar chat-tail silhouette.
+    local bubble_background = self.bubble_background or Blitbuffer.COLOR_WHITE
+    local bubble = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = scale(1), color = Blitbuffer.COLOR_GRAY_8, radius = math.max(6, math.floor(self.height * .18)), background = bubble_background, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
+    -- Render the tail outside the bubble frame so the rounded container cannot clip it.
     local tail = self.own and "◢" or "◣"
-    content[#content + 1] = TextWidget:new{ text = tail, face = Font:getFace("smallinfofont", scale(11)), fgcolor = self.bubble_background or Blitbuffer.COLOR_WHITE, overlap_offset = { self.own and self.width - scale(9) or -scale(1), self.height - scale(10) } }
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(5, math.floor(self.height * .18)), background = self.bubble_background or Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
+    local tail_widget = TextWidget:new{ text = tail, face = Font:getFace("cfont", scale(13)), fgcolor = bubble_background, overlap_offset = { self.own and self.width - scale(10) or -scale(2), self.height - scale(11) } }
+    self[1] = OverlapGroup:new{ dimen = self.dimen, allow_mirroring = false, bubble, tail_widget }
     self.ges_events = { TapDChatBubble = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function DMBubble:paintTo(bb, x, y)
@@ -1279,8 +1281,8 @@ local function dmConversationPane(instance, context)
     for index = start_index, math.min(#(state.store.dm_messages or {}), start_index + MAX_VISIBLE_PER_PAGE - 1) do
         local message = state.store.dm_messages[index]
         if y + row_height > end_y then break end
-        local own = message.senderDeviceId == state.store.device_id
-        local bubble_height = message.attachmentData ~= "" and math.max(row_height, math.min(px(176), math.floor(height * .30))) or row_height
+        local own = message.senderDeviceId == state.store.device_id or (message.senderDeviceId == "" and message.authorName == state.store.display_name)
+        local bubble_height = message.attachmentData ~= "" and math.max(row_height, math.min(px(176), math.floor(height * .30))) or math.max(row_height, px(58))
         local bubble = dmBubble(width - 2 * margin, bubble_height, message, own, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
         bubble.overlap_offset = { margin + (own and math.floor((width - 2 * margin) * 0.22) or 0), y }
         elements[#elements + 1] = bubble
