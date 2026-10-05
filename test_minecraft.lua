@@ -99,7 +99,7 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.3" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.4" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
@@ -175,34 +175,21 @@ assert(test.colorHardwareAvailable(), "A color panel with color rendering on mus
 local color_session = flatSession()
 color_session.color_enabled = true
 local color_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }
-local color_spans, rgb_spans, rgb_paint_calls, generic_rgb_calls, wrong_ink = 0, 0, 0, 0, 0
+local color_spans, rgb_spans, wrong_ink = 0, 0, 0
 local function recordColorSpan(_, left, top, width, height, ink)
     color_spans = color_spans + 1
     if isRGBInk(ink) then
-        generic_rgb_calls = generic_rgb_calls + 1
         rgb_spans = rgb_spans + 1
         if ink.r ~= 45 or ink.g ~= 170 or ink.b ~= 70 then wrong_ink = wrong_ink + 1 end
     end
     assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
     assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
 end
-local function recordRGB32Span(...)
-    rgb_paint_calls = rgb_paint_calls + 1
-    local args = { ... }
-    color_spans = color_spans + 1
-    local ink = args[6]
-    if isRGBInk(ink) then
-        rgb_spans = rgb_spans + 1
-        if ink.r ~= 45 or ink.g ~= 170 or ink.b ~= 70 then wrong_ink = wrong_ink + 1 end
-    end
-    local _, left, top, width, height = unpack(args)
-    assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
-    assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
-end
-color_canvas:paintTo({ paintRect = recordColorSpan, paintRectRGB32 = recordRGB32Span }, 17, 29)
+-- Draw DApp uses this normal KOReader paintRect contract with ColorRGB32 inks;
+-- Minecraft must work with the same canvas and must not require another API.
+color_canvas:paintTo({ paintRect = recordColorSpan }, 17, 29)
 assert(color_spans > 10, "Color rendering must still paint the projected block scene")
 assert(rgb_spans > 0, "Color rendering must paint RGB material colors on a color buffer")
-assert(rgb_paint_calls > 0 and generic_rgb_calls == 0, "RGB inks must use KOReader's paintRectRGB32 API")
 assert(wrong_ink == 0, "Grass ground must use the RGB grass palette color, not a converted gray")
 
 -- The whole ground plane must appear as one color, not as flat gray blocks.
@@ -218,7 +205,7 @@ local function recordColorPixels(_, left, top, width, height, ink)
         end
     end
 end
-test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }:paintTo({ paintRect = recordColorPixels, paintRectRGB32 = recordColorPixels }, 0, 0)
+test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }:paintTo({ paintRect = recordColorPixels }, 0, 0)
 local function countPixels(value, first_row, last_row)
     local count = 0
     for row = first_row, last_row do
@@ -232,18 +219,6 @@ assert(countPixels("color", 42, 125) > 8000, "Color ground must cover the lower 
 assert(countPixels("black", 42, 125) < 400, "Color mode must not shade RGB ground with monochrome dithering")
 assert(countPixels("color", 0, 41) == 0, "The sky above the horizon must stay unpainted")
 
--- If an older KOReader build has an RGB buffer but lacks the RGB paint method,
--- keep the renderer safe and monochrome instead of passing RGB cdata to paintRect.
-local legacy_session = flatSession()
-legacy_session.color_enabled = true
-local legacy_calls = 0
-test.VoxelCanvas:new{ width = 210, height = 126, session = legacy_session }:paintTo({
-    paintRect = function(_, _, _, _, _, ink)
-        legacy_calls = legacy_calls + 1
-        assert(not isRGBInk(ink), "RGB ink must not be sent to generic paintRect")
-    end,
-}, 0, 0)
-assert(legacy_calls > 10, "Legacy buffers must continue rendering in monochrome")
 
 --[[--
 Phase 2: monochrome E-Ink. The dithered black/white renderer must stay intact
@@ -282,13 +257,12 @@ assert(monochromePixels("black", 42, 83) > 300 and monochromePixels("black", 84,
 assert(monochromePixels("black", 0, 41) == 0, "A level view must not dither sky ink above the horizon")
 
 --[[--
-Phase 3: a color panel whose KOReader "Color rendering" setting is off. KOReader
-then keeps an 8bpp buffer, so RGB ink would only produce flat gray blocks: the
-renderer must stay monochrome and say why.
+Phase 3: a color panel whose KOReader "Color rendering" setting is off. The
+renderer must follow the same public screen setting as Draw and say why.
 ]]--
 MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = false, true, false
 local disabled_session = flatSession()
-assert(not test.colorHardwareAvailable(), "An 8bpp buffer must not offer color")
+assert(not test.colorHardwareAvailable(), "KOReader's disabled color-rendering setting must disable color")
 assert(not disabled_session:act("color"), "A refused color toggle must report false")
 assert(disabled_session.last_event:find("KOReader", 1, true), "The hint must name KOReader's Color rendering setting")
 assert(not disabled_session.color_enabled, "Color must stay off while KOReader's setting is off")
@@ -351,5 +325,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.3 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.4 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

@@ -107,31 +107,19 @@ local function colorScreenAvailable()
     return enabled == true
 end
 
--- Screen:isColorEnabled() already falls back to the panel capability when the
--- setting was never touched, so it is the primary answer.
 local function colorRenderingEnabled()
-    local enabled, known = colorSettingEnabled()
-    if known then return enabled end
-    return colorScreenAvailable()
+    -- This is the same public KOReader query used by draw.lua and AppDock's
+    -- own color palette. It accounts for both panel capability and user setting.
+    local is_enabled = Screen and Screen.isColorEnabled
+    if type(is_enabled) ~= "function" then return false end
+    local ok, enabled = pcall(function() return Screen:isColorEnabled() end)
+    return ok and enabled == true
 end
 
--- Color is only *visible* when the screen buffer really stores RGB values. On a
--- color panel with KOReader's "Color rendering" switched off, KOReader keeps an
--- 8bpp buffer: RGB colors would collapse into flat gray blocks and look worse
--- than the monochrome renderer. The buffer is the ground truth.
-local function colorBufferAvailable(bb)
-    bb = bb or (Screen and Screen.bb)
-    local is_rgb = bb and bb.isRGB
-    if type(is_rgb) == "function" then
-        local ok, value = pcall(is_rgb, bb)
-        if ok then return value and true or false end
-    end
-    -- Builds without the buffer query: trust KOReader's setting.
-    return colorRenderingEnabled()
-end
-
-local function colorHardwareAvailable(bb)
-    return canBuildRGBColor() and colorBufferAvailable(bb)
+local function colorHardwareAvailable()
+    -- The pane buffer is owned by KOReader's compositor and can be transient;
+    -- use the same device-level gate as the working Draw DApp instead.
+    return canBuildRGBColor() and colorRenderingEnabled()
 end
 
 -- One cached color object per palette entry. Blitbuffer.ColorRGB32 returns a
@@ -358,7 +346,7 @@ function VoxelSession:toggleColor()
         self.last_event = _("Dieses Gerät kann keine Farben darstellen.")
         return false
     end
-    if not colorBufferAvailable() then
+    if not colorRenderingEnabled() then
         self.color_enabled = false
         self.last_event = _("Farbrendering ist in KOReader ausgeschaltet (Bildschirm → Farbrendering).")
         return false
@@ -679,14 +667,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
     local bayer4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
-    -- Decide once per frame: color needs the user's color mode, a working RGB
-    -- color constructor and a screen buffer that can actually store color.
-    -- RGB32 colors must go through KOReader's RGB-aware paint API. The generic
-    -- paintRect path is for luminance colors and may try to treat a RGB cdata
-    -- as a missing/invalid Color argument on some KOReader builds.
-    local color_mode = session.color_enabled
-        and colorHardwareAvailable(bb)
-        and type(bb.paintRectRGB32) == "function"
+    -- Match Draw's proven color path: Screen:isColorEnabled() selects an RGB
+    -- ColorRGB32 ink, then the normal widget BlitBuffer paints it via paintRect.
+    local color_mode = session.color_enabled and colorHardwareAvailable()
     local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
         if color_mode then
             return colorForMaterial(material)
@@ -756,11 +739,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         local top = y + floor(row * pixel_h)
         local bottom = y + floor((row + 1) * pixel_h)
         if right > left and bottom > top then
-            if color_mode then
-                bb:paintRectRGB32(left, top, right - left, bottom - top, ink)
-            else
-                bb:paintRect(left, top, right - left, bottom - top, ink)
-            end
+            bb:paintRect(left, top, right - left, bottom - top, ink)
         end
     end
     for ry = 0, rows - 1 do
@@ -1059,7 +1038,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.3",
+    version = "3.0.4",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
@@ -1137,7 +1116,6 @@ return {
         canBuildRGBColor = canBuildRGBColor,
         colorRenderingEnabled = colorRenderingEnabled,
         colorScreenAvailable = colorScreenAvailable,
-        colorBufferAvailable = colorBufferAvailable,
         colorHardwareAvailable = colorHardwareAvailable,
         paletteColor = paletteColor,
         COLOR_PALETTE = COLOR_PALETTE,
