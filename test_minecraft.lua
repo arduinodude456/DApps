@@ -99,14 +99,14 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.4" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.5" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
--- Color capability: the DApp must not test the color constructor with type().
+-- Color mode follows only KOReader's public screen setting; there is no separate
+-- constructor or hardware capability probe inside the DApp.
 assert(type(MOCK.rgb32_ctor) ~= "function", "Test double must model KOReader's non-function ColorRGB32")
-assert(test.canBuildRGBColor() == true, "A callable, non-function ColorRGB32 must enable RGB colors")
 local palette_count = 0
 for _ in pairs(test.COLOR_PALETTE) do palette_count = palette_count + 1 end
 assert(palette_count == 7, "Color mode must expose exactly seven palette colors")
@@ -171,7 +171,7 @@ Phase 1: a color panel with KOReader's "Color rendering" switched on. This is
 the configuration that stayed silently monochrome before the fix.
 ]]--
 MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = true, true, true
-assert(test.colorHardwareAvailable(), "A color panel with color rendering on must offer color")
+assert(test.colorRenderingEnabled(), "A color panel with KOReader color rendering on must offer color")
 local color_session = flatSession()
 color_session.color_enabled = true
 local color_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }
@@ -225,12 +225,12 @@ Phase 2: monochrome E-Ink. The dithered black/white renderer must stay intact
 and the color button must not claim a color mode that the panel cannot show.
 ]]--
 MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = false, false, false
-assert(not test.colorHardwareAvailable(), "A grayscale panel must not report color")
-assert(test.colorForMaterial("grass") == "black", "Without color hardware the palette must fall back to black")
+assert(not test.colorRenderingEnabled(), "A grayscale panel must use monochrome rendering")
+assert(test.colorForMaterial("grass") == "black", "With KOReader color rendering off, the palette must fall back to black")
 local mono_session = flatSession()
 assert(mono_session.color_enabled, "Color mode stays requested by default; only rendering falls back")
 assert(not mono_session:act("color"), "A color toggle on a grayscale panel must report false")
-assert(mono_session.last_event:find("keine Farben", 1, true), "A grayscale panel must be reported instead of claiming color")
+assert(mono_session.last_event:find("KOReader-Farbrendering", 1, true), "A grayscale panel must stay monochrome without a color capability probe")
 assert(not mono_session.color_enabled, "A refused color toggle must not report color as active")
 local mono_pixels = {}
 for row = 0, 125 do
@@ -262,7 +262,7 @@ renderer must follow the same public screen setting as Draw and say why.
 ]]--
 MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = false, true, false
 local disabled_session = flatSession()
-assert(not test.colorHardwareAvailable(), "KOReader's disabled color-rendering setting must disable color")
+assert(not test.colorRenderingEnabled(), "KOReader's disabled color-rendering setting must disable color")
 assert(not disabled_session:act("color"), "A refused color toggle must report false")
 assert(disabled_session.last_event:find("KOReader", 1, true), "The hint must name KOReader's Color rendering setting")
 assert(not disabled_session.color_enabled, "Color must stay off while KOReader's setting is off")
@@ -325,5 +325,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.4 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.5 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
