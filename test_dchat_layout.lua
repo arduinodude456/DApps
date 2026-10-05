@@ -16,9 +16,39 @@ local function class()
     return C
 end
 local function install(name, value) package.preload[name] = function() return value end end
+local test_data_dir = os.tmpname() .. "_dchat_test"
+local test_cache_dir = test_data_dir .. "/appdock_dchat_images"
+os.execute("mkdir -p " .. string.format("%q", test_cache_dir))
+local stale_cache_path = test_cache_dir .. "/dchat_dch_stale_999.png"
+local stale_cache_file = io.open(stale_cache_path, "wb")
+stale_cache_file:write("stale")
+stale_cache_file:close()
+local test_lfs = {
+    attributes = function(path)
+        if path == test_data_dir or path == test_cache_dir then return { mode = "directory" } end
+        local file = io.open(path, "rb")
+        if file then file:close(); return { mode = "file" } end
+    end,
+    mkdir = function(path)
+        if path == test_cache_dir then return true end
+        return nil, "unexpected test directory"
+    end,
+    dir = function(path)
+        local entries = {}
+        if path == test_cache_dir then
+            local file = io.open(stale_cache_path, "rb")
+            if file then file:close(); entries[1] = "dchat_dch_stale_999.png" end
+        end
+        local index = 0
+        return function() index = index + 1; return entries[index] end
+    end,
+}
+install("datastorage", { getDataDir = function() return test_data_dir end })
+install("libs/libkoreader-lfs", test_lfs)
 local Widget = class()
 local Input = class()
 local image_widget_files = {}
+local image_widget_cache_modes = {}
 local test_is_android = true
 local deferred_ui_callback
 function Input:paintTo() end
@@ -34,6 +64,7 @@ install("ui/gesturerange", Widget)
 install("ui/widget/horizontalspan", Widget)
 install("ui/widget/imagewidget", { new = function(_, options)
     image_widget_files[#image_widget_files + 1] = options.file
+    image_widget_cache_modes[#image_widget_cache_modes + 1] = options.file_do_cache
     return Widget:new(options)
 end })
 install("ui/widget/infomessage", Widget)
@@ -62,6 +93,8 @@ _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = f
 local dchat = assert(loadfile("dchat.lua"))()
 assert(dchat._test.cloneDirectMessage({ id = 7, authorName = "Test", body = "ok", createdAt = "2026-10-04T00:00:00Z" }).id == "7", "numeric DM id was not normalized")
 assert(dchat._test.cloneDirectMessage({ id = 8, authorName = "Test", body = "", attachmentMime = "image/png", attachmentData = "TWFudXM=", createdAt = "2026-10-04T00:00:00Z" }).attachmentData == "TWFudXM=", "PNG DM attachment was not preserved")
+local oversized_image = dchat._test.cloneDirectMessage({ id = 81, authorName = "Test", body = "", attachmentMime = "image/jpeg", attachmentData = string.rep("A", 700000), createdAt = "2026-10-04T00:00:00Z" })
+assert(oversized_image and oversized_image.attachmentData == "" and oversized_image.body ~= "", "oversized remote image was retained in the local DChat cache")
 assert(dchat._test.dmPreview("kurz", 10) == "kurz", "short DM preview was changed")
 assert(dchat._test.dmPreview(string.rep("x", 40), 36) == string.rep("x", 33) .. "...", "long DM preview was not ellipsized")
 assert(dchat._test.base64Encode("Manus") == "TWFudXM=", "attachment base64 encoding failed")
@@ -81,6 +114,7 @@ local dm_instance = { dchat = {
 } }
 local dm_context = { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }
 local dm_pane = dchat.buildPane(dm_instance, dm_context)
+assert(io.open(stale_cache_path, "rb") == nil, "stale DChat image cache file was not removed on startup")
 assert(#image_widget_files == 0, "Android DChat instantiated ImageWidget in the conversation, including emoji shortcuts")
 dm_instance.dchat.view = "dm_message"
 dm_instance.dchat.selected_dm_id = "10"
@@ -107,6 +141,9 @@ local kobo_store = dm_instance.dchat.store
 kobo_store.dm_messages = kobo_messages
 local kobo_instance = { dchat = { store = kobo_store, view = "dm_conversation", status = "", loading = false, dm_page = 1, attachment_files = {} } }
 kobo_dchat.buildPane(kobo_instance, dm_context)
+for _, image_file in ipairs(image_widget_files) do
+    assert(not image_file:match("/appdock_dchat_images/"), "opening the DM conversation rendered an attachment preview")
+end
 kobo_instance.dchat.view = "dm_message"
 for _, message in ipairs(kobo_messages) do
     kobo_instance.dchat.selected_dm_id = message.id
@@ -120,6 +157,11 @@ for _, image_file in ipairs(image_widget_files) do
 end
 for _, extension in ipairs({ ".png", ".jpg", ".gif", ".webp" }) do
     assert(rendered_extensions[extension], "Tolino/Kobo did not render supported image format " .. extension)
+end
+for index, image_file in ipairs(image_widget_files) do
+    if image_file:match("/appdock_dchat_images/") then
+        assert(image_widget_cache_modes[index] == false, "DChat attachment was inserted into KOReader's shared ImageWidget cache")
+    end
 end
 for _, path in pairs(kobo_instance.dchat.attachment_files) do os.remove(path) end
 local rebuild_count = 0
@@ -145,6 +187,7 @@ assert(dual_store.endpoint == "https://appdock-bd7bcrzm.manus.space", "public en
 assert(dual_store.dm_endpoint == "https://dchatdm-qkwwnvdq.manus.space", "DM endpoint was not initialized")
 for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
     local pane = dchat.buildPane({}, { dimen = dimen, px = function(value) return value end, requestRebuild = function() end, appdock = {} })
-    assert(type(pane) == "table", "pane did not build")
+assert(type(pane) == "table", "pane did not build")
 end
+os.execute("rm -rf " .. string.format("%q", test_data_dir))
 print("dchat-pane-smoke-ok")
