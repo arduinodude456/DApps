@@ -1023,6 +1023,24 @@ local function dmPreview(text, maximum)
     return text:sub(1, math.max(1, maximum - 3)) .. "..."
 end
 
+local function sendEmojiBitmap(state, context, emoji_file)
+    local path = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. emoji_file
+    local file = io.open(path, "rb")
+    if not file then
+        state.status = _("The emoji bitmap could not be opened.")
+        refresh(context)
+        return
+    end
+    local data = file:read(MAX_ATTACHMENT_BYTES + 1)
+    file:close()
+    if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then
+        state.status = _("The emoji bitmap is too large to send.")
+        refresh(context)
+        return
+    end
+    sendDirectMessage(state, context, "", { mime = "image/png", data = base64Encode(data) })
+end
+
 local function attachmentFilePath(state, message)
     if isAndroidDevice() or not message or message.attachmentData == "" then return nil end
     state.attachment_files = state.attachment_files or {}
@@ -1122,7 +1140,7 @@ local function dmConversationPane(instance, context)
     end, overlap_offset = { margin, px(60) + button_height + gap } }
     for index, emoji in ipairs(DM_EMOJIS) do
         local emoji_file = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. DM_EMOJI_FILES[index]
-        elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, fallback = DM_EMOJI_LABELS[index], callback = function() promptDirectMessage(state, context, emoji) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
+        elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, fallback = DM_EMOJI_LABELS[index], callback = function() sendEmojiBitmap(state, context, DM_EMOJI_FILES[index]) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
     end
     local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
     state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
@@ -1208,7 +1226,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.5.0",
+    version = "1.5.1",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
