@@ -143,10 +143,10 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.2.0" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.2.1" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
-assert(test.COLOR_RENDER_SAMPLE == 2, "Color mode must use a finer ray grid so texture dithering stays crisp")
+assert(test.COLOR_RENDER_SAMPLE == 3, "Color mode must use a faster ray grid while keeping texture dithering readable")
 assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
 
 -- Color mode follows only KOReader's public screen setting; there is no separate
@@ -169,7 +169,7 @@ assert(brighter_dirt_texture_mix.second_pixels > dirt_texture_mix.second_pixels,
 local standard_cols, standard_rows = test.renderGridFor(210, 126)
 assert(standard_cols == 42 and standard_rows == 25, "A 210x126 pane must map to a 42x25 ray grid of 5x5 pixel cells")
 local color_cols, color_rows = test.renderGridFor(210, 126, test.COLOR_RENDER_SAMPLE)
-assert(color_cols == 105 and color_rows == 63, "Color mode must use 2x2 output pixels per ray")
+assert(color_cols == 70 and color_rows == 42, "Color mode must use 3x3 output pixels per ray")
 local compact_cols, compact_rows = test.renderGridFor(39, 61)
 assert(compact_cols == 7 and compact_rows == 12, "Compact panes must not oversample their assigned canvas")
 
@@ -470,5 +470,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.2.0 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.2.1 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

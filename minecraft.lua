@@ -39,7 +39,10 @@ local RENDER_SCALE = 1
 local RENDER_COLS = 600
 local RENDER_ROWS = 600
 local RENDER_SAMPLE = 5
-local COLOR_RENDER_SAMPLE = 2
+-- Color E-Ink panels do not benefit from a full-resolution ray per 2x2 cell.
+-- 3x3 keeps block silhouettes and texture dithering readable while cutting the
+-- hot DDA loop by roughly half on a typical AppDock pane.
+local COLOR_RENDER_SAMPLE = 3
 local BAYER4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
@@ -1429,7 +1432,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.2.0",
+    version = "3.2.1",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
