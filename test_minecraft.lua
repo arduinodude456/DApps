@@ -143,7 +143,7 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.0.9" and app.logo == "other", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.0.10" and app.logo == "other", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.COLOR_RENDER_SAMPLE == 2, "Color mode must use a finer ray grid so texture dithering stays crisp")
@@ -177,6 +177,26 @@ local world = test.buildWorld()
 assert(world.size == 80 and #world.heights == 80 and #world.heights[1] == 80, "World must be a complete deterministic block grid")
 assert(world.materials and world.materials[1][1], "World must contain block materials")
 assert(world.block_planes and test.blockAt(world, 0, 0, world.heights[1][1] - 1) == world.materials[1][1], "Cached voxel planes must preserve the visible surface block")
+local function assertFlatBlockCacheMatches(world_to_check)
+    assert(world_to_check.block_flat, "Worlds must build a contiguous renderer voxel cache")
+    local size = world_to_check.size
+    local stride, padding = world_to_check.block_flat_stride, world_to_check.block_flat_padding
+    local plane_size = stride * stride
+    assert(stride == size + padding * 2 and padding > 0, "Renderer cache must have a padded air border")
+    for level = 0, test.MAX_COLUMN_HEIGHT - 1 do
+        local plane = world_to_check.block_planes[level + 1]
+        for z = 0, size - 1 do
+            for x = 0, size - 1 do
+                local index = z * size + x + 1
+                local flat_index = level * plane_size + (z + padding) * stride + x + padding + 1
+                local material = plane[index]
+                assert(world_to_check.block_flat[flat_index] == (material or false), "Flat renderer cache must match the string material plane")
+            end
+        end
+    end
+    assert(world_to_check.block_flat[1] == false, "Padded world border must be empty")
+end
+assertFlatBlockCacheMatches(world)
 assert(test.heightAt(world, -1, 0) == 0 and test.heightAt(world, 0, -1) == 0, "Outside terrain must be empty")
 assert(test.heightAt(world, 11, 5) >= 1 and world.biomes[6][12], "Seeded biome world must remain walkable")
 assert(test.parseWorldSeed(" 6789 ") == 6789 and test.parseWorldSeed("") == nil and test.parseWorldSeed("seed") == false, "Seed input must accept integers, leave blank for random, and reject invalid text")
@@ -229,9 +249,12 @@ local edit_session = test.VoxelSession.new(12345)
 edit_session.player_x, edit_session.player_z, edit_session.yaw = 40.5, 40.5, 0
 edit_session.world.heights[43][41], edit_session.world.materials[43][41] = 3, "grass"
 test.rebuildWorldBlocks(edit_session.world)
+assertFlatBlockCacheMatches(edit_session.world)
 assert(edit_session:mine() and test.blockAt(edit_session.world, 40, 42, 1) == "grass" and test.blockAt(edit_session.world, 40, 42, 2) == nil, "Mining must update the cached top and remove the old voxel")
+assertFlatBlockCacheMatches(edit_session.world)
 edit_session:selectSlot(4)
 assert(edit_session:place() and test.blockAt(edit_session.world, 40, 42, 2) == "wood", "Placing must update the cached voxel plane")
+assertFlatBlockCacheMatches(edit_session.world)
 
 local function flatSession()
     local flat = test.VoxelSession.new()
@@ -445,5 +468,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.0.9 | other", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.0.10 | other", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")

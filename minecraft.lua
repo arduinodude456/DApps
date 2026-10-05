@@ -30,6 +30,7 @@ local WORLD_SIZE = 80
 local MAX_TERRAIN_HEIGHT = 14
 local MAX_COLUMN_HEIGHT = 18
 local MAX_VIEW_DISTANCE = 24
+local VOXEL_PADDING = MAX_VIEW_DISTANCE + 1
 local MAX_WORLD_SEED = 2147483647
 local RENDER_SCALE = 1
 -- 600x600 output target. The renderer samples 5x5 output pixels as one
@@ -172,10 +173,10 @@ local function paletteMixForMaterial(material, level)
     return mix
 end
 
-local function texturedColorInk(material, level, screen_x, screen_y)
-    local mix = paletteMixForMaterial(material, level)
-    local threshold = BAYER4[(screen_y % 4) + 1][(screen_x % 4) + 1]
-    return threshold < mix.second_pixels and mix.second or mix.first
+-- All material and texture-level pairs are fixed; resolve them once at load so
+-- the per-ray color path only performs two array lookups and a threshold test.
+for material in pairs(MATERIAL_TARGET_RGB) do
+    for level = 0, 3 do paletteMixForMaterial(material, level) end
 end
 
 -- Bound the DDA ray count while allowing each caller to select sampling density:
@@ -405,8 +406,8 @@ local function blockHash3(seed, x, z, level)
 end
 
 -- The C program raycasts individual blocks, not just a column silhouette.
--- Keep its layered surface/dirt/stone/ore rule, then cache each voxel plane so
--- the hot DDA loop does not redo nested table lookups and ore hashing per ray.
+-- Keep its layered surface/dirt/stone/ore rule, then cache each voxel plane and
+-- a padded linear view so the hot DDA loop avoids repeated table/hash lookups.
 local function rawBlockAt(world, x, z, level)
     if x < 0 or z < 0 or x >= world.size or z >= world.size or level < 0 then return nil end
     local height = world.heights[z + 1][x + 1] or 0
@@ -429,6 +430,10 @@ end
 
 rebuildWorldBlocks = function(world)
     local planes, size = {}, world.size
+    local flat_stride = size + VOXEL_PADDING * 2
+    local flat_plane_size = flat_stride * flat_stride
+    local flat_blocks = {}
+    for index = 1, flat_plane_size * MAX_COLUMN_HEIGHT do flat_blocks[index] = false end
     for level = 0, MAX_COLUMN_HEIGHT - 1 do
         local plane = {}
         for z = 0, size - 1 do
@@ -436,18 +441,30 @@ rebuildWorldBlocks = function(world)
             for x = 0, size - 1 do
                 local material = rawBlockAt(world, x, z, level)
                 if material then plane[index + x + 1] = material end
+                local padded_index = (z + VOXEL_PADDING) * flat_stride + x + VOXEL_PADDING + 1
+                flat_blocks[level * flat_plane_size + padded_index] = material or false
             end
         end
         planes[level + 1] = plane
     end
     world.block_planes = planes
+    world.block_flat = flat_blocks
+    world.block_flat_stride = flat_stride
+    world.block_flat_padding = VOXEL_PADDING
 end
 
 local function rebuildBlockColumn(world, x, z)
     local planes, index = world.block_planes, z * world.size + x + 1
     if not planes then return end
+    local flat_blocks = world.block_flat
+    local flat_stride = world.block_flat_stride or world.size
+    local flat_padding = world.block_flat_padding or 0
+    local plane_size = flat_stride * flat_stride
+    local flat_column_index = (z + flat_padding) * flat_stride + x + flat_padding + 1
     for level = 0, MAX_COLUMN_HEIGHT - 1 do
-        planes[level + 1][index] = rawBlockAt(world, x, z, level)
+        local material = rawBlockAt(world, x, z, level)
+        planes[level + 1][index] = material
+        if flat_blocks then flat_blocks[level * plane_size + flat_column_index] = material or false end
     end
 end
 
@@ -837,39 +854,18 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local fov = math.rad(130)
     local tan_half = math.tan(fov / 2)
     local aspect = height / width
-    local floor, abs, min, max = math.floor, math.abs, math.min, math.max
+    local floor, abs, min, max, sqrt = math.floor, math.abs, math.min, math.max, math.sqrt
     local world = session.world
-    local voxel_planes, world_size = world.block_planes, world.size
+    if not world.block_flat then rebuildWorldBlocks(world) end
+    local voxel_flat, world_size = world.block_flat, world.size
+    local flat_stride = world.block_flat_stride or world_size
+    local flat_padding = world.block_flat_padding or 0
+    local plane_size = flat_stride * flat_stride
     local player_x, player_z = session.player_x, session.player_z
     local pitch = session.pitch or 0
     local yaw = session.yaw
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
-    local function blockInk(material, face, hx, hy, hz, side, screen_x, screen_y)
-        local texture_material = material
-        if not color_mode and texture_material == "grass" and face ~= "top" then texture_material = "dirt" end
-        local pattern = pattern_values[texture_material] or pattern_values.stone
-        local fu, fv = textureCoordinates(face, hx, hy, hz, side)
-        local u = max(0, min(7, floor(fu * 8)))
-        local v = max(0, min(7, floor(fv * 8)))
-        local level = pattern[v * 8 + u + 1]
-        if face == "top" then level = level + 1 end
-        if side == 0 then level = level - 1 end
-        level = max(0, min(3, level))
-        if color_mode then
-            return texturedColorInk(material, level, screen_x, screen_y)
-        end
-        -- Convert the four texture luminances into deterministic 1-bit ink.
-        -- This is the ordered Bayer pattern used instead of gray fills: it is
-        -- crisp on E-Ink and does not accumulate a broad gray ghost.
-        -- On a real E-Ink panel a one-pixel Bayer pattern becomes a gray
-        -- haze. Use 2x2 ink cells while keeping the full 480x320 ray grid.
-        local threshold = BAYER4[(floor((screen_y or 0) / 2) % 4) + 1][(floor((screen_x or 0) / 2) % 4) + 1]
-        if level <= 0 then return Blitbuffer.COLOR_BLACK end
-        if level == 1 then return threshold < 5 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
-        if level == 2 then return threshold < 2 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE end
-        return Blitbuffer.COLOR_WHITE
-    end
     -- Camera directions depend on view geometry, not player position. Movement
     -- animates four redraws at the same yaw/pitch, so cache normalized rays and
     -- avoid repeating trigonometry plus one square root for every output cell.
@@ -877,12 +873,19 @@ function VoxelCanvas:_drawScene(bb, x, y)
     if not ray_cache or ray_cache.width ~= width or ray_cache.height ~= height
         or ray_cache.cols ~= cols or ray_cache.rows ~= rows
         or ray_cache.yaw ~= yaw or ray_cache.pitch ~= pitch then
+        local reusable = ray_cache and ray_cache.width == width and ray_cache.height == height
+            and ray_cache.cols == cols and ray_cache.rows == rows
+        local ray_x = reusable and ray_cache.x or {}
+        local ray_z = reusable and ray_cache.z or {}
+        local ray_y = reusable and ray_cache.y or {}
+        local delta_x = reusable and ray_cache.dx or {}
+        local delta_z = reusable and ray_cache.dz or {}
+        local delta_y = reusable and ray_cache.dy or {}
         local cp, sp = math.cos(pitch), math.sin(pitch)
         local cy, sy = math.cos(yaw), math.sin(yaw)
         local forward_x, forward_z, forward_y = sy * cp, cy * cp, sp
         local right_x, right_z = cy, -sy
         local up_x, up_z, up_y = -sy * sp, -cy * sp, cp
-        local ray_x, ray_z, ray_y = {}, {}, {}
         for ry = 0, rows - 1 do
             local ny = (1 - (ry + 0.5) / rows * 2) * tan_half * aspect
             local row_x, row_z, row_y = up_x * ny, up_z * ny, up_y * ny
@@ -891,47 +894,25 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 local dir_x = forward_x + right_x * nx + row_x
                 local dir_z = forward_z + right_z * nx + row_z
                 local dir_y = forward_y + row_y
-                local inverse_length = 1 / math.sqrt(dir_x * dir_x + dir_z * dir_z + dir_y * dir_y)
+                local inverse_length = 1 / sqrt(dir_x * dir_x + dir_z * dir_z + dir_y * dir_y)
                 local index = ry * cols + rx + 1
-                ray_x[index], ray_z[index], ray_y[index] = dir_x * inverse_length, dir_z * inverse_length, dir_y * inverse_length
+                dir_x, dir_z, dir_y = dir_x * inverse_length, dir_z * inverse_length, dir_y * inverse_length
+                ray_x[index], ray_z[index], ray_y[index] = dir_x, dir_z, dir_y
+                delta_x[index] = abs(dir_x) < 0.00001 and (dir_x < 0 and -1e30 or 1e30) or (1 / dir_x)
+                delta_z[index] = abs(dir_z) < 0.00001 and (dir_z < 0 and -1e30 or 1e30) or (1 / dir_z)
+                delta_y[index] = abs(dir_y) < 0.00001 and (dir_y < 0 and -1e30 or 1e30) or (1 / dir_y)
             end
         end
-        ray_cache = { width = width, height = height, cols = cols, rows = rows, yaw = yaw, pitch = pitch, x = ray_x, z = ray_z, y = ray_y }
+        ray_cache = { width = width, height = height, cols = cols, rows = rows, yaw = yaw, pitch = pitch,
+            x = ray_x, z = ray_z, y = ray_y, dx = delta_x, dz = delta_z, dy = delta_y }
         self._ray_cache = ray_cache
     end
-    local function cast(ray_x, ray_z, ray_y)
-        local cell_x, cell_z, cell_y = floor(player_x), floor(player_z), floor(camera_y)
-        local delta_x = abs(ray_x) < 0.00001 and 1e30 or abs(1 / ray_x)
-        local delta_z = abs(ray_z) < 0.00001 and 1e30 or abs(1 / ray_z)
-        local delta_y = abs(ray_y) < 0.00001 and 1e30 or abs(1 / ray_y)
-        local step_x = ray_x < 0 and -1 or 1
-        local step_z = ray_z < 0 and -1 or 1
-        local step_y = ray_y < 0 and -1 or 1
-        local next_x = ray_x < 0 and (player_x - cell_x) * delta_x or (cell_x + 1 - player_x) * delta_x
-        local next_z = ray_z < 0 and (player_z - cell_z) * delta_z or (cell_z + 1 - player_z) * delta_z
-        local next_y = ray_y < 0 and (camera_y - cell_y) * delta_y or (cell_y + 1 - camera_y) * delta_y
-        local dist, side = 0, 0
-        for ray_step = 1, 24 do
-            local material
-            if cell_x >= 0 and cell_z >= 0 and cell_x < world_size and cell_z < world_size
-                and cell_y >= 0 and cell_y < MAX_COLUMN_HEIGHT then
-                local plane = voxel_planes[cell_y + 1]
-                material = plane[cell_z * world_size + cell_x + 1]
-            end
-            if material then
-                return cell_x, cell_z, cell_y, dist, side, ray_x, ray_z, ray_y, material
-            end
-            if next_x < next_z and next_x < next_y then
-                dist, next_x, cell_x, side = next_x, next_x + delta_x, cell_x + step_x, 0
-            elseif next_z < next_y then
-                dist, next_z, cell_z, side = next_z, next_z + delta_z, cell_z + step_z, 2
-            else
-                dist, next_y, cell_y, side = next_y, next_y + delta_y, cell_y + step_y, 1
-            end
-            if dist > MAX_VIEW_DISTANCE then break end
-        end
-        return nil
-    end
+    local start_cell_x, start_cell_z, start_cell_y = floor(player_x), floor(player_z), floor(camera_y)
+    local fraction_x, fraction_z, fraction_y = player_x - start_cell_x, player_z - start_cell_z, camera_y - start_cell_y
+    local start_voxel_index = start_cell_y * plane_size
+        + (start_cell_z + flat_padding) * flat_stride + start_cell_x + flat_padding + 1
+    local ray_x, ray_z, ray_y = ray_cache.x, ray_cache.z, ray_cache.y
+    local ray_dx, ray_dz, ray_dy = ray_cache.dx, ray_cache.dz, ray_cache.dy
     local function paintSpan(start_col, end_col, row, ink)
         -- Map both span boundaries independently. Deriving width from a
         -- rounded span length can leave one-pixel seams between neighbours.
@@ -948,23 +929,84 @@ function VoxelCanvas:_drawScene(bb, x, y)
             end
         end
     end
-    local ray_x, ray_z, ray_y = ray_cache.x, ray_cache.z, ray_cache.y
     for ry = 0, rows - 1 do
+        local bayer_row = BAYER4[color_mode and (ry % 4) + 1 or (floor(ry / 2) % 4) + 1]
         local row_ink, row_start
         for rx = 0, cols - 1 do
+            local bayer_col = color_mode and (rx % 4) or (floor(rx / 2) % 4)
+            local dither_threshold = bayer_row[bayer_col + 1]
             local index = ry * cols + rx + 1
             local dir_x, dir_z, dir_y = ray_x[index], ray_z[index], ray_y[index]
-            local bx, bz, by, dist, side, hit_x, hit_z, hit_y, hit_material = cast(dir_x, dir_z, dir_y)
+            local signed_delta_x, signed_delta_z, signed_delta_y = ray_dx[index], ray_dz[index], ray_dy[index]
+            local cell_x, cell_z, cell_y = start_cell_x, start_cell_z, start_cell_y
+            local voxel_index = start_voxel_index
+            local step_x = signed_delta_x < 0 and -1 or 1
+            local step_z = signed_delta_z < 0 and -1 or 1
+            local step_y = signed_delta_y < 0 and -1 or 1
+            local delta_x, delta_z, delta_y = abs(signed_delta_x), abs(signed_delta_z), abs(signed_delta_y)
+            local next_x = step_x < 0 and fraction_x * delta_x or (1 - fraction_x) * delta_x
+            local next_z = step_z < 0 and fraction_z * delta_z or (1 - fraction_z) * delta_z
+            local next_y = step_y < 0 and fraction_y * delta_y or (1 - fraction_y) * delta_y
+            local dist, side, bx, bz, hit_dist, hit_side, hit_material = 0, 0
+            for ray_step = 1, 24 do
+                local material
+                if cell_y >= 0 and cell_y < MAX_COLUMN_HEIGHT then
+                    material = voxel_flat[voxel_index]
+                end
+                if material then
+                    bx, bz, hit_dist, hit_side, hit_material = cell_x, cell_z, dist, side, material
+                    break
+                end
+                if next_x < next_z and next_x < next_y then
+                    dist, next_x, cell_x, side = next_x, next_x + delta_x, cell_x + step_x, 0
+                    voxel_index = voxel_index + step_x
+                elseif next_z < next_y then
+                    dist, next_z, cell_z, side = next_z, next_z + delta_z, cell_z + step_z, 2
+                    voxel_index = voxel_index + step_z * flat_stride
+                else
+                    dist, next_y, cell_y, side = next_y, next_y + delta_y, cell_y + step_y, 1
+                    voxel_index = voxel_index + step_y * plane_size
+                end
+                if dist > MAX_VIEW_DISTANCE then break end
+            end
             local ink
             if bx then
-                local hx = player_x + hit_x * dist
-                local hy = camera_y + hit_y * dist
-                local hz = player_z + hit_z * dist
-                local top = side == 1 and hit_y < 0
-                ink = blockInk(hit_material, top and "top" or "side", hx, hy, hz, side, rx, ry)
+                local hx = player_x + dir_x * hit_dist
+                local hy = camera_y + dir_y * hit_dist
+                local hz = player_z + dir_z * hit_dist
+                local top = hit_side == 1 and dir_y < 0
+                local texture_material = hit_material
+                if not color_mode and texture_material == "grass" and not top then texture_material = "dirt" end
+                local pattern = pattern_values[texture_material] or pattern_values.stone
+                local fu, fv
+                if hit_side == 1 then
+                    fu, fv = hx - floor(hx), hz - floor(hz)
+                elseif hit_side == 0 then
+                    fu, fv = hz - floor(hz), hy - floor(hy)
+                else
+                    fu, fv = hx - floor(hx), hy - floor(hy)
+                end
+                local u = max(0, min(7, floor(fu * 8)))
+                local v = max(0, min(7, floor(fv * 8)))
+                local level = pattern[v * 8 + u + 1]
+                if top then level = level + 1 end
+                if hit_side == 0 then level = level - 1 end
+                level = max(0, min(3, level))
+                if color_mode then
+                    local mix = material_mix_cache[hit_material][level + 1]
+                    ink = dither_threshold < mix.second_pixels and mix.second or mix.first
+                elseif level <= 0 then
+                    ink = Blitbuffer.COLOR_BLACK
+                elseif level == 1 then
+                    ink = dither_threshold < 5 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
+                elseif level == 2 then
+                    ink = dither_threshold < 2 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
+                else
+                    ink = Blitbuffer.COLOR_WHITE
+                end
                 -- Do not replace an RGB material color with monochrome
                 -- black/white shading. Keep the material color intact.
-                if not color_mode and side == 0 and (bx + bz) % 2 == 0 then
+                if not color_mode and hit_side == 0 and (bx + bz) % 2 == 0 then
                     ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
                 end
             elseif dir_y < 0 and (ry + rx) % 6 == 0 then
@@ -1275,7 +1317,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.0.9",
+    version = "3.0.10",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
