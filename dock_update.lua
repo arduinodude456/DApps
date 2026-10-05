@@ -79,6 +79,10 @@ local ALLOWED_ASSET_FILES = {
     ["assets/surfaces/circle_overlay.png"] = true,
     ["assets/surfaces/container_overlay.png"] = true,
     ["assets/surfaces/liquid_glass_background.png"] = true,
+    ["assets/surfaces/liquid_glass_circle.png"] = true,
+    ["assets/surfaces/liquid_glass_container.png"] = true,
+    ["assets/surfaces/liquid_glass_pill.png"] = true,
+    ["assets/surfaces/liquid_glass_tile.png"] = true,
     ["assets/surfaces/pill_overlay.png"] = true,
     ["assets/surfaces/tile_overlay.png"] = true,
 }
@@ -565,7 +569,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.6",
+    version = "1.1.7",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
