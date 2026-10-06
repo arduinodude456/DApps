@@ -1231,13 +1231,22 @@ local function directBubbleText(message, own)
     return dmPreview(body, 260)
 end
 
-local function makeDirectBubble(available_width, message, own, palette, px, callback)
+local function messageCapacity(available_height, gap, pane_height, px)
+    local minimum_bubble = math.max(px(72), math.floor(pane_height * .14))
+    return math.max(1, math.floor((available_height + gap) / (minimum_bubble + gap)))
+end
+
+local function messageSlotHeight(available_height, gap, capacity)
+    return math.max(1, math.floor((available_height - gap * math.max(0, capacity - 1)) / math.max(1, capacity)))
+end
+
+local function makeDirectBubble(available_width, message, own, palette, px, callback, min_height)
     local bubble_width = math.max(px(112), math.floor(available_width * .76))
     local body = directBubbleText(message, own)
     local text_width = math.max(px(38), bubble_width - 2 * px(7))
     local chars_per_line = math.max(12, math.floor(text_width / math.max(px(7), 1)))
     local lines = math.max(1, math.ceil(#body / chars_per_line))
-    local bubble_height = clamp(px(26) + lines * math.max(px(12), math.floor(px(10) * 1.35)), px(48), px(132))
+    local bubble_height = math.max(min_height or 0, clamp(px(30) + lines * math.max(px(13), math.floor(px(10) * 1.45)), px(56), px(180)))
     return DMBubble:new{
         width = bubble_width,
         height = bubble_height,
@@ -1249,13 +1258,13 @@ local function makeDirectBubble(available_width, message, own, palette, px, call
     }
 end
 
-local function makePublicBubble(available_width, message, palette, px, callback)
+local function makePublicBubble(available_width, message, palette, px, callback, min_height)
     local body = dmPreview(message.authorName .. "\n" .. message.body, 260)
     local bubble_width = math.max(px(112), math.floor(available_width * .84))
     local text_width = math.max(px(38), bubble_width - 2 * px(7))
     local chars_per_line = math.max(12, math.floor(text_width / math.max(px(7), 1)))
     local lines = math.max(1, math.ceil(#body / chars_per_line))
-    local bubble_height = clamp(px(26) + lines * math.max(px(12), math.floor(px(10) * 1.35)), px(48), px(132))
+    local bubble_height = math.max(min_height or 0, clamp(px(30) + lines * math.max(px(13), math.floor(px(10) * 1.45)), px(56), px(180)))
     return DMBubble:new{
         width = bubble_width,
         height = bubble_height,
@@ -1348,7 +1357,9 @@ local function buildPublicPanel(state, context, width, height, compact)
     local composer_y = height - margin - composer_height
     local message_y = header_height + status_height + gap
     local message_end = composer_y - gap
-    local capacity = math.max(1, math.floor(math.max(0, message_end - message_y) / math.max(px(39), math.floor(height * .11))))
+    local message_area = math.max(1, message_end - message_y)
+    local capacity = messageCapacity(message_area, gap, height, px)
+    local bubble_slot_height = messageSlotHeight(message_area, gap, capacity)
     local first, last, normalized = visibleRecentRange(state.store.messages or {}, state.public_scroll or 0, capacity)
     state.public_scroll = normalized
     local action_width = math.max(px(25), math.floor(width * .12))
@@ -1372,7 +1383,7 @@ local function buildPublicPanel(state, context, width, height, compact)
         local y = message_y
         for index = first, last do
             local message = state.store.messages[index]
-            local bubble = makePublicBubble(width - 2 * margin - px(8), message, palette, px, function() state.selected_id = message.id; state.view = "message"; refresh(context) end)
+            local bubble = makePublicBubble(width - 2 * margin - px(8), message, palette, px, function() state.selected_id = message.id; state.view = "message"; refresh(context) end, bubble_slot_height)
             if y + bubble.height > message_end then break end
             bubble.overlap_offset = { margin, y }
             elements[#elements + 1] = bubble
@@ -1409,7 +1420,9 @@ local function buildConversationPanel(state, context, width, height, compact)
     local composer_y = height - margin - composer_height
     local message_y = header_height + status_height + gap
     local message_end = composer_y - gap
-    local capacity = math.max(1, math.floor(math.max(0, message_end - message_y) / math.max(px(39), math.floor(height * .11))))
+    local message_area = math.max(1, message_end - message_y)
+    local capacity = messageCapacity(message_area, gap, height, px)
+    local bubble_slot_height = messageSlotHeight(message_area, gap, capacity)
     local messages = state.store.dm_messages or {}
     local first, last, normalized = visibleRecentRange(messages, state.dm_scroll or 0, capacity)
     state.dm_scroll = normalized
@@ -1444,7 +1457,7 @@ local function buildConversationPanel(state, context, width, height, compact)
             for index = first, last do
                 local message = messages[index]
                 local own = message.senderDeviceId == state.store.device_id or (message.senderDeviceId == "" and message.authorName == state.store.display_name)
-                local bubble = makeDirectBubble(width - 2 * margin - px(8), message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
+                local bubble = makeDirectBubble(width - 2 * margin - px(8), message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, bubble_slot_height)
                 if y + bubble.height > message_end then break end
                 bubble.overlap_offset = { own and width - margin - bubble.width or margin, y }
                 elements[#elements + 1] = bubble
@@ -1730,7 +1743,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.3",
+    version = "1.8.4",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
