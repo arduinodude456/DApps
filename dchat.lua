@@ -1023,6 +1023,7 @@ local ActionButton = InputContainer:extend{
 
 function ActionButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
+    local px = active_px or scale
     local palette = active_palette or paletteFor()
     local foreground = self.button_foreground or (self.primary and palette.on_primary or palette.on_surface)
     local background = self.button_background or (self.primary and palette.primary or palette.surface)
@@ -1030,9 +1031,9 @@ function ActionButton:init()
     if self.body then
         content = TextBoxWidget:new{
             text = self.body,
-            face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * .18))),
-            width = self.width - scale(12),
-            height = self.height - scale(8),
+            face = Font:getFace("smallinfofont", math.max(px(8), math.floor(self.height * .18))),
+            width = math.max(1, self.width - px(12)),
+            height = math.max(1, self.height - px(12)),
             line_height = 0.30,
             alignment = "left",
             fgcolor = foreground,
@@ -1042,19 +1043,19 @@ function ActionButton:init()
             dimen = self.dimen,
             TextWidget:new{
                 text = self.title,
-                face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * .24))),
+                face = Font:getFace("smallinfofont", math.max(px(8), math.floor(self.height * .24))),
                 fgcolor = foreground,
                 bold = self.primary,
-                max_width = self.width - scale(8),
+                max_width = math.max(1, self.width - px(8)),
             },
         }
     end
     self[1] = FrameContainer:new{
         width = self.width,
         height = self.height,
-        padding = self.body and scale(6) or 0,
+        padding = self.body and px(6) or 0,
         bordersize = 0,
-        radius = math.max(4, math.floor(self.height * .22)),
+        radius = math.max(2, math.floor(self.height * .22)),
         background = self.button_background or background,
         content,
     }
@@ -1103,7 +1104,8 @@ local DMBubble = InputContainer:extend{
 
 function DMBubble:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local padding = scale(6)
+    local px = active_px or scale
+    local padding = px(6)
     self[1] = FrameContainer:new{
         width = self.width,
         height = self.height,
@@ -1113,9 +1115,9 @@ function DMBubble:init()
         background = self.bubble_background or Blitbuffer.COLOR_WHITE,
         TextBoxWidget:new{
             text = self.body,
-            face = Font:getFace("smallinfofont", self.font_size or math.max(scale(8), math.floor(self.height * .16))),
+            face = Font:getFace("smallinfofont", self.font_size or math.max(px(8), math.floor(self.height * .16))),
             width = self.width - 2 * padding,
-            height = self.height - 2 * padding,
+            height = math.max(1, self.height - 2 * padding),
             line_height = 0.30,
             alignment = "left",
             fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
@@ -1550,6 +1552,7 @@ end
 local function tinySettingsPane(instance, context)
     local state = stateFor(instance)
     active_palette = paletteFor(context)
+    active_px = context.px or scale
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
@@ -1572,6 +1575,7 @@ end
 local function chatWorkspacePane(instance, context, mode)
     local state = stateFor(instance)
     active_palette = paletteFor(context)
+    active_px = context.px or scale
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
     local split_minimum = math.max(px(420), 360)
@@ -1606,10 +1610,11 @@ end
 local function settingsPane(instance, context)
     local state = stateFor(instance)
     active_palette = paletteFor(context)
+    active_px = context.px or scale
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
-    if width < px(300) or height < px(220) then return tinySettingsPane(instance, context) end
+    if width < px(300) or height < math.max(px(320), math.floor(width * .75)) then return tinySettingsPane(instance, context) end
     local margin, gap = math.max(px(9), math.floor(width / 65)), math.max(px(6), math.floor(width / 110))
     local button_height = math.max(px(30), math.floor(height / 13))
     local endpoint_status = state.store.endpoint ~= "" and state.store.endpoint or _("Public service address missing")
@@ -1647,6 +1652,7 @@ end
 local function dmMessagePane(instance, context)
     local state = stateFor(instance)
     active_palette = paletteFor(context)
+    active_px = context.px or scale
     local palette = active_palette
     local message = selectedDirectMessage(state)
     if not message then clearAttachmentFiles(state); state.view = "dm_conversation"; return dmConversationPane(instance, context) end
@@ -1681,6 +1687,7 @@ end
 local function messagePane(instance, context)
     local state = stateFor(instance)
     active_palette = paletteFor(context)
+    active_px = context.px or scale
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
@@ -1692,7 +1699,7 @@ local function messagePane(instance, context)
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
         TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_surface, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Public message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
-        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = height - 2 * margin - px(48) - 2 * button_height - 2 * gap, line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
+        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = math.max(px(1), height - 2 * margin - px(48) - 2 * button_height - 2 * gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Messages"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Report"), primary = true, callback = function() promptReport(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
@@ -1701,7 +1708,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.0",
+    version = "1.8.1",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
