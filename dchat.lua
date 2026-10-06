@@ -1174,6 +1174,21 @@ local function scrollCollection(state, key, total, capacity, direction, context)
     return true
 end
 
+local function buildScrollbar(total, offset, capacity, track_height, x, y, palette, px)
+    if total <= capacity or track_height <= 0 then return nil end
+    local track_width = math.max(px(3), 2)
+    local thumb_height = math.max(px(22), math.floor(track_height * capacity / math.max(total, 1)))
+    thumb_height = math.min(track_height, thumb_height)
+    local maximum = math.max(1, total - capacity)
+    local thumb_y = math.floor((track_height - thumb_height) * clamp(offset, 0, maximum) / maximum)
+    return OverlapGroup:new{
+        dimen = Geom:new{ w = track_width, h = track_height },
+        allow_mirroring = false,
+        FrameContainer:new{ width = track_width, height = track_height, padding = 0, bordersize = 0, radius = math.floor(track_width / 2), background = palette.surface_variant or palette.surface, emptySizedWidget(track_width, track_height) },
+        FrameContainer:new{ width = track_width, height = thumb_height, padding = 0, bordersize = 0, radius = math.floor(track_width / 2), background = palette.primary, emptySizedWidget(track_width, thumb_height), overlap_offset = { 0, thumb_y } },
+    }, { x, y }
+end
+
 local function dmPreview(text, maximum)
     text = tostring(text or "")
     if #text <= maximum then return text end
@@ -1217,11 +1232,12 @@ local function directBubbleText(message, own)
 end
 
 local function makeDirectBubble(available_width, message, own, palette, px, callback)
-    local bubble_width = math.max(px(92), math.floor(available_width * .76))
+    local bubble_width = math.max(px(112), math.floor(available_width * .76))
     local body = directBubbleText(message, own)
-    local line_width = math.max(16, math.floor(bubble_width / math.max(px(5), 1)))
-    local lines = math.max(1, math.ceil(#body / line_width))
-    local bubble_height = clamp(px(18) + lines * px(13), px(34), px(94))
+    local text_width = math.max(px(38), bubble_width - 2 * px(7))
+    local chars_per_line = math.max(12, math.floor(text_width / math.max(px(7), 1)))
+    local lines = math.max(1, math.ceil(#body / chars_per_line))
+    local bubble_height = clamp(px(26) + lines * math.max(px(12), math.floor(px(10) * 1.35)), px(48), px(132))
     return DMBubble:new{
         width = bubble_width,
         height = bubble_height,
@@ -1235,11 +1251,13 @@ end
 
 local function makePublicBubble(available_width, message, palette, px, callback)
     local body = dmPreview(message.authorName .. "\n" .. message.body, 260)
-    local line_width = math.max(16, math.floor(available_width / math.max(px(5), 1)))
-    local lines = math.max(1, math.ceil(#body / line_width))
-    local bubble_height = clamp(px(18) + lines * px(13), px(35), px(94))
+    local bubble_width = math.max(px(112), math.floor(available_width * .84))
+    local text_width = math.max(px(38), bubble_width - 2 * px(7))
+    local chars_per_line = math.max(12, math.floor(text_width / math.max(px(7), 1)))
+    local lines = math.max(1, math.ceil(#body / chars_per_line))
+    local bubble_height = clamp(px(26) + lines * math.max(px(12), math.floor(px(10) * 1.35)), px(48), px(132))
     return DMBubble:new{
-        width = math.max(px(92), math.floor(available_width * .84)),
+        width = bubble_width,
         height = bubble_height,
         body = body,
         bubble_background = palette.surface,
@@ -1354,12 +1372,14 @@ local function buildPublicPanel(state, context, width, height, compact)
         local y = message_y
         for index = first, last do
             local message = state.store.messages[index]
-            local bubble = makePublicBubble(width - 2 * margin, message, palette, px, function() state.selected_id = message.id; state.view = "message"; refresh(context) end)
+            local bubble = makePublicBubble(width - 2 * margin - px(8), message, palette, px, function() state.selected_id = message.id; state.view = "message"; refresh(context) end)
             if y + bubble.height > message_end then break end
             bubble.overlap_offset = { margin, y }
             elements[#elements + 1] = bubble
             y = y + bubble.height + gap
         end
+        local scrollbar, scrollbar_offset = buildScrollbar(#(state.store.messages or {}), state.public_scroll or 0, capacity, message_end - message_y, width - margin - px(4), message_y, palette, px)
+        if scrollbar then scrollbar.overlap_offset = scrollbar_offset; elements[#elements + 1] = scrollbar end
     end
 
     local send_width = math.max(px(43), math.floor((width - 2 * margin - gap) * .24))
@@ -1424,13 +1444,15 @@ local function buildConversationPanel(state, context, width, height, compact)
             for index = first, last do
                 local message = messages[index]
                 local own = message.senderDeviceId == state.store.device_id or (message.senderDeviceId == "" and message.authorName == state.store.display_name)
-                local bubble = makeDirectBubble(width - 2 * margin, message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
+                local bubble = makeDirectBubble(width - 2 * margin - px(8), message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
                 if y + bubble.height > message_end then break end
                 bubble.overlap_offset = { own and width - margin - bubble.width or margin, y }
                 elements[#elements + 1] = bubble
                 y = y + bubble.height + gap
             end
         end
+        local scrollbar, scrollbar_offset = buildScrollbar(#messages, state.dm_scroll or 0, capacity, message_end - message_y, width - margin - px(4), message_y, palette, px)
+        if scrollbar then scrollbar.overlap_offset = scrollbar_offset; elements[#elements + 1] = scrollbar end
 
         local send_width = math.max(px(40), math.floor((width - 2 * margin - 2 * gap) * .20))
         local attach_width = math.max(px(48), math.floor((width - 2 * margin - 2 * gap) * .22))
@@ -1708,7 +1730,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.1",
+    version = "1.8.2",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
