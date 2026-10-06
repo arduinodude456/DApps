@@ -53,7 +53,7 @@ local RESPONSE_TOO_LARGE = "response too large"
 local CONVERSATION_RETRY_LIMIT = 5
 local MAX_CACHE_MESSAGES = 60
 local MAX_VISIBLE_PER_PAGE = 5
-local MAX_RECIPIENTS = 120
+local MAX_RECIPIENTS = 30
 local CONNECT_TIMEOUT = 10
 local REQUEST_MAX_TIME = 25
 local BACKGROUND_CHECK_SECONDS = 15 * 60
@@ -1730,7 +1730,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.2",
+    version = "1.8.3",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
