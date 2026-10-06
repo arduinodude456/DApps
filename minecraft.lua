@@ -260,7 +260,7 @@ end
 local rebuildWorldBlocks
 local function buildWorld(seed)
     seed = normalizeSeed(seed)
-    local world = { size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, biomes = {}, extra_blocks = {} }
+    local world = { size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, biomes = {}, extra_blocks = {}, removed_blocks = {} }
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1], world.materials[z + 1], world.biomes[z + 1] = {}, {}, {}
         for x = 0, WORLD_SIZE - 1 do
@@ -502,6 +502,7 @@ local function rawBlockAt(world, x, z, level)
     if x < 0 or z < 0 or x >= world.size or z >= world.size or level < 0 then return nil end
     local extra = world.extra_blocks and world.extra_blocks[extraBlockKey(x, z, level)]
     if extra then return extra end
+    if world.removed_blocks and world.removed_blocks[extraBlockKey(x, z, level)] then return nil end
     local height = world.heights[z + 1][x + 1] or 0
     if level >= height then return nil end
     local surface = world.materials[z + 1][x + 1] or "grass"
@@ -675,6 +676,61 @@ function VoxelSession:place()
     return true
 end
 
+function VoxelSession:mineBlock(target)
+    if type(target) ~= "table" then return self:mine() end
+    local x, z, y = target.x, target.z, target.y
+    if type(x) ~= "number" or type(z) ~= "number" or type(y) ~= "number"
+        or x < 0 or z < 0 or x >= self.world.size or z >= self.world.size or y <= 0 then
+        self.last_event = _("Hier ist kein Block.")
+        return false
+    end
+    local material = blockAt(self.world, x, z, y)
+    if not material then self.last_event = _("Hier ist kein Block."); return false end
+    local key = extraBlockKey(x, z, y)
+    if self.world.extra_blocks and self.world.extra_blocks[key] then
+        self.world.extra_blocks[key] = nil
+    else
+        self.world.removed_blocks = self.world.removed_blocks or {}
+        self.world.removed_blocks[key] = true
+        -- Lower a mined terrain cap, preserving the actual material exposed
+        -- beneath it. Interior blocks remain individual holes in the voxel map.
+        local height = heightAt(self.world, x, z)
+        if y == height - 1 then
+            local exposed = rawBlockAt(self.world, x, z, y - 1)
+            self.world.heights[z + 1][x + 1] = y
+            self.world.materials[z + 1][x + 1] = exposed or "grass"
+            self.world.removed_blocks[key] = nil
+        end
+    end
+    rebuildBlockColumn(self.world, x, z)
+    self.inventory[material] = (self.inventory[material] or 0) + 1
+    self.last_event = _("Block abgebaut.")
+    return true
+end
+
+function VoxelSession:placeBlock(target)
+    if type(target) ~= "table" then return self:place() end
+    local x, z, y = target.x, target.z, target.y
+    if type(x) ~= "number" or type(z) ~= "number" or type(y) ~= "number"
+        or x < 1 or z < 1 or x >= self.world.size - 1 or z >= self.world.size - 1
+        or y < 0 or y >= MAX_COLUMN_HEIGHT then
+        self.last_event = _("Hier kann kein Block platziert werden.")
+        return false
+    end
+    local material = self:selectedMaterial()
+    if (self.inventory[material] or 0) <= 0 then self.last_event = _("Inventar leer."); return false end
+    if blockAt(self.world, x, z, y) then self.last_event = _("Der Platz ist bereits belegt."); return false end
+    self.world.extra_blocks = self.world.extra_blocks or {}
+    self.world.removed_blocks = self.world.removed_blocks or {}
+    local key = extraBlockKey(x, z, y)
+    self.world.extra_blocks[key] = material
+    self.world.removed_blocks[key] = nil
+    rebuildBlockColumn(self.world, x, z)
+    self.inventory[material] = self.inventory[material] - 1
+    self.last_event = _("Block platziert.")
+    return true
+end
+
 function VoxelSession:jump()
     if self.jump_frame then return false end
     self.jump_frame = 0
@@ -765,14 +821,20 @@ function VoxelSession:tickMotion()
     end
 end
 
-function VoxelSession:act(action)
+function VoxelSession:act(action, target)
     if action == "left" then return self:turn(-1) end
     if action == "right" then return self:turn(1) end
     if action == "forward" then return self:beginMove(1) end
     if action == "back" then return self:beginMove(-1) end
     if action == "jump" then return self:jump() end
-    if action == "mine" then return self:mine() end
-    if action == "place" then return self:place() end
+    if action == "mine" then
+        if target then return self:mineBlock(target) end
+        return self:mine()
+    end
+    if action == "place" then
+        if target then return self:placeBlock(target) end
+        return self:place()
+    end
     if action == "inventory" then return self:toggleInventory() end
     if action == "color" then return self:toggleColor() end
     return false
@@ -796,7 +858,7 @@ function VoxelCanvas:init()
     self.ges_events = {
         TapMinecraftExplore = { GestureRange:new{ ges = "tap", range = self.dimen } },
         SwipeMinecraftLook = { GestureRange:new{ ges = "swipe", range = self.dimen } },
-        HoldMinecraftMine = { GestureRange:new{ ges = "hold", range = self.dimen } },
+        HoldMinecraftPlace = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
 end
 
@@ -1171,22 +1233,83 @@ function VoxelCanvas:refreshFast()
     return true
 end
 
-function VoxelCanvas:act(action)
+function VoxelCanvas:pickBlock(screen_x, screen_y)
+    local session = self.session
+    if not session or not screen_x or not screen_y then return nil end
+    local relative_x = clamp(screen_x - self._origin_x, 0, self.width - 1)
+    local relative_y = clamp(screen_y - self._origin_y, 0, self.height - 1)
+    local sample = session.color_enabled and colorRenderingEnabled() and COLOR_RENDER_SAMPLE or RENDER_SAMPLE
+    local cols, rows = renderGridFor(self.width, self.height, sample)
+    local rx = math.min(cols - 1, math.floor(relative_x / self.width * cols))
+    local ry = math.min(rows - 1, math.floor(relative_y / self.height * rows))
+    local nx = ((rx + .5) / cols * 2 - 1) * math.tan(math.pi / 4)
+    local ny = (1 - (ry + .5) / rows * 2) * math.tan(math.pi / 4) * self.height / self.width
+    local cp, sp, cy, sy = math.cos(session.pitch or 0), math.sin(session.pitch or 0), math.cos(session.yaw), math.sin(session.yaw)
+    local dir_x = sy * cp + cy * nx - sy * sp * ny
+    local dir_z = cy * cp - sy * nx - cy * sp * ny
+    local dir_y = sp + cp * ny
+    local inverse_length = 1 / math.sqrt(dir_x * dir_x + dir_z * dir_z + dir_y * dir_y)
+    dir_x, dir_z, dir_y = dir_x * inverse_length, dir_z * inverse_length, dir_y * inverse_length
+
+    local world = session.world
+    if not world.block_flat then rebuildWorldBlocks(world) end
+    local origin_x, origin_z = session.player_x, session.player_z
+    local origin_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
+    local cell_x, cell_z, cell_y = math.floor(origin_x), math.floor(origin_z), math.floor(origin_y)
+    local fraction_x, fraction_z, fraction_y = origin_x - cell_x, origin_z - cell_z, origin_y - cell_y
+    local step_x, step_z, step_y = dir_x < 0 and -1 or 1, dir_z < 0 and -1 or 1, dir_y < 0 and -1 or 1
+    local delta_x = math.abs(dir_x) < .00001 and 1e30 or math.abs(1 / dir_x)
+    local delta_z = math.abs(dir_z) < .00001 and 1e30 or math.abs(1 / dir_z)
+    local delta_y = math.abs(dir_y) < .00001 and 1e30 or math.abs(1 / dir_y)
+    local next_x = step_x < 0 and fraction_x * delta_x or (1 - fraction_x) * delta_x
+    local next_z = step_z < 0 and fraction_z * delta_z or (1 - fraction_z) * delta_z
+    local next_y = step_y < 0 and fraction_y * delta_y or (1 - fraction_y) * delta_y
+    local distance, normal_x, normal_z, normal_y = 0, 0, 0, 0
+    for _ = 1, 96 do
+        if blockAt(world, cell_x, cell_z, cell_y) then
+            if normal_x == 0 and normal_y == 0 and normal_z == 0 then return nil end
+            return {
+                x = cell_x, z = cell_z, y = cell_y,
+                place_x = cell_x + normal_x,
+                place_z = cell_z + normal_z,
+                place_y = cell_y + normal_y,
+            }
+        end
+        if next_x < next_z and next_x < next_y then
+            distance, next_x, cell_x = next_x, next_x + delta_x, cell_x + step_x
+            normal_x, normal_z, normal_y = -step_x, 0, 0
+        elseif next_z < next_y then
+            distance, next_z, cell_z = next_z, next_z + delta_z, cell_z + step_z
+            normal_x, normal_z, normal_y = 0, -step_z, 0
+        else
+            distance, next_y, cell_y = next_y, next_y + delta_y, cell_y + step_y
+            normal_x, normal_z, normal_y = 0, 0, -step_y
+        end
+        if distance > MAX_VIEW_DISTANCE then break end
+    end
+    return nil
+end
+
+function VoxelCanvas:act(action, target)
     if not self.session then return false end
-    self.session:act(action)
+    local result = self.session:act(action, target)
     self:refreshFast()
-    return true
+    if self.hotbar and (action == "mine" or action == "place") then self.hotbar:refresh() end
+    return result ~= false
 end
 
 function VoxelCanvas:onTapMinecraftExplore(gesture)
-    -- A tap inside the scene works as a quiet direct controller: the upper
-    -- centre walks forward, lower centre walks back, and side taps turn.
     if not gesture or not gesture.pos then return true end
+    local target = self:pickBlock(gesture.pos.x, gesture.pos.y)
+    if target then
+        self:act("mine", target)
+        return true
+    end
+    -- Empty sky still doubles as a quiet direct controller: the upper centre
+    -- walks forward, lower centre walks back, and side taps turn.
     local relative_x = gesture.pos.x - self._origin_x
     local relative_y = gesture.pos.y - self._origin_y
-    if relative_x > self.width * 0.36 and relative_x < self.width * 0.64 and relative_y > self.height * 0.64 then
-        self:act("place")
-    elseif relative_x < self.width * 0.32 then
+    if relative_x < self.width * 0.32 then
         self:act("left")
     elseif relative_x > self.width * 0.68 then
         self:act("right")
@@ -1198,8 +1321,12 @@ function VoxelCanvas:onTapMinecraftExplore(gesture)
     return true
 end
 
-function VoxelCanvas:onHoldMinecraftMine()
-    self:act("mine")
+function VoxelCanvas:onHoldMinecraftPlace(gesture)
+    local pos = gesture and gesture.pos
+    local target = pos and self:pickBlock(pos.x, pos.y)
+    if target then
+        self:act("place", { x = target.place_x, z = target.place_z, y = target.place_y })
+    end
     return true
 end
 
@@ -1278,28 +1405,61 @@ function Joystick:onSwipeMinecraftJoystick(_, gesture)
     return true
 end
 
-local Hotbar = InputContainer:extend{ session = nil, width = nil, height = nil, dimen = nil }
+local Hotbar = InputContainer:extend{ session = nil, canvas = nil, width = nil, height = nil, dimen = nil, _origin_x = 0, _origin_y = 0 }
 function Hotbar:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.ges_events = { TapMinecraftHotbar = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 function Hotbar:paintTo(bb, x, y)
+    self._origin_x, self._origin_y = x, y
     local range = self.ges_events.TapMinecraftHotbar[1].range
     range.x, range.y, range.w, range.h = x, y, self.width, self.height
-    local slot_w = math.max(1, math.floor(self.width / 9))
+    local slot_w = self.width / 9
+    local abbreviations = { grass = "G", dirt = "D", stone = "St", wood = "W", leaves = "L", sand = "Sa", snow = "Sn", water = "Wa", coal = "C", iron = "I", gold = "Au" }
     for slot = 1, 9 do
-        local sx = x + (slot - 1) * slot_w + 1
+        local left = x + math.floor((slot - 1) * slot_w)
+        local right = x + math.floor(slot * slot_w)
+        local cell_w = math.max(1, right - left)
+        local sx = left + 1
         local selected = self.session and self.session.selected_slot == slot
-        bb:paintRect(sx, y + 1, slot_w - 2, self.height - 2, selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY)
-        bb:paintRect(sx + 3, y + 3, math.max(1, slot_w - 8), math.max(1, self.height - 8), selected and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_DARK_GRAY)
+        local material = self.session and self.session.hotbar[slot] or "grass"
+        local count = self.session and (self.session.inventory[material] or 0) or 0
+        local inner = selected and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_LIGHT_GRAY
+        bb:paintRect(sx, y + 1, math.max(1, cell_w - 2), self.height - 2, selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY)
+        bb:paintRect(sx + 2, y + 3, math.max(1, cell_w - 6), math.max(1, self.height - 6), inner)
+        local swatch = colorForMaterial(material)
+        local swatch_size = math.min(scale(10), math.max(1, self.height - scale(10)))
+        local swatch_x, swatch_y = sx + 4, y + math.floor((self.height - swatch_size) / 2)
+        if self.session and self.session.color_enabled and colorRenderingEnabled() and bb.paintRectRGB32 then
+            bb:paintRectRGB32(swatch_x, swatch_y, swatch_size, swatch_size, swatch)
+        else
+            bb:paintRect(swatch_x, swatch_y, swatch_size, swatch_size, swatch)
+        end
+        local label = TextWidget:new{
+            text = (abbreviations[material] or "?") .. tostring(count),
+            face = Font:getFace("smallinfofont", math.max(scale(7), math.min(scale(9), self.height - scale(18)))),
+            fgcolor = Blitbuffer.COLOR_BLACK,
+            bold = selected,
+            max_width = math.max(scale(8), cell_w - swatch_size - scale(9)),
+            padding = 0,
+        }
+        local label_size = label:getSize()
+        label:paintTo(bb, math.min(right - label_size.w - 2, swatch_x + swatch_size + 2), y + math.floor((self.height - label_size.h) / 2))
     end
+    return true
+end
+function Hotbar:refresh()
+    if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
+    UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
+    UIManager:setDirty(nil, "ui", Geom:new{ x = self._origin_x, y = self._origin_y, w = self.width, h = self.height })
+    if UIManager.forceRePaint then UIManager:forceRePaint() end
     return true
 end
 function Hotbar:onTapMinecraftHotbar(gesture)
     local pos = gesture and gesture.pos
     if not pos or not self.session then return true end
     local slot = math.floor((pos.x - self.ges_events.TapMinecraftHotbar[1].range.x) / (self.width / 9)) + 1
-    self.session:selectSlot(slot)
+    if self.session:selectSlot(slot) then self:refresh() end
     return true
 end
 
@@ -1432,7 +1592,7 @@ end
 
 return {
     id = "minecraft",
-    version = "3.2.1",
+    version = "3.3.0",
     title = "Minecraft 3D",
     subtitle = "Schnelle Voxelwelt · 7-Farben-Option",
     symbol = "M",
@@ -1442,11 +1602,12 @@ return {
         local width, height = context.dimen.w, context.dimen.h
         local px = context.px or scale
         local margin, gap = px(9), px(5)
-        local header_h, controls_h = px(43), px(31)
-        local canvas_h = math.max(px(76), height - header_h - controls_h - px(27))
+        local header_h, controls_h, hotbar_h = px(43), px(31), px(30)
+        local canvas_h = math.max(px(76), height - header_h - controls_h - hotbar_h - px(33))
         local canvas_w = math.max(px(40), width - 2 * margin)
         local canvas_y = header_h
-        local controls_y = canvas_y + canvas_h + gap
+        local hotbar_y = canvas_y + canvas_h + gap
+        local controls_y = hotbar_y + hotbar_h + gap
         local button_w = math.max(px(30), math.floor((canvas_w - 4 * gap) / 5))
         local joystick_size = math.min(px(76), math.floor(canvas_w * 0.22))
         local jump_w, jump_h = px(58), px(30)
@@ -1456,11 +1617,12 @@ return {
         local heading_w = math.max(px(1), canvas_w - color_button_w - world_button_w - header_gap - px(8))
         local heading_size = heading_w < px(105) and px(14) or px(18)
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
-        local hotbar = Hotbar:new{ width = canvas_w, height = px(30), session = state.session }
+        local hotbar = Hotbar:new{ width = canvas_w, height = hotbar_h, session = state.session }
         local inventory_panel = InventoryPanel:new{ width = canvas_w, height = canvas_h, session = state.session }
-        hotbar.overlap_offset = { margin, canvas_y + px(5) }
+        hotbar.overlap_offset = { margin, hotbar_y }
         inventory_panel.overlap_offset = { margin, canvas_y }
         state.session.canvas = canvas
+        canvas.hotbar = hotbar
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
         function pane:onDeactivate()
             if state.session.motion then
@@ -1500,7 +1662,7 @@ return {
             NavButton:new{ title = _("Zurück"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
             NavButton:new{ title = _("Rechts"), width = button_w, height = controls_h, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
             NavButton:new{ title = _("Inventar"), width = button_w, height = controls_h, callback = function() canvas:act("inventory") end, overlap_offset = { margin + (button_w + gap) * 4, controls_y } },
-            TextWidget:new{ text = _("Joystick bewegen · wischen zum Umsehen · Springen"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, height - px(14) } },
+            TextWidget:new{ text = _("Tippen: abbauen · halten: ausgewählten Block platzieren · wischen: umsehen"), face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, height - px(14) } },
         }
         return pane
     end,

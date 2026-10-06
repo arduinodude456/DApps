@@ -143,7 +143,7 @@ end
 
 local app = dofile("minecraft.lua")
 local test = app._test
-assert(app.id == "minecraft" and app.version == "3.2.1" and app.logo == "minecraft", "Minecraft metadata must be stable")
+assert(app.id == "minecraft" and app.version == "3.3.0" and app.logo == "minecraft", "Minecraft metadata must be stable")
 assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
 assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
 assert(test.COLOR_RENDER_SAMPLE == 3, "Color mode must use a faster ray grid while keeping texture dithering readable")
@@ -270,6 +270,23 @@ local function flatSession()
     flat.player_x, flat.player_z, flat.yaw, flat.pitch = 40.5, 40.5, 0, 0
     return flat
 end
+
+local target_session = flatSession()
+target_session.player_x, target_session.player_z, target_session.yaw = 40.5, 40.5, 0
+target_session.world.heights[43][41], target_session.world.materials[43][41] = 5, "stone"
+test.rebuildWorldBlocks(target_session.world)
+local target_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = target_session }
+local clicked = target_canvas:pickBlock(105, 63)
+assert(clicked and clicked.x == 40 and clicked.z == 42 and clicked.y == 2, "A center-screen tap must ray-pick the visible voxel in the camera crosshair")
+assert(clicked.place_x == 40 and clicked.place_z == 41 and clicked.place_y == 2, "The hit face must identify the adjacent voxel for placement")
+local mined_material = test.blockAt(target_session.world, clicked.x, clicked.z, clicked.y)
+local mined_before = target_session.inventory[mined_material] or 0
+assert(target_session:mineBlock(clicked) and test.blockAt(target_session.world, clicked.x, clicked.z, clicked.y) == nil, "Mining the picked voxel must remove exactly that block")
+assert(target_session.inventory[mined_material] == mined_before + 1, "Mining must add the exact voxel material to inventory")
+target_session:selectSlot(1)
+assert(target_session:placeBlock({ x = clicked.place_x, z = clicked.place_z, y = clicked.place_y })
+    and test.blockAt(target_session.world, clicked.place_x, clicked.place_z, clicked.place_y) == "grass", "Placing must put the selected inventory block beside the clicked face")
+assert((target_session.inventory.grass or 0) == 11, "Placing must reduce the selected material count")
 
 --[[--
 Phase 1: a color panel with KOReader's "Color rendering" switched on. This is
@@ -436,11 +453,16 @@ local pane_context = {
 }
 local pane = app.buildPane(pane_instance, pane_context)
 assert(pane and pane.dimen.w == 600 and pane.dimen.h == 420, "Minecraft must build inside its assigned AppDock pane")
-local world_button
+local world_button, hotbar, canvas, inventory_button
 for _, widget in ipairs(pane[1]) do
-    if widget.title == "Welt" then world_button = widget; break end
+    if widget.title == "Welt" then world_button = widget end
+    if widget.title == "Inventar" then inventory_button = widget end
+    if widget.ges_events and widget.ges_events.TapMinecraftHotbar then hotbar = widget end
+    if type(widget.pickBlock) == "function" then canvas = widget end
 end
 assert(world_button and world_button.width > 0, "The pane must expose a world/seed control")
+assert(hotbar and canvas and hotbar.overlap_offset[2] >= canvas.overlap_offset[2] + canvas.height
+    and inventory_button and inventory_button.overlap_offset[2] > hotbar.overlap_offset[2], "The material-count hotbar must sit below the game canvas and above the controls")
 world_button.callback()
 local seed_dialog = shown_widget
 assert(seed_dialog and seed_dialog.title == "Neue Welt erzeugen" and seed_dialog.keyboard_shown, "World creation must prompt for a seed with the keyboard ready")
@@ -470,5 +492,5 @@ assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
 assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.2.1 | minecraft", 1, true), "Minecraft must be published in the DApp catalog")
+assert(catalog:find("minecraft.lua | 3.3.0 | minecraft", 1, true), "Minecraft must be published in the DApp catalog")
 print("Minecraft 3D DApp test: OK")
