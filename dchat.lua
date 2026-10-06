@@ -223,6 +223,14 @@ local function cloneStore(raw)
     local messages, seen = {}, {}
     local recipients, recipient_seen = {}, {}
     local dm_messages, dm_seen = {}, {}
+    local hidden_recipient_ids, hidden_seen = {}, {}
+    for _, raw_id in ipairs(type(raw.hidden_recipient_ids) == "table" and raw.hidden_recipient_ids or {}) do
+        local device_id = trim(tostring(raw_id or ""))
+        if device_id:match("^dch_[%w_%-]+$") and not hidden_seen[device_id] and #hidden_recipient_ids < MAX_RECIPIENTS then
+            hidden_seen[device_id] = true
+            hidden_recipient_ids[#hidden_recipient_ids + 1] = device_id
+        end
+    end
     for index, raw_message in ipairs(type(raw.messages) == "table" and raw.messages or {}) do
         local message = cloneMessage(raw_message)
         if message and not seen[message.id] and #messages < MAX_CACHE_MESSAGES then
@@ -232,7 +240,7 @@ local function cloneStore(raw)
     end
     for index, raw_recipient in ipairs(type(raw.recipients) == "table" and raw.recipients or {}) do
         local recipient = cloneRecipient(raw_recipient)
-        if recipient and recipient.deviceId ~= raw.device_id and not recipient_seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
+        if recipient and recipient.deviceId ~= raw.device_id and not hidden_seen[recipient.deviceId] and not recipient_seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
             recipient_seen[recipient.deviceId] = true
             recipients[#recipients + 1] = recipient
         end
@@ -256,6 +264,7 @@ local function cloneStore(raw)
         display_name = safeText(raw.display_name, MAX_NAME_BYTES) or "",
         messages = messages,
         recipients = recipients,
+        hidden_recipient_ids = hidden_recipient_ids,
         dm_messages = dm_messages,
         selected_recipient_id = trim(raw.selected_recipient_id):match("^dch_[%w_%-]+$") and trim(raw.selected_recipient_id) or "",
         selected_recipient_name = safeText(raw.selected_recipient_name, MAX_NAME_BYTES) or "",
@@ -388,16 +397,37 @@ local function replaceMessages(store, raw_messages)
     store.last_refresh = os.time()
 end
 
+local function hiddenRecipientSet(store)
+    local hidden = {}
+    for _, raw_id in ipairs(type(store and store.hidden_recipient_ids) == "table" and store.hidden_recipient_ids or {}) do
+        local device_id = trim(tostring(raw_id or ""))
+        if device_id:match("^dch_[%w_%-]+$") then hidden[device_id] = true end
+    end
+    return hidden
+end
+
 local function replaceRecipients(store, raw_recipients)
     local recipients, seen = {}, {}
+    local hidden = hiddenRecipientSet(store)
     for _, raw_recipient in ipairs(type(raw_recipients) == "table" and raw_recipients or {}) do
         local recipient = cloneRecipient(raw_recipient)
-        if recipient and recipient.deviceId ~= store.device_id and not seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
+        if recipient and recipient.deviceId ~= store.device_id and not hidden[recipient.deviceId] and not seen[recipient.deviceId] and #recipients < MAX_RECIPIENTS then
             seen[recipient.deviceId] = true
             recipients[#recipients + 1] = recipient
         end
     end
     store.recipients = recipients
+end
+
+local function mergeRecipients(store, raw_recipients)
+    local combined = {}
+    for _, recipient in ipairs(type(store and store.recipients) == "table" and store.recipients or {}) do
+        combined[#combined + 1] = recipient
+    end
+    for _, recipient in ipairs(type(raw_recipients) == "table" and raw_recipients or {}) do
+        combined[#combined + 1] = recipient
+    end
+    replaceRecipients(store, combined)
 end
 
 local function replaceDirectMessages(store, raw_messages)
@@ -485,7 +515,7 @@ local function wifiIsOn()
 end
 
 local function stateFor(instance)
-    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, recipient_page = 1, selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
+    instance.dchat = instance.dchat or { store = loadStore(), view = "timeline", page = 1, dm_page = 1, recipient_page = 1, public_scroll = 0, dm_scroll = 0, recipient_scroll = 0, public_draft = "", draft_text = "", selected_id = nil, selected_dm_id = nil, status = _("Public DChat service ready. Create a local identity before posting or reporting."), loading = false, attachment_files = {} }
     prepareAttachmentCache(instance.dchat)
     return instance.dchat
 end
@@ -586,7 +616,7 @@ local function deleteIdentity(state, context)
     end
     local partial = not public_response or not dm_response
     state.store.device_id, state.store.device_secret, state.store.display_name = "", "", ""
-    state.store.recipients, state.store.dm_messages = {}, {}
+    state.store.recipients, state.store.hidden_recipient_ids, state.store.dm_messages = {}, {}, {}
     state.store.selected_recipient_id, state.store.selected_recipient_name = "", ""
     state.recipient_page, state.dm_page, state.view = 1, 1, "settings"
     saveStore(state.store)
@@ -616,7 +646,7 @@ local function fetchMessages(state, context)
     end
     replaceMessages(state.store, response.messages)
     markMessagesSeen(state.store)
-    state.page = 1
+    state.page, state.public_scroll = 1, 0
     saveStore(state.store)
     state.status = #state.store.messages == 0 and _("No public messages yet.") or _("Public messages refreshed manually.")
     refresh(context)
@@ -662,6 +692,7 @@ local function sendMessage(state, context, text)
     if not message or #message > 500 then state.status = _("Use a plain-text message between 1 and 500 characters."); refresh(context); return end
     local response, code, err = httpJson(state.store, "POST", "/messages", { text = message }, true)
     if not response then state.status = err or _("Message could not be sent."); refresh(context); return end
+    state.public_draft = ""
     state.status = _("Message sent publicly. DChat has no private messages or encryption.")
     fetchMessages(state, context)
 end
@@ -670,8 +701,15 @@ local function promptMessage(state, context)
     if not hasIdentity(state.store) then state.status = _("Create a local identity before sending a public message."); refresh(context); return end
     local dialog
     dialog = InputDialog:new{
-        title = _("Send public message"), input = "", input_hint = _("Plain text, up to 500 characters"),
-        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function()
+        title = _("Public message"), input = state.public_draft or "", input_hint = _("Plain text, up to 500 characters"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Save draft"), callback = function()
+            local text = safeText(dialog:getInputText(), MAX_TEXT_BYTES)
+            UIManager:close(dialog)
+            if not text or #text > 500 then state.status = _("Use a plain-text message between 1 and 500 characters."); refresh(context); return end
+            state.public_draft = text
+            state.status = _("Public message draft saved.")
+            refresh(context)
+        end }, { text = _("Send"), is_enter_default = true, callback = function()
             local text = dialog:getInputText()
             UIManager:close(dialog)
             sendMessage(state, context, text)
@@ -715,8 +753,8 @@ local function fetchRecipients(state, context, query)
         refresh(context)
         return
     end
-    replaceRecipients(state.store, response.recipients)
-    state.recipient_page = 1
+    if clean_query ~= "" then mergeRecipients(state.store, response.recipients) else replaceRecipients(state.store, response.recipients) end
+    state.recipient_page, state.recipient_scroll = 1, 0
     saveStore(state.store)
     state.status = #state.store.recipients == 0 and _("No recipients found.") or _("Recipients refreshed manually.")
     refresh(context)
@@ -746,6 +784,7 @@ local function fetchConversation(state, context)
     state.store.selected_recipient_name = safeText(response.conversation.displayName, MAX_NAME_BYTES) or state.store.selected_recipient_name
     replaceDirectMessages(state.store, response.conversation.messages)
     state.dm_page = math.max(1, math.ceil(#state.store.dm_messages / MAX_VISIBLE_PER_PAGE))
+    state.dm_scroll = 0
     saveStore(state.store)
     state.status = #state.store.dm_messages == 0 and _("No private messages yet.") or _("Private conversation refreshed.")
     deferConversationRefresh(state, context)
@@ -823,6 +862,7 @@ local function sendDirectMessage(state, context, text, attachment)
         refresh(context)
         return
     end
+    state.draft_text = ""
     state.status = _("Private message sent. It is stored server-side and is not end-to-end encrypted.")
     fetchConversation(state, context)
 end
@@ -832,8 +872,15 @@ local function promptDirectMessage(state, context, initial_text)
     if not selectedRecipient(state) then state.status = _("Choose a recipient first."); refresh(context); return end
     local dialog
     dialog = InputDialog:new{
-        title = _("Send private message"), input = initial_text or "", input_hint = _("Text or attached image, up to 1500 characters"),
-        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text, nil) end } } },
+        title = _("Private message"), input = initial_text or state.draft_text or "", input_hint = _("Text or attached image, up to 1500 characters"),
+        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Save draft"), callback = function()
+            local text = safeText(dialog:getInputText(), MAX_TEXT_BYTES)
+            UIManager:close(dialog)
+            if not text then state.status = _("Use a plain-text message between 1 and 1500 characters."); refresh(context); return end
+            state.draft_text = text
+            state.status = _("Private message draft saved.")
+            refresh(context)
+        end }, { text = _("Send"), is_enter_default = true, callback = function() local text = dialog:getInputText(); UIManager:close(dialog); sendDirectMessage(state, context, text, nil) end } } },
     }
     showInputDialog(dialog)
 end
@@ -851,7 +898,7 @@ local function chooseImageAttachment(state, context)
         local mime = imageMimeForPath(path)
         if not mime then state.status = _("Use a PNG, JPEG, GIF or WEBP image."); refresh(context); return end
         if not data or #data > MAX_ATTACHMENT_BYTES then state.status = _("Images are limited to 512 KB."); refresh(context); return end
-        sendDirectMessage(state, context, "", { mime = mime, data = base64Encode(data) })
+        sendDirectMessage(state, context, state.draft_text or "", { mime = mime, data = base64Encode(data) })
     end
     local ok_chooser, FileChooser = pcall(require, "ui/widget/filechooser")
     if ok_chooser and FileChooser then
@@ -917,189 +964,218 @@ local function promptReport(state, context)
     showInputDialog(dialog)
 end
 
-local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "", primary = false, button_background = nil, button_foreground = nil, callback = nil }
+local function removeRecipientLocally(state, context, device_id)
+    device_id = trim(tostring(device_id or ""))
+    if not device_id:match("^dch_[%w_%-]+$") then return end
+    local recipients = {}
+    for _, recipient in ipairs(state.store.recipients or {}) do
+        if recipient.deviceId ~= device_id then recipients[#recipients + 1] = recipient end
+    end
+    state.store.recipients = recipients
+    local hidden = hiddenRecipientSet(state.store)
+    if not hidden[device_id] then
+        state.store.hidden_recipient_ids = state.store.hidden_recipient_ids or {}
+        state.store.hidden_recipient_ids[#state.store.hidden_recipient_ids + 1] = device_id
+    end
+    if state.store.selected_recipient_id == device_id then
+        clearAttachmentFiles(state)
+        state.store.selected_recipient_id, state.store.selected_recipient_name = "", ""
+        state.store.dm_messages = {}
+        state.selected_dm_id, state.dm_scroll, state.compact_sidebar = nil, 0, true
+        state.view = "dm"
+    end
+    state.recipient_scroll = math.max(0, math.min(state.recipient_scroll or 0, math.max(0, #recipients - 1)))
+    saveStore(state.store)
+    state.status = _("Contact removed from this reader. It was not deleted from the service.")
+    refresh(context)
+end
+
+local function confirmRemoveRecipient(state, context, recipient)
+    if not recipient then return end
+    UIManager:show(ConfirmBox:new{
+        text = string.format(_("Remove %s from this reader's chat list? This keeps the other reader and any server-stored chat intact."), recipient.displayName),
+        ok_text = _("Remove contact"),
+        ok_callback = function() removeRecipientLocally(state, context, recipient.deviceId) end,
+    })
+end
+
+local function restoreRemovedRecipients(state, context)
+    state.store.hidden_recipient_ids = {}
+    saveStore(state.store)
+    state.status = _("Removed contacts can appear in the next recipient refresh.")
+    if hasIdentity(state.store) then
+        fetchRecipients(state, context, "")
+    else
+        refresh(context)
+    end
+end
+
+local ActionButton = InputContainer:extend{
+    width = nil,
+    height = nil,
+    title = "",
+    body = nil,
+    primary = false,
+    button_background = nil,
+    button_foreground = nil,
+    callback = nil,
+}
+
 function ActionButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     local palette = active_palette or paletteFor()
     local foreground = self.button_foreground or (self.primary and palette.on_primary or palette.on_surface)
     local background = self.button_background or (self.primary and palette.primary or palette.surface)
-    local content = self.body and TextBoxWidget:new{ text = self.body, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .24))), width = self.width - scale(14), height = self.height - scale(8), line_height = 0.32, alignment = "left", fgcolor = foreground } or CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .28))), fgcolor = foreground, bold = self.primary, max_width = self.width - scale(10) } }
+    local content
+    if self.body then
+        content = TextBoxWidget:new{
+            text = self.body,
+            face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * .18))),
+            width = self.width - scale(12),
+            height = self.height - scale(8),
+            line_height = 0.30,
+            alignment = "left",
+            fgcolor = foreground,
+        }
+    else
+        content = CenterContainer:new{
+            dimen = self.dimen,
+            TextWidget:new{
+                text = self.title,
+                face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * .24))),
+                fgcolor = foreground,
+                bold = self.primary,
+                max_width = self.width - scale(8),
+            },
+        }
+    end
     self[1] = FrameContainer:new{
-        width = self.width, height = self.height, padding = self.body and scale(7) or 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = self.bubble_background or background,
+        width = self.width,
+        height = self.height,
+        padding = self.body and scale(6) or 0,
+        bordersize = 0,
+        radius = math.max(4, math.floor(self.height * .22)),
+        background = self.button_background or background,
         content,
     }
     self.ges_events = { TapDChatAction = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
+
 function ActionButton:paintTo(bb, x, y)
     local range = self.ges_events.TapDChatAction[1].range
     range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
     return InputContainer.paintTo(self, bb, x, y)
 end
+
 function ActionButton:onTapDChatAction()
     if self.callback then self.callback() end
     return true
 end
 
-local EmojiButton = InputContainer:extend{ width = nil, height = nil, image_file = nil, fallback = "?", callback = nil }
-function EmojiButton:init()
+local SwipeSurface = InputContainer:extend{ width = nil, height = nil, content = nil, on_swipe = nil }
+
+function SwipeSurface:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local icon = emptySizedWidget(self.height - 4, self.height - 4)
-    if not isAndroidDevice() then
-        local image_file = io.open(self.image_file, "rb")
-        if image_file then
-            image_file:close()
-            icon = safeImageWidget{ file = self.image_file, width = self.height - 4, height = self.height - 4, scale_factor = 0, alpha = true } or icon
-        end
-    end
-    local fallback = TextWidget:new{ text = self.fallback, face = Font:getFace("cfont", math.max(scale(8), math.floor(self.height * .24))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, overlap_offset = { 2, self.height - scale(14) } }
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 2, bordersize = 0, radius = math.max(4, math.floor(self.height * .2)), background = Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, CenterContainer:new{ dimen = self.dimen, icon }, fallback } }
-    self.ges_events = { TapDChatEmoji = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+    self[1] = self.content or emptySizedWidget(self.width, self.height)
+    self.ges_events = { SwipeDChatScroll = { GestureRange:new{ ges = "swipe", range = self.dimen } } }
 end
-function EmojiButton:paintTo(bb, x, y)
-    local range = self.ges_events.TapDChatEmoji[1].range
+
+function SwipeSurface:paintTo(bb, x, y)
+    local range = self.ges_events.SwipeDChatScroll[1].range
     range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
     return InputContainer.paintTo(self, bb, x, y)
 end
-function EmojiButton:onTapDChatEmoji()
+
+function SwipeSurface:onSwipeDChatScroll(_, gesture)
+    if self.on_swipe then return self.on_swipe(gesture and gesture.direction) == true end
+    return false
+end
+
+local DMBubble = InputContainer:extend{
+    width = nil,
+    height = nil,
+    body = "",
+    bubble_background = nil,
+    text_foreground = nil,
+    font_size = nil,
+    callback = nil,
+}
+
+function DMBubble:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    local padding = scale(6)
+    self[1] = FrameContainer:new{
+        width = self.width,
+        height = self.height,
+        padding = padding,
+        bordersize = 0,
+        radius = math.max(6, math.floor(self.height * .30)),
+        background = self.bubble_background or Blitbuffer.COLOR_WHITE,
+        TextBoxWidget:new{
+            text = self.body,
+            face = Font:getFace("smallinfofont", self.font_size or math.max(scale(8), math.floor(self.height * .16))),
+            width = self.width - 2 * padding,
+            height = self.height - 2 * padding,
+            line_height = 0.30,
+            alignment = "left",
+            fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
+        },
+    }
+    self.ges_events = { TapDChatBubble = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+end
+
+function DMBubble:paintTo(bb, x, y)
+    local range = self.ges_events.TapDChatBubble[1].range
+    range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
+    return InputContainer.paintTo(self, bb, x, y)
+end
+
+function DMBubble:onTapDChatBubble()
     if self.callback then self.callback() end
     return true
 end
 
-local function messageButton(width, height, message, callback)
-    return ActionButton:new{ width = width, height = height, title = message.authorName .. ": " .. message.body, callback = callback }
+local function clamp(value, minimum, maximum)
+    value = tonumber(value) or minimum
+    return math.max(minimum, math.min(maximum, value))
 end
 
-local function timelinePane(instance, context)
-    local state = stateFor(instance)
-    active_palette = paletteFor(context)
-    local palette = active_palette
-    local width, height = context.dimen.w, context.dimen.h
-    local px = context.px or scale
-    local margin, gap = math.max(px(8), math.floor(width / 70)), math.max(px(5), math.floor(width / 130))
-    local button_height = math.max(px(32), math.floor(height / 16))
-    local row_height = math.max(px(45), math.floor(height / 9))
-    local content_y = margin + px(69) + button_height + gap
-    local content_end = height - margin - button_height - gap
-    local start_index = (state.page - 1) * MAX_VISIBLE_PER_PAGE + 1
-    local total_pages = math.max(1, math.ceil(#state.store.messages / MAX_VISIBLE_PER_PAGE))
-    state.page = math.max(1, math.min(state.page, total_pages))
-    start_index = (state.page - 1) * MAX_VISIBLE_PER_PAGE + 1
-    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    local elements = {
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-        FrameContainer:new{ width = width, height = px(56), padding = 0, bordersize = 0, background = palette.primary, emptySizedWidget(width, px(56)) },
-        TextWidget:new{ text = _("AppDock Lounge"), face = Font:getFace("cfont", px(21)), fgcolor = palette.on_primary, bold = true, overlap_offset = { margin, margin } },
-        TextWidget:new{ text = _("Public text room · private chats are server-stored, not end-to-end encrypted"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_primary, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(28) } },
-        ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchMessages(state, context) end, overlap_offset = { margin, margin + px(62) } },
-        ActionButton:new{ width = third, height = button_height, title = _("Send"), button_background = palette.secondary, button_foreground = palette.on_secondary, callback = function() promptMessage(state, context) end, overlap_offset = { margin + third + gap, margin + px(62) } },
-        ActionButton:new{ width = third, height = button_height, title = _("DMs"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() openPrivateChats(state, context) end, overlap_offset = { margin + 2 * (third + gap), margin + px(62) } },
-    }
-    local y = content_y
-    if #state.store.messages == 0 then
-        elements[#elements + 1] = TextBoxWidget:new{ text = _("No local message cache yet. Tap Refresh after configuring the public service address."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = math.max(px(76), math.floor(height / 5)), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } }
+local function visibleRecentRange(items, offset, capacity)
+    local total = #(items or {})
+    local maximum = math.max(0, total - capacity)
+    offset = clamp(offset, 0, maximum)
+    local last = total - offset
+    local first = math.max(1, last - capacity + 1)
+    return first, last, offset, maximum
+end
+
+local function visibleTopRange(items, offset, capacity)
+    local total = #(items or {})
+    local maximum = math.max(0, total - capacity)
+    offset = clamp(offset, 0, maximum)
+    return offset + 1, math.min(total, offset + capacity), offset, maximum
+end
+
+local function scrollCollection(state, key, total, capacity, direction, context)
+    local maximum = math.max(0, total - capacity)
+    local current = clamp(state[key], 0, maximum)
+    if direction == "north" then
+        current = math.min(maximum, current + 1)
+    elseif direction == "south" then
+        current = math.max(0, current - 1)
     else
-        for index = start_index, math.min(#state.store.messages, start_index + MAX_VISIBLE_PER_PAGE - 1) do
-            local message = state.store.messages[index]
-            if y + row_height > content_end then break end
-            elements[#elements + 1] = messageButton(width - 2 * margin, row_height, message, function() state.selected_id = message.id; state.view = "message"; refresh(context) end)
-            elements[#elements].overlap_offset = { margin, y }
-            y = y + row_height + gap
-        end
+        return false
     end
-    local half = math.floor((width - 2 * margin - gap) / 2)
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Settings"), callback = function() state.view = "settings"; refresh(context) end, overlap_offset = { margin, math.max(content_y, height - margin - 2 * button_height - gap) } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Newer"), callback = function() state.page = math.max(1, state.page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Older ›") .. " " .. state.page .. "/" .. total_pages, callback = function() state.page = math.min(total_pages, state.page + 1); refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
-    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, math.max(content_y, height - margin - button_height - px(20)) } }
-    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
-end
-
-local function settingsPane(instance, context)
-    local state = stateFor(instance)
-    active_palette = paletteFor(context)
-    local palette = active_palette
-    local width, height = context.dimen.w, context.dimen.h
-    local px = context.px or scale
-    local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(38), math.floor(height / 13))
-    local endpoint_status = state.store.endpoint ~= "" and state.store.endpoint or _("Public service address missing")
-    local dm_endpoint_status = state.store.dm_endpoint ~= "" and state.store.dm_endpoint or _("DM service address missing")
-    local identity_status = hasIdentity(state.store) and (_("Identity: ") .. state.store.display_name) or _("No local identity")
-    local permissions = context.appdock and context.appdock.getDAppPermissions and context.appdock:getDAppPermissions("dchat") or {}
-    local background_status = permissions.background and _("Background checks: on · Wi-Fi only · every 15 minutes") or _("Background checks: off · enable in DApp permissions")
-    return OverlapGroup:new{
-        dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-        FrameContainer:new{ width = width, height = px(56), padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, px(56)) },
-        TextWidget:new{ text = _("DChat settings"), face = Font:getFace("cfont", px(20)), fgcolor = palette.on_secondary, bold = true, overlap_offset = { margin, margin } },
-        TextBoxWidget:new{ text = _("DChat has a public room and server-stored private chats. Private messages are not end-to-end encrypted. Do not share sensitive data. There is no account recovery or identity transfer."), face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = px(67), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, margin + px(31) } },
-        TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(108) } },
-        TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(126) } },
-        TextWidget:new{ text = background_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(143) } },
-        TextWidget:new{ text = dm_endpoint_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(160) } },
-        ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Public address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setEndpoint(state, context) end, overlap_offset = { margin, margin + px(181) } },
-        ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("DM address"), primary = true, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, margin + px(181) } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + button_height + gap } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Delete my DChat account"), callback = function() confirmDeleteIdentity(state, context) end, overlap_offset = { margin, margin + px(181) + 2 * button_height + 2 * gap } },
-        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to messages"), primary = true, callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
-        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(24) } },
-    }
-end
-
-local function dmPane(instance, context)
-    local state = stateFor(instance)
-    active_palette = paletteFor(context)
-    local palette = active_palette
-    local width, height = context.dimen.w, context.dimen.h
-    local px = context.px or scale
-    local margin, gap = math.max(px(8), math.floor(width / 70)), math.max(px(5), math.floor(width / 130))
-    local button_height, row_height = math.max(px(32), math.floor(height / 16)), math.max(px(42), math.floor(height / 9))
-    local elements = {
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = CHAT_BACKGROUND, emptySizedWidget(width, height) },
-        FrameContainer:new{ width = width, height = px(56), padding = margin, bordersize = 0, background = palette.tertiary, TextWidget:new{ text = _("Chats"), face = Font:getFace("cfont", px(20)), fgcolor = palette.on_tertiary, bold = true, overlap_offset = { margin, px(8) } }, TextWidget:new{ text = _("private · server stored"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_tertiary, overlap_offset = { margin, px(33) } } },
-    }
-    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Refresh"), primary = true, callback = function() fetchRecipients(state, context, "") end, overlap_offset = { margin, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Search"), button_background = palette.secondary, button_foreground = palette.on_secondary, callback = function() promptRecipientSearch(state, context) end, overlap_offset = { margin + third + gap, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = third, height = button_height, title = _("Public"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin + 2 * (third + gap), px(60) } }
-    local y, end_y = px(112), height - margin - 2 * button_height - 2 * gap
-    local recipients = state.store.recipients or {}
-    local total_pages = math.max(1, math.ceil(#recipients / MAX_VISIBLE_PER_PAGE))
-    state.recipient_page = math.max(1, math.min(state.recipient_page or 1, total_pages))
-    local start_index = (state.recipient_page - 1) * MAX_VISIBLE_PER_PAGE + 1
-    if #recipients == 0 then
-        elements[#elements + 1] = TextBoxWidget:new{ text = _("No recipients cached. Tap Search or Refresh."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } }
-    else
-        for index = start_index, math.min(#recipients, start_index + MAX_VISIBLE_PER_PAGE - 1) do
-            if y + row_height > end_y then break end
-            local recipient = recipients[index]
-            local unread_count = tonumber(recipient.unreadCount) or 0
-            local unread = unread_count > 0 and (" · " .. tostring(unread_count) .. " unread") or ""
-            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = row_height, title = recipient.displayName .. unread .. " · " .. recipient.deviceId, callback = function() clearAttachmentFiles(state); state.store.selected_recipient_id = recipient.deviceId; state.store.selected_recipient_name = recipient.displayName; state.view = "dm_conversation"; saveStore(state.store); fetchConversation(state, context) end, overlap_offset = { margin, y } }
-            y = y + row_height + gap
-        end
-    end
-    local half = math.floor((width - 2 * margin - gap) / 2)
-    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - 2 * button_height - gap - px(20) } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Newer"), callback = function() state.recipient_page = math.max(1, state.recipient_page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Older ›") .. " " .. state.recipient_page .. "/" .. total_pages, callback = function() state.recipient_page = math.min(total_pages, state.recipient_page + 1); refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
-    return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
+    if current == state[key] then return false end
+    state[key] = current
+    refresh(context)
+    return true
 end
 
 local function dmPreview(text, maximum)
     text = tostring(text or "")
     if #text <= maximum then return text end
     return text:sub(1, math.max(1, maximum - 3)) .. "..."
-end
-
-local function sendEmojiBitmap(state, context, emoji_file)
-    local encoded = DM_EMOJI_BASE64[emoji_file]
-    local data = encoded and base64Decode(encoded) or nil
-    if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then
-        state.status = _("The emoji bitmap is too large to send.")
-        refresh(context)
-        return
-    end
-    sendDirectMessage(state, context, "", { mime = "image/png", data = base64Encode(data) })
 end
 
 local function attachmentFilePath(state, message)
@@ -1114,8 +1190,7 @@ local function attachmentFilePath(state, message)
     local data = base64Decode(message.attachmentData)
     if not data or #data == 0 or #data > MAX_ATTACHMENT_BYTES then return nil end
     local extension = ({ ["image/png"] = ".png", ["image/jpeg"] = ".jpg", ["image/gif"] = ".gif", ["image/webp"] = ".webp" })[message.attachmentMime]
-    if not extension then return nil end
-    if not ensureAttachmentCacheDir() then return nil end
+    if not extension or not ensureAttachmentCacheDir() then return nil end
     local recipient_id = tostring(state.store and state.store.selected_recipient_id or ""):match("^dch_[%w_%-]+$") or "unknown"
     local message_id = tostring(message.id or "")
     if not message_id:match("^%d+$") then return nil end
@@ -1129,105 +1204,444 @@ local function attachmentFilePath(state, message)
     return path
 end
 
-local DMBubble = InputContainer:extend{ width = nil, height = nil, image_file = nil, body = "", bubble_background = nil, callback = nil }
-function DMBubble:init()
-    self.dimen = Geom:new{ w = self.width, h = self.height }
-    local padding = scale(7)
-    local content = {}
-    local content_width = self.width - 2 * padding
-    local image_height = self.image_file and math.max(scale(58), math.min(scale(150), self.height - 2 * padding - scale(28))) or 0
-    local image = self.image_file and safeImageWidget{ file = self.image_file, width = content_width, height = image_height, scale_factor = 0, overlap_offset = { padding, padding } }
-    if image then content[#content + 1] = image end
-    local text_y = padding + (image and image_height or 0) + (image and scale(4) or 0)
-    if self.body ~= "" then
-        content[#content + 1] = TextBoxWidget:new{ text = self.body, face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * .18))), width = content_width, height = math.max(scale(20), self.height - text_y - padding), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { padding, text_y } }
-    elseif image then
-        content[#content + 1] = TextWidget:new{ text = _("Image"), face = Font:getFace("smallinfofont", scale(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { padding, self.height - padding - scale(16) } }
-    end
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = 0, bordersize = 0, radius = math.max(4, math.floor(self.height * .12)), background = self.bubble_background or Blitbuffer.COLOR_WHITE, OverlapGroup:new{ dimen = self.dimen, unpack(content) } }
-    self.ges_events = { TapDChatBubble = { GestureRange:new{ ges = "tap", range = self.dimen } } }
-end
-function DMBubble:paintTo(bb, x, y)
-    local range = self.ges_events.TapDChatBubble[1].range
-    range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
-    return InputContainer.paintTo(self, bb, x, y)
-end
-function DMBubble:onTapDChatBubble()
-    if self.callback then self.callback() end
-    return true
-end
-
-local function dmBubble(width, height, message, own, callback)
-    local bubble_width = math.max(math.floor(width * 0.78), width - 40)
-    local x = own and width - bubble_width or 0
-    local background = own and CHAT_LIGHT_GREEN or Blitbuffer.COLOR_WHITE
-    local body = message.body
+local function directBubbleText(message, own)
+    local body = message.body or ""
     if message.attachmentData ~= "" then
-        local notice = isAndroidDevice() and _("Image attached; preview disabled on Android") or _("Image attachment · tap to view")
-        body = (body ~= "" and body .. "\n" or "") .. notice
+        local notice = isAndroidDevice() and _("Image attached") or _("Image attached · tap to view")
+        body = body ~= "" and body .. "\n" .. notice or notice
     end
-    if own then body = (message.readAt ~= "" and "✓✓" or "✓") .. " " .. body end
-    return DMBubble:new{ width = bubble_width, height = height, body = dmPreview(body, 36), callback = callback, bubble_background = background, overlap_offset = { x, 0 } }
+    if own then body = body .. "\n" .. (message.readAt ~= "" and "✓✓" or "✓") end
+    return dmPreview(body, 260)
 end
 
-local function dmConversationPane(instance, context)
+local function makeDirectBubble(available_width, message, own, palette, px, callback)
+    local bubble_width = math.max(px(92), math.floor(available_width * .76))
+    local body = directBubbleText(message, own)
+    local line_width = math.max(16, math.floor(bubble_width / math.max(px(5), 1)))
+    local lines = math.max(1, math.ceil(#body / line_width))
+    local bubble_height = clamp(px(18) + lines * px(13), px(34), px(94))
+    return DMBubble:new{
+        width = bubble_width,
+        height = bubble_height,
+        body = body,
+        bubble_background = own and palette.primary or palette.tertiary,
+        text_foreground = own and palette.on_primary or palette.on_tertiary,
+        font_size = math.max(px(8), math.floor(bubble_height * .16)),
+        callback = callback,
+    }
+end
+
+local function makePublicBubble(available_width, message, palette, px, callback)
+    local body = dmPreview(message.authorName .. "\n" .. message.body, 260)
+    local line_width = math.max(16, math.floor(available_width / math.max(px(5), 1)))
+    local lines = math.max(1, math.ceil(#body / line_width))
+    local bubble_height = clamp(px(18) + lines * px(13), px(35), px(94))
+    return DMBubble:new{
+        width = math.max(px(92), math.floor(available_width * .84)),
+        height = bubble_height,
+        body = body,
+        bubble_background = palette.surface,
+        text_foreground = palette.on_surface,
+        font_size = math.max(px(8), math.floor(bubble_height * .16)),
+        callback = callback,
+    }
+end
+
+local function buildSidebar(state, context, width, height)
+    local palette = active_palette
+    local px = context.px or scale
+    local margin, gap = math.max(px(6), math.floor(width / 46)), math.max(px(4), math.floor(width / 110))
+    local header_height = math.max(px(37), math.floor(height * .10))
+    local control_height = math.max(px(25), math.floor(height * .065))
+    local row_height = math.max(px(38), math.floor(height * .115))
+    local status_height = math.max(px(16), math.floor(height * .045))
+    local public_y = header_height + gap
+    local controls_y = public_y + control_height + gap
+    local list_y = controls_y + control_height + gap + px(14)
+    local list_end = height - margin - status_height
+    local capacity = math.max(1, math.floor(math.max(0, list_end - list_y) / (row_height + gap)))
+    local first, last, normalized = visibleTopRange(state.store.recipients or {}, state.recipient_scroll or 0, capacity)
+    state.recipient_scroll = normalized
+    local settings_width = math.max(px(30), math.floor(width * .21))
+    local header_text_width = width - 2 * margin - settings_width - gap
+
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = header_height, padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, header_height) },
+        TextWidget:new{ text = "DChat", face = Font:getFace("cfont", math.max(px(14), math.floor(header_height * .45))), fgcolor = palette.on_secondary, bold = true, max_width = header_text_width, overlap_offset = { margin, math.max(px(4), math.floor(header_height * .17)) } },
+        TextWidget:new{ text = _("Chats"), face = Font:getFace("smallinfofont", math.max(px(7), math.floor(header_height * .20))), fgcolor = palette.on_secondary, max_width = header_text_width, overlap_offset = { margin, math.floor(header_height * .62) } },
+        ActionButton:new{ width = settings_width, height = header_height - 2 * margin, title = _("Settings"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() state.view = "settings"; refresh(context) end, overlap_offset = { width - margin - settings_width, margin } },
+        ActionButton:new{ width = width - 2 * margin, height = control_height, title = _("Public Lounge"), primary = state.view == "timeline", callback = function() state.compact_sidebar = false; state.view = "timeline"; refresh(context) end, overlap_offset = { margin, public_y } },
+        ActionButton:new{ width = math.floor((width - 2 * margin - gap) * .64), height = control_height, title = _("Find contact"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() promptRecipientSearch(state, context) end, overlap_offset = { margin, controls_y } },
+        ActionButton:new{ width = math.floor((width - 2 * margin - gap) * .36), height = control_height, title = "↻", primary = true, callback = function() fetchRecipients(state, context, "") end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) * .64) + gap, controls_y } },
+        TextWidget:new{ text = _("DIRECT MESSAGES"), face = Font:getFace("smallinfofont", math.max(px(7), math.floor(height * .020))), fgcolor = palette.on_variant, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, list_y - px(13) } },
+        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", math.max(px(7), math.floor(status_height * .48))), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - status_height } },
+    }
+
+    if #(state.store.recipients or {}) == 0 then
+        elements[#elements + 1] = TextBoxWidget:new{ text = _("No contacts yet. Find a reader to start a private chat."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(row_height * .22))), width = width - 2 * margin, height = math.min(px(64), math.max(px(28), list_end - list_y)), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, list_y } }
+    else
+        local y = list_y
+        for index = first, last do
+            local recipient = state.store.recipients[index]
+            local unread_count = tonumber(recipient.unreadCount) or 0
+            local unread = unread_count > 0 and (" · " .. tostring(unread_count)) or ""
+            local remove_width = math.max(px(23), math.floor((width - 2 * margin) * .16))
+            local row_width = width - 2 * margin - gap - remove_width
+            elements[#elements + 1] = ActionButton:new{
+                width = row_width,
+                height = row_height,
+                body = recipient.displayName .. unread .. "\n" .. dmPreview(recipient.deviceId, 28),
+                primary = recipient.deviceId == state.store.selected_recipient_id,
+                callback = function()
+                    clearAttachmentFiles(state)
+                    state.store.selected_recipient_id = recipient.deviceId
+                    state.store.selected_recipient_name = recipient.displayName
+                    state.compact_sidebar = false
+                    state.view = "dm_conversation"
+                    state.dm_scroll = 0
+                    saveStore(state.store)
+                    fetchConversation(state, context)
+                end,
+                overlap_offset = { margin, y },
+            }
+            elements[#elements + 1] = ActionButton:new{ width = remove_width, height = row_height, title = "×", button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() confirmRemoveRecipient(state, context, recipient) end, overlap_offset = { margin + row_width + gap, y } }
+            y = y + row_height + gap
+        end
+    end
+
+    return SwipeSurface:new{
+        width = width,
+        height = height,
+        content = OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) },
+        on_swipe = function(direction) return scrollCollection(state, "recipient_scroll", #(state.store.recipients or {}), capacity, direction, context) end,
+    }
+end
+
+local function buildPublicPanel(state, context, width, height, compact)
+    local palette = active_palette
+    local px = context.px or scale
+    local margin, gap = math.max(px(7), math.floor(width / 58)), math.max(px(4), math.floor(width / 120))
+    local header_height = math.max(px(39), math.floor(height * .10))
+    local composer_height = math.max(px(30), math.floor(height * .075))
+    local status_height = math.max(px(15), math.floor(height * .040))
+    local composer_y = height - margin - composer_height
+    local message_y = header_height + status_height + gap
+    local message_end = composer_y - gap
+    local capacity = math.max(1, math.floor(math.max(0, message_end - message_y) / math.max(px(39), math.floor(height * .11))))
+    local first, last, normalized = visibleRecentRange(state.store.messages or {}, state.public_scroll or 0, capacity)
+    state.public_scroll = normalized
+    local action_width = math.max(px(25), math.floor(width * .12))
+    local title_width = width - 2 * margin - 2 * action_width - 2 * gap
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = header_height, padding = 0, bordersize = 0, background = palette.primary, emptySizedWidget(width, header_height) },
+        TextWidget:new{ text = _("AppDock Lounge"), face = Font:getFace("cfont", math.max(px(13), math.floor(header_height * .43))), fgcolor = palette.on_primary, bold = true, max_width = title_width, overlap_offset = { margin, math.max(px(4), math.floor(header_height * .18)) } },
+        TextWidget:new{ text = _("Public room"), face = Font:getFace("smallinfofont", math.max(px(7), math.floor(header_height * .20))), fgcolor = palette.on_primary, max_width = title_width, overlap_offset = { margin, math.floor(header_height * .64) } },
+        ActionButton:new{ width = action_width, height = math.max(px(24), header_height - 2 * margin), title = "↻", button_background = palette.secondary, button_foreground = palette.on_secondary, callback = function() fetchMessages(state, context) end, overlap_offset = { width - margin - 2 * action_width - gap, margin } },
+        ActionButton:new{ width = action_width, height = math.max(px(24), header_height - 2 * margin), title = compact and _("Chats") or _("Settings"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function()
+            if compact then state.compact_sidebar = true; state.view = "dm" else state.view = "settings" end
+            refresh(context)
+        end, overlap_offset = { width - margin - action_width, margin } },
+        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", math.max(px(7), math.floor(status_height * .50))), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, header_height + math.floor((status_height - px(8)) / 2) } },
+    }
+
+    if #(state.store.messages or {}) == 0 then
+        elements[#elements + 1] = TextBoxWidget:new{ text = _("No public messages cached. Refresh to load the lounge."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
+    else
+        local y = message_y
+        for index = first, last do
+            local message = state.store.messages[index]
+            local bubble = makePublicBubble(width - 2 * margin, message, palette, px, function() state.selected_id = message.id; state.view = "message"; refresh(context) end)
+            if y + bubble.height > message_end then break end
+            bubble.overlap_offset = { margin, y }
+            elements[#elements + 1] = bubble
+            y = y + bubble.height + gap
+        end
+    end
+
+    local send_width = math.max(px(43), math.floor((width - 2 * margin - gap) * .24))
+    local field_width = width - 2 * margin - gap - send_width
+    local public_draft = state.public_draft ~= "" and dmPreview(state.public_draft, 70) or _("Write a message…")
+    elements[#elements + 1] = ActionButton:new{ width = field_width, height = composer_height, body = public_draft, button_background = palette.surface, button_foreground = palette.on_variant, callback = function() promptMessage(state, context) end, overlap_offset = { margin, composer_y } }
+    elements[#elements + 1] = ActionButton:new{ width = send_width, height = composer_height, title = _("Send"), primary = true, callback = function()
+        if state.public_draft ~= "" then sendMessage(state, context, state.public_draft) else promptMessage(state, context) end
+    end, overlap_offset = { margin + field_width + gap, composer_y } }
+
+    return SwipeSurface:new{
+        width = width,
+        height = height,
+        content = OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) },
+        on_swipe = function(direction) return scrollCollection(state, "public_scroll", #(state.store.messages or {}), capacity, direction, context) end,
+    }
+end
+
+local function buildConversationPanel(state, context, width, height, compact)
+    local palette = active_palette
+    local recipient = selectedRecipient(state)
+    local px = context.px or scale
+    local margin, gap = math.max(px(7), math.floor(width / 58)), math.max(px(4), math.floor(width / 120))
+    local header_height = math.max(px(39), math.floor(height * .10))
+    local composer_height = math.max(px(30), math.floor(height * .075))
+    local status_height = math.max(px(15), math.floor(height * .040))
+    local composer_y = height - margin - composer_height
+    local message_y = header_height + status_height + gap
+    local message_end = composer_y - gap
+    local capacity = math.max(1, math.floor(math.max(0, message_end - message_y) / math.max(px(39), math.floor(height * .11))))
+    local messages = state.store.dm_messages or {}
+    local first, last, normalized = visibleRecentRange(messages, state.dm_scroll or 0, capacity)
+    state.dm_scroll = normalized
+    local action_width = math.max(px(25), math.floor(width * .12))
+    local title_width = width - 2 * margin - 2 * action_width - 2 * gap
+    local title = recipient and recipient.displayName or _("Private chats")
+    local subtitle = recipient and _("Private · server stored") or _("Choose a contact on the left")
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = header_height, padding = 0, bordersize = 0, background = palette.primary, emptySizedWidget(width, header_height) },
+        TextWidget:new{ text = title, face = Font:getFace("cfont", math.max(px(13), math.floor(header_height * .43))), fgcolor = palette.on_primary, bold = true, max_width = title_width, overlap_offset = { margin, math.max(px(4), math.floor(header_height * .18)) } },
+        TextWidget:new{ text = subtitle, face = Font:getFace("smallinfofont", math.max(px(7), math.floor(header_height * .20))), fgcolor = palette.on_primary, max_width = title_width, overlap_offset = { margin, math.floor(header_height * .64) } },
+        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", math.max(px(7), math.floor(status_height * .50))), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, header_height + math.floor((status_height - px(8)) / 2) } },
+    }
+
+    if recipient then
+        elements[#elements + 1] = ActionButton:new{ width = action_width, height = math.max(px(24), header_height - 2 * margin), title = "↻", dchat_role = "conversation_refresh", button_background = palette.secondary, button_foreground = palette.on_secondary, callback = function()
+            UIManager:scheduleIn(0.1, function()
+                if state.view ~= "dm_conversation" or state.store.selected_recipient_id == "" then return end
+                clearAttachmentFiles(state)
+                fetchConversation(state, context)
+            end)
+        end, overlap_offset = { width - margin - 2 * action_width - gap, margin } }
+        elements[#elements + 1] = ActionButton:new{ width = action_width, height = math.max(px(24), header_height - 2 * margin), title = compact and _("Chats") or _("Delete"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function()
+            if compact then state.compact_sidebar = true; state.view = "dm"; refresh(context) else confirmDeleteConversation(state, context) end
+        end, overlap_offset = { width - margin - action_width, margin } }
+
+        if #messages == 0 then
+            elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet. Write a message below to start this conversation."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
+        else
+            local y = message_y
+            for index = first, last do
+                local message = messages[index]
+                local own = message.senderDeviceId == state.store.device_id or (message.senderDeviceId == "" and message.authorName == state.store.display_name)
+                local bubble = makeDirectBubble(width - 2 * margin, message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
+                if y + bubble.height > message_end then break end
+                bubble.overlap_offset = { own and width - margin - bubble.width or margin, y }
+                elements[#elements + 1] = bubble
+                y = y + bubble.height + gap
+            end
+        end
+
+        local send_width = math.max(px(40), math.floor((width - 2 * margin - 2 * gap) * .20))
+        local attach_width = math.max(px(48), math.floor((width - 2 * margin - 2 * gap) * .22))
+        local field_width = width - 2 * margin - 2 * gap - send_width - attach_width
+        local draft = state.draft_text ~= "" and dmPreview(state.draft_text, 70) or _("Write a message…")
+        elements[#elements + 1] = ActionButton:new{ width = field_width, height = composer_height, body = draft, button_background = palette.surface, button_foreground = palette.on_variant, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, composer_y } }
+        elements[#elements + 1] = ActionButton:new{ width = attach_width, height = composer_height, title = _("Attach"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() chooseImageAttachment(state, context) end, overlap_offset = { margin + field_width + gap, composer_y } }
+        elements[#elements + 1] = ActionButton:new{ width = send_width, height = composer_height, title = _("Send"), primary = true, callback = function()
+            if state.draft_text ~= "" then sendDirectMessage(state, context, state.draft_text, nil) else promptDirectMessage(state, context) end
+        end, overlap_offset = { margin + field_width + gap + attach_width + gap, composer_y } }
+    else
+        elements[#elements + 1] = ActionButton:new{ width = math.max(px(70), math.floor(width * .44)), height = math.max(px(28), composer_height), title = _("Show chats"), primary = true, callback = function() state.compact_sidebar = true; state.view = "dm"; refresh(context) end, overlap_offset = { margin, composer_y } }
+    end
+
+    return SwipeSurface:new{
+        width = width,
+        height = height,
+        content = OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) },
+        on_swipe = function(direction) return scrollCollection(state, "dm_scroll", #messages, capacity, direction, context) end,
+    }
+end
+
+local function buildTinyChatPane(state, context, mode)
+    local palette = active_palette
+    local width, height = context.dimen.w, context.dimen.h
+    local px = context.px or scale
+    local margin, gap = math.max(px(2), math.floor(width / 90)), math.max(1, px(2))
+    local header_height = math.max(px(19), math.floor(height * .18))
+    local button_height = math.max(px(20), math.floor(height * .19))
+    local title_width = width - 2 * margin - math.max(px(30), math.floor(width * .21)) - gap
+    local settings_width = width - 2 * margin - title_width - gap
+    local elements = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = header_height, padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, header_height) },
+    }
+
+    local function addHeader(title)
+        elements[#elements + 1] = TextWidget:new{ text = title, face = Font:getFace("smallinfofont", math.max(px(8), math.floor(header_height * .43))), fgcolor = palette.on_secondary, bold = true, max_width = title_width, overlap_offset = { margin, math.max(1, math.floor(header_height * .24)) } }
+        elements[#elements + 1] = ActionButton:new{ width = settings_width, height = header_height - 2 * margin, title = _("Settings"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() state.view = "settings"; refresh(context) end, overlap_offset = { width - margin - settings_width, margin } }
+    end
+
+    if mode == "timeline" then
+        addHeader(_("Public Lounge"))
+        local composer_y = height - margin - button_height
+        local content_y, content_end = header_height + gap, composer_y - gap
+        local first, last, normalized = visibleRecentRange(state.store.messages or {}, state.public_scroll or 0, 1)
+        state.public_scroll = normalized
+        if last >= first then
+            local message = state.store.messages[last]
+            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = math.max(px(25), content_end - content_y), body = dmPreview(message.authorName .. ": " .. message.body, 84), button_background = palette.surface, button_foreground = palette.on_surface, callback = function() state.selected_id = message.id; state.view = "message"; refresh(context) end, overlap_offset = { margin, content_y } }
+        else
+            elements[#elements + 1] = TextWidget:new{ text = _("No messages"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, content_y } }
+        end
+        local send_width = math.max(px(36), math.floor((width - 2 * margin - gap) * .27))
+        local field_width = width - 2 * margin - gap - send_width
+        elements[#elements + 1] = ActionButton:new{ width = field_width, height = button_height, title = state.public_draft ~= "" and dmPreview(state.public_draft, 26) or _("Write…"), button_background = palette.surface, button_foreground = palette.on_variant, callback = function() promptMessage(state, context) end, overlap_offset = { margin, composer_y } }
+        elements[#elements + 1] = ActionButton:new{ width = send_width, height = button_height, title = _("Send"), primary = true, callback = function() if state.public_draft ~= "" then sendMessage(state, context, state.public_draft) else promptMessage(state, context) end end, overlap_offset = { margin + field_width + gap, composer_y } }
+        return SwipeSurface:new{ width = width, height = height, content = OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }, on_swipe = function(direction) return scrollCollection(state, "public_scroll", #(state.store.messages or {}), 1, direction, context) end }
+    end
+
+    local recipient = selectedRecipient(state)
+    if recipient and not state.compact_sidebar then
+        addHeader(recipient.displayName)
+        local composer_y = height - margin - button_height
+        local content_y, content_end = header_height + gap, composer_y - gap
+        local messages = state.store.dm_messages or {}
+        local first, last, normalized = visibleRecentRange(messages, state.dm_scroll or 0, 1)
+        state.dm_scroll = normalized
+        if last >= first then
+            local message = messages[last]
+            local own = message.senderDeviceId == state.store.device_id or (message.senderDeviceId == "" and message.authorName == state.store.display_name)
+            elements[#elements + 1] = ActionButton:new{ width = width - 2 * margin, height = math.max(px(25), content_end - content_y), body = dmPreview(directBubbleText(message, own), 84), button_background = own and palette.primary or palette.tertiary, button_foreground = own and palette.on_primary or palette.on_tertiary, callback = function() state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, overlap_offset = { margin, content_y } }
+        else
+            elements[#elements + 1] = TextWidget:new{ text = _("No private messages"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, content_y } }
+        end
+        local available = width - 2 * margin - 2 * gap
+        local field_width = math.max(px(54), math.floor(available * .55))
+        local attach_width = math.max(px(23), math.floor(available * .18))
+        local send_width = available - field_width - attach_width
+        elements[#elements + 1] = ActionButton:new{ width = field_width, height = button_height, title = state.draft_text ~= "" and dmPreview(state.draft_text, 24) or _("Write…"), button_background = palette.surface, button_foreground = palette.on_variant, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, composer_y } }
+        elements[#elements + 1] = ActionButton:new{ width = attach_width, height = button_height, title = _("+") , button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() chooseImageAttachment(state, context) end, overlap_offset = { margin + field_width + gap, composer_y } }
+        elements[#elements + 1] = ActionButton:new{ width = send_width, height = button_height, title = _("Send"), primary = true, callback = function() if state.draft_text ~= "" then sendDirectMessage(state, context, state.draft_text, nil) else promptDirectMessage(state, context) end end, overlap_offset = { margin + field_width + gap + attach_width + gap, composer_y } }
+        return SwipeSurface:new{ width = width, height = height, content = OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }, on_swipe = function(direction) return scrollCollection(state, "dm_scroll", #messages, 1, direction, context) end }
+    end
+
+    addHeader(_("Chats"))
+    local controls_y = header_height + gap
+    local control_width = math.floor((width - 2 * margin - 2 * gap) / 3)
+    elements[#elements + 1] = ActionButton:new{ width = control_width, height = button_height, title = _("Public"), primary = state.view == "timeline", callback = function() state.compact_sidebar = false; state.view = "timeline"; refresh(context) end, overlap_offset = { margin, controls_y } }
+    elements[#elements + 1] = ActionButton:new{ width = control_width, height = button_height, title = _("Find"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() promptRecipientSearch(state, context) end, overlap_offset = { margin + control_width + gap, controls_y } }
+    elements[#elements + 1] = ActionButton:new{ width = control_width, height = button_height, title = "↻", primary = true, callback = function() fetchRecipients(state, context, "") end, overlap_offset = { margin + 2 * (control_width + gap), controls_y } }
+    local list_y, list_end = controls_y + button_height + gap, height - margin
+    local row_height = math.max(px(23), math.floor(math.max(0, list_end - list_y) / 2))
+    local capacity = math.max(1, math.floor(math.max(0, list_end - list_y) / (row_height + gap)))
+    local first, last, normalized = visibleTopRange(state.store.recipients or {}, state.recipient_scroll or 0, capacity)
+    state.recipient_scroll = normalized
+    if last < first then
+        elements[#elements + 1] = TextWidget:new{ text = _("No contacts"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, list_y } }
+    else
+        local y = list_y
+        for index = first, last do
+            local contact = state.store.recipients[index]
+            local remove_width = math.max(px(20), math.floor((width - 2 * margin) * .15))
+            local row_width = width - 2 * margin - gap - remove_width
+            elements[#elements + 1] = ActionButton:new{ width = row_width, height = row_height, title = dmPreview(contact.displayName, 22), primary = contact.deviceId == state.store.selected_recipient_id, callback = function()
+                clearAttachmentFiles(state)
+                state.store.selected_recipient_id, state.store.selected_recipient_name = contact.deviceId, contact.displayName
+                state.compact_sidebar, state.view, state.dm_scroll = false, "dm_conversation", 0
+                saveStore(state.store)
+                fetchConversation(state, context)
+            end, overlap_offset = { margin, y } }
+            elements[#elements + 1] = ActionButton:new{ width = remove_width, height = row_height, title = "×", button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() confirmRemoveRecipient(state, context, contact) end, overlap_offset = { margin + row_width + gap, y } }
+            y = y + row_height + gap
+        end
+    end
+    return SwipeSurface:new{ width = width, height = height, content = OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }, on_swipe = function(direction) return scrollCollection(state, "recipient_scroll", #(state.store.recipients or {}), capacity, direction, context) end }
+end
+
+local function tinySettingsPane(instance, context)
     local state = stateFor(instance)
     active_palette = paletteFor(context)
     local palette = active_palette
-    local recipient = selectedRecipient(state)
-    if not recipient then clearAttachmentFiles(state); state.view = "dm"; return dmPane(instance, context) end
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
-    local margin, gap = math.max(px(8), math.floor(width / 70)), math.max(px(5), math.floor(width / 130))
-    local button_height, row_height = math.max(px(32), math.floor(height / 16)), math.max(px(42), math.floor(height / 9))
+    local margin, gap = math.max(px(2), math.floor(width / 90)), math.max(1, px(2))
+    local header_height = math.max(px(19), math.floor(height * .18))
+    local button_height = math.max(px(20), math.floor((height - header_height - 2 * margin - 3 * gap) / 4))
+    local y = header_height + gap
     local elements = {
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = CHAT_BACKGROUND, emptySizedWidget(width, height) },
-        FrameContainer:new{ width = width, height = px(56), padding = margin, bordersize = 0, background = palette.primary, TextWidget:new{ text = recipient.displayName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_primary, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(8) } }, TextWidget:new{ text = _("private chat · server stored"), face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_primary, max_width = width - 2 * margin, overlap_offset = { margin, px(31) } } },
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = header_height, padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, header_height) },
+        TextWidget:new{ text = _("Settings"), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(header_height * .43))), fgcolor = palette.on_secondary, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, math.max(1, math.floor(header_height * .24)) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Public address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setEndpoint(state, context) end, overlap_offset = { margin, y } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("DM address"), primary = true, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin, y + button_height + gap } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset identity") or _("Create identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, y + 2 * (button_height + gap) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Chats"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() state.compact_sidebar = true; state.view = "dm"; refresh(context) end, overlap_offset = { margin, y + 3 * (button_height + gap) } },
     }
-    local fifth = math.floor((width - 2 * margin - 4 * gap) / 5)
-    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Message…"), callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Send"), primary = true, callback = function() promptDirectMessage(state, context) end, overlap_offset = { margin + fifth + gap, px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Attach"), callback = function() chooseImageAttachment(state, context) end, overlap_offset = { margin + 2 * (fifth + gap), px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("Delete"), callback = function() confirmDeleteConversation(state, context) end, overlap_offset = { margin + 3 * (fifth + gap), px(60) } }
-    elements[#elements + 1] = ActionButton:new{ width = fifth, height = button_height, title = _("‹ Chats"), callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + 4 * (fifth + gap), px(60) } }
-    local emoji_height = math.max(px(28), math.floor(button_height * .8))
-    local emoji_width = math.floor((width - 2 * margin - 5 * gap) / 6)
-    elements[#elements + 1] = ActionButton:new{ width = emoji_width, height = emoji_height, title = _("↻"), callback = function()
-        UIManager:scheduleIn(0.1, function()
-            if state.view ~= "dm_conversation" or state.store.selected_recipient_id == "" then return end
-            clearAttachmentFiles(state)
-            fetchConversation(state, context)
-        end)
-    end, overlap_offset = { margin, px(60) + button_height + gap } }
-    for index, emoji in ipairs(DM_EMOJIS) do
-        local emoji_file = DCHAT_SOURCE_DIR .. "assets/dchat_emojis/" .. DM_EMOJI_FILES[index]
-        elements[#elements + 1] = EmojiButton:new{ width = emoji_width, height = emoji_height, image_file = emoji_file, fallback = DM_EMOJI_LABELS[index], callback = function() sendEmojiBitmap(state, context, DM_EMOJI_FILES[index]) end, overlap_offset = { margin + index * (emoji_width + gap), px(60) + button_height + gap } }
-    end
-    local total_pages = math.max(1, math.ceil(#(state.store.dm_messages or {}) / MAX_VISIBLE_PER_PAGE))
-    state.dm_page = math.max(1, math.min(state.dm_page or 1, total_pages))
-    local attachment_page_key = tostring(state.store.selected_recipient_id) .. ":" .. tostring(state.dm_page)
-    if state.attachment_cache_page_key ~= attachment_page_key then
-        clearAttachmentFiles(state)
-        state.attachment_cache_page_key = attachment_page_key
-    end
-    local start_index = (state.dm_page - 1) * MAX_VISIBLE_PER_PAGE + 1
-    local y, end_y = px(60) + button_height + emoji_height + 3 * gap, height - margin - 2 * button_height - 2 * gap
-    for index = start_index, math.min(#(state.store.dm_messages or {}), start_index + MAX_VISIBLE_PER_PAGE - 1) do
-        local message = state.store.dm_messages[index]
-        if y + row_height > end_y then break end
-        local own = message.senderDeviceId == state.store.device_id
-        local bubble_height = message.attachmentData ~= "" and math.max(row_height, math.min(px(176), math.floor(height * .30))) or row_height
-        local bubble = dmBubble(width - 2 * margin, bubble_height, message, own, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end)
-        bubble.overlap_offset = { margin + (own and math.floor((width - 2 * margin) * 0.22) or 0), y }
-        elements[#elements + 1] = bubble
-        y = y + bubble_height + gap
-    end
-    if #state.store.dm_messages == 0 then elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet."), face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = px(70), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, y } } end
-    elements[#elements + 1] = ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Newer"), callback = function() state.dm_page = math.max(1, state.dm_page - 1); refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
-    local half = math.floor((width - 2 * margin - gap) / 2)
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("Older ›") .. " " .. state.dm_page .. "/" .. total_pages, callback = function() state.dm_page = math.min(total_pages, state.dm_page + 1); refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
-    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
+end
+
+local function chatWorkspacePane(instance, context, mode)
+    local state = stateFor(instance)
+    active_palette = paletteFor(context)
+    local width, height = context.dimen.w, context.dimen.h
+    local px = context.px or scale
+    local split_minimum = math.max(px(420), 360)
+    if width < px(300) or height < px(220) then return buildTinyChatPane(state, context, mode) end
+    local compact = width < split_minimum
+    if compact then
+        if mode == "timeline" then return buildPublicPanel(state, context, width, height, true) end
+        if selectedRecipient(state) and not state.compact_sidebar then return buildConversationPanel(state, context, width, height, true) end
+        return buildSidebar(state, context, width, height)
+    end
+
+    local margin, gap = math.max(px(6), math.floor(width / 110)), math.max(px(5), math.floor(width / 160))
+    local sidebar_width = clamp(math.floor(width * .32), px(178), math.floor(width * .42))
+    local content_width = width - 2 * margin - gap - sidebar_width
+    local sidebar = buildSidebar(state, context, sidebar_width, height - 2 * margin)
+    local content = mode == "timeline" and buildPublicPanel(state, context, content_width, height - 2 * margin, false) or buildConversationPanel(state, context, content_width, height - 2 * margin, false)
+    sidebar.overlap_offset = { margin, margin }
+    content.overlap_offset = { margin + sidebar_width + gap, margin }
+    return OverlapGroup:new{
+        dimen = Geom:new{ w = width, h = height },
+        allow_mirroring = false,
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = active_palette.background, emptySizedWidget(width, height) },
+        sidebar,
+        content,
+    }
+end
+
+local function timelinePane(instance, context)
+    return chatWorkspacePane(instance, context, "timeline")
+end
+
+local function settingsPane(instance, context)
+    local state = stateFor(instance)
+    active_palette = paletteFor(context)
+    local palette = active_palette
+    local width, height = context.dimen.w, context.dimen.h
+    local px = context.px or scale
+    if width < px(300) or height < px(220) then return tinySettingsPane(instance, context) end
+    local margin, gap = math.max(px(9), math.floor(width / 65)), math.max(px(6), math.floor(width / 110))
+    local button_height = math.max(px(30), math.floor(height / 13))
+    local endpoint_status = state.store.endpoint ~= "" and state.store.endpoint or _("Public service address missing")
+    local dm_endpoint_status = state.store.dm_endpoint ~= "" and state.store.dm_endpoint or _("DM service address missing")
+    local identity_status = hasIdentity(state.store) and (_("Identity: ") .. state.store.display_name) or _("No local identity")
+    local start_y = px(67)
+    local half = math.floor((width - 2 * margin - gap) / 2)
+    return OverlapGroup:new{
+        dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        FrameContainer:new{ width = width, height = px(54), padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, px(54)) },
+        TextWidget:new{ text = _("DChat settings"), face = Font:getFace("cfont", px(18)), fgcolor = palette.on_secondary, bold = true, overlap_offset = { margin, px(8) } },
+        TextBoxWidget:new{ text = _("Private messages are server-stored and not end-to-end encrypted. Do not share sensitive data."), face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = px(30), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, px(57) } },
+        TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_surface, max_width = width - 2 * margin, overlap_offset = { margin, px(91) } },
+        TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, px(108) } },
+        TextWidget:new{ text = dm_endpoint_status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, px(123) } },
+        ActionButton:new{ width = half, height = button_height, title = _("Public address"), button_background = palette.surface_variant, button_foreground = palette.on_variant, callback = function() setEndpoint(state, context) end, overlap_offset = { margin, start_y + px(72) } },
+        ActionButton:new{ width = half, height = button_height, title = _("DM address"), primary = true, callback = function() setDMEndpoint(state, context) end, overlap_offset = { margin + half + gap, start_y + px(72) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = hasIdentity(state.store) and _("Reset local identity") or _("Create local identity"), callback = function() createOrResetIdentity(state, context) end, overlap_offset = { margin, start_y + px(72) + button_height + gap } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Restore removed contacts"), button_background = palette.tertiary, button_foreground = palette.on_tertiary, callback = function() restoreRemovedRecipients(state, context) end, overlap_offset = { margin, start_y + px(72) + 2 * (button_height + gap) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("Delete my DChat account"), callback = function() confirmDeleteIdentity(state, context) end, overlap_offset = { margin, start_y + px(72) + 3 * (button_height + gap) } },
+        ActionButton:new{ width = width - 2 * margin, height = button_height, title = _("‹ Back to chats"), primary = true, callback = function() state.view = "dm"; state.compact_sidebar = true; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
+        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(17) } },
+    }
+end
+
+local function dmPane(instance, context)
+    return chatWorkspacePane(instance, context, "dm")
+end
+
+local function dmConversationPane(instance, context)
+    return chatWorkspacePane(instance, context, "dm")
 end
 
 local function dmMessagePane(instance, context)
@@ -1252,15 +1666,15 @@ local function dmMessagePane(instance, context)
     local body_y = margin + px(48) + (image and image_height or 0) + (image and gap or 0)
     local elements = {
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-        TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
-        TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_surface, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
     }
     if image then elements[#elements + 1] = image end
-    elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, body_y } }
+    elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, body_y } }
     elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() clearAttachmentFiles(state); state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
     elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
-    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
+    elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
@@ -1275,19 +1689,19 @@ local function messagePane(instance, context)
     if not message then state.view = "timeline"; return timelinePane(instance, context) end
     return OverlapGroup:new{
         dimen = Geom:new{ w = width, h = height }, allow_mirroring = false,
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
-        TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
-        TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Public message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
-        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = height - 2 * margin - px(48) - 2 * button_height - 2 * gap, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, margin + px(47) } },
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
+        TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_surface, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
+        TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Public message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
+        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = height - 2 * margin - px(48) - 2 * button_height - 2 * gap, line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Messages"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Report"), primary = true, callback = function() promptReport(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, height - margin - button_height } },
-        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
+        TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
     }
 end
 
 return {
     id = "dchat",
-    version = "1.7.3",
+    version = "1.8.0",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",

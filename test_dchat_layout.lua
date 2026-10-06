@@ -144,10 +144,18 @@ dm_instance.dchat.selected_dm_id = "10"
 assert(type(dchat.buildPane(dm_instance, dm_context)) == "table", "Android DM details failed to build without image rendering")
 assert(#image_widget_files == 0, "Android DChat instantiated ImageWidget in DM details")
 dm_instance.dchat.view = "dm_conversation"
-local refresh_button
-for _, widget in ipairs(dm_pane) do
-    if type(widget) == "table" and widget.title == "↻" then refresh_button = widget; break end
+local function find_widget(widget, predicate, visited)
+    if type(widget) ~= "table" then return nil end
+    visited = visited or {}
+    if visited[widget] then return nil end
+    visited[widget] = true
+    if predicate(widget) then return widget end
+    for _, child in ipairs(widget) do
+        local found = find_widget(child, predicate, visited)
+        if found then return found end
+    end
 end
+local refresh_button = find_widget(dm_pane, function(widget) return widget.dchat_role == "conversation_refresh" and type(widget.onTapDChatAction) == "function" end)
 assert(refresh_button, "DM conversation refresh button was not built")
 refresh_button:onTapDChatAction()
 assert(scheduled_ui_callback and scheduled_ui_callback.delay == 0.1, "DM refresh was not deferred beyond the touch callback")
@@ -221,6 +229,31 @@ dchat._test.replaceRecipients(own_filter_store, {
     { deviceId = "dch_other", displayName = "Other reader" },
 })
 assert(#own_filter_store.recipients == 1 and own_filter_store.recipients[1].deviceId == "dch_other", "recipient list exposed the local device")
+local hidden_contact_store = dchat._test.cloneStore({
+    hidden_recipient_ids = { "dch_hidden" },
+    recipients = {
+        { deviceId = "dch_hidden", displayName = "Removed contact" },
+        { deviceId = "dch_visible", displayName = "Visible contact" },
+    },
+})
+assert(#hidden_contact_store.recipients == 1 and hidden_contact_store.recipients[1].deviceId == "dch_visible", "locally removed contacts returned after restoring the DChat cache")
+dchat._test.replaceRecipients(hidden_contact_store, {
+    { deviceId = "dch_hidden", displayName = "Removed contact" },
+    { deviceId = "dch_visible", displayName = "Visible contact" },
+})
+assert(#hidden_contact_store.recipients == 1 and hidden_contact_store.recipients[1].deviceId == "dch_visible", "recipient refresh re-added a locally removed contact")
+local compact_instance = { dchat = {
+    store = { recipients = { { deviceId = "dch_compact", displayName = "Compact contact" } }, messages = {}, dm_messages = {}, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "", device_secret = "", display_name = "", hidden_recipient_ids = {} },
+    view = "dm", compact_sidebar = true, status = "", loading = false, attachment_files = {},
+} }
+local compact_context = { dimen = { w = 210, h = 126 }, px = function(value) return value end, requestRebuild = function() end, appdock = {} }
+local compact_pane = dchat.buildPane(compact_instance, compact_context)
+local compact_settings = find_widget(compact_pane, function(widget) return widget.title == "Settings" and type(widget.onTapDChatAction) == "function" end)
+assert(compact_settings, "compact DChat sidebar did not provide settings access")
+compact_settings:onTapDChatAction()
+assert(compact_instance.dchat.view == "settings", "compact DChat settings action did not change the view")
+local compact_settings_pane = dchat.buildPane(compact_instance, compact_context)
+assert(find_widget(compact_settings_pane, function(widget) return widget.title == "Public address" end), "compact DChat settings did not expose public service configuration")
 for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
     local pane = dchat.buildPane({}, { dimen = dimen, px = function(value) return value end, requestRebuild = function() end, appdock = {} })
 assert(type(pane) == "table", "pane did not build")
