@@ -98,6 +98,7 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
+assert(dchat.id == "dchat" and dchat.version == "1.8.5", "DChat metadata must expose the updated version")
 local native_keyboard_opened = false
 local appdock_input_dialog = { onShowKeyboard = function() native_keyboard_opened = true end }
 dchat._test.showInputDialog(appdock_input_dialog)
@@ -155,6 +156,17 @@ local function find_widget(widget, predicate, visited)
         if found then return found end
     end
 end
+local function collect_widgets(widget, predicate, found, visited)
+    if type(widget) ~= "table" then return found or {} end
+    found, visited = found or {}, visited or {}
+    if visited[widget] then return found end
+    visited[widget] = true
+    if predicate(widget) then found[#found + 1] = widget end
+    for _, child in ipairs(widget) do collect_widgets(child, predicate, found, visited) end
+    return found
+end
+local initial_bubble = find_widget(dm_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
+assert(initial_bubble and initial_bubble[1].radius == 12, "DM bubbles must use consistent rounded corners instead of becoming pill-shaped")
 local refresh_button = find_widget(dm_pane, function(widget) return widget.dchat_role == "conversation_refresh" and type(widget.onTapDChatAction) == "function" end)
 assert(refresh_button, "DM conversation refresh button was not built")
 refresh_button:onTapDChatAction()
@@ -211,6 +223,44 @@ pending_rebuild = deferred_ui_callback
 deferred_ui_callback = nil
 pending_rebuild()
 assert(rebuild_count == 1, "deferred DM refresh did not rebuild an active conversation")
+local many_messages = {}
+for index = 1, 10 do
+    many_messages[index] = {
+        id = tostring(100 + index), authorName = index % 2 == 0 and "Me" or "Test",
+        body = index % 2 == 0 and ("msg" .. index .. " ") .. string.rep("long text ", 28) or ("msg" .. index .. " short"),
+        createdAt = "2026-10-04T00:00:00Z", senderDeviceId = index % 2 == 0 and "dch_me" or "dch_testrecipient123",
+        readAt = "", attachmentMime = "", attachmentData = "",
+    }
+end
+local layout_store = dchat._test.cloneStore({
+    recipients = { { deviceId = "dch_testrecipient123", displayName = "Test" } },
+    dm_messages = many_messages, endpoint = "https://example.com", dm_endpoint = "https://example.com",
+    device_id = "dch_me", device_secret = "secret", display_name = "Me", selected_recipient_id = "dch_testrecipient123",
+})
+local layout_instance = { dchat = { store = layout_store, view = "dm_conversation", status = "", loading = false, dm_scroll = 0 } }
+local layout_context = { dimen = { w = 800, h = 600 }, px = function(value) return value end, requestRebuild = function() end, appdock = {} }
+local layout_pane = dchat.buildPane(layout_instance, layout_context)
+local bubbles = collect_widgets(layout_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
+local short_height, long_height
+local newest_visible = false
+for _, bubble in ipairs(bubbles) do
+    assert(bubble[1].radius == 12, "all DM bubbles must use the same corner radius")
+    assert(bubble.overlap_offset[2] + bubble.height <= 600, "a variable-height message bubble exceeded the conversation pane")
+    if bubble.body:find("msg10", 1, true) then newest_visible = true end
+    if bubble.body:find("short", 1, true) then short_height = bubble.height else long_height = bubble.height end
+end
+assert(#bubbles > 1 and newest_visible, "the initial chat viewport must show multiple recent messages including the newest one")
+assert(short_height and long_height and long_height > short_height, "bubble heights must follow message length rather than forcing every message into one tall slot")
+local scroll_surfaces = collect_widgets(layout_pane, function(widget) return type(widget.onSwipeDChatScroll) == "function" end)
+local scroll_step = math.max(1, math.floor(#bubbles / 2))
+for _, scroll_surface in ipairs(scroll_surfaces) do
+    scroll_surface:onSwipeDChatScroll(nil, { direction = "north" })
+    if layout_instance.dchat.dm_scroll == scroll_step then break end
+end
+assert(layout_instance.dchat.dm_scroll == scroll_step, "a northward swipe must advance roughly half a viewport into older messages")
+layout_pane = dchat.buildPane(layout_instance, layout_context)
+bubbles = collect_widgets(layout_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
+for _, bubble in ipairs(bubbles) do assert(not bubble.body:find("msg10", 1, true), "scrolling to older messages must remove the newest message from the visible range") end
 local old_dm_instance = { dchat = { store = { recipients = { { deviceId = "dch_legacyrecipient123", displayName = "Legacy" } }, messages = {}, dm_messages = {}, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "", device_secret = "", display_name = "" }, view = "dm", status = "", loading = true } }
 assert(dchat.buildPane(old_dm_instance, { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }), "legacy DM cache pane crashed")
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })
@@ -258,5 +308,7 @@ for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
     local pane = dchat.buildPane({}, { dimen = dimen, px = function(value) return value end, requestRebuild = function() end, appdock = {} })
 assert(type(pane) == "table", "pane did not build")
 end
+local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
+assert(catalog:find("dchat.lua | 1.8.5 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
 os.execute("rm -rf " .. string.format("%q", test_data_dir))
 print("dchat-pane-smoke-ok")
