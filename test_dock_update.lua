@@ -32,6 +32,9 @@ local Widget = class({})
 local WidgetContainer = Widget:extend({})
 local InputContainer = WidgetContainer:extend({})
 function InputContainer:paintTo() end
+local InputDialog = Widget:extend({})
+function InputDialog:getInputText() return self.input or "" end
+function InputDialog:onShowKeyboard() self.keyboard_shown = true end
 local function simpleModule() return WidgetContainer end
 local log = { shown = nil, rebuilds = 0, requests = {} }
 
@@ -40,7 +43,7 @@ local required = {
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
-    "appdock_wallpaper.lua", "appdock_lockscreen.lua",
+    "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
 }
 local sources = {}
 for _, name in ipairs(required) do
@@ -54,6 +57,10 @@ packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-1.8.1
 packaged_sources["_meta.lua"] = "return { version = '1.8.1' }\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 packaged_sources["assets/logos/appdock.png"] = png_signature
+for _, frame in ipairs({
+    "assets/screensaver/happy_ereader_01.png", "assets/screensaver/happy_ereader_02.png",
+    "assets/screensaver/happy_ereader_03.png", "assets/screensaver/happy_ereader_04.png",
+}) do packaged_sources[frame] = png_signature end
 local tree_mode = "valid"
 
 package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "white", COLOR_BLACK = "black", COLOR_DARK_GRAY = "dark", COLOR_LIGHT_GRAY = "light", COLOR_GRAY_8 = "g8" } end
@@ -67,6 +74,7 @@ package.preload["ui/widget/container/framecontainer"] = simpleModule
 package.preload["ui/widget/horizontalspan"] = simpleModule
 package.preload["ui/widget/confirmbox"] = simpleModule
 package.preload["ui/widget/infomessage"] = simpleModule
+package.preload["ui/widget/inputdialog"] = function() return InputDialog end
 package.preload["ui/widget/container/inputcontainer"] = function() return InputContainer end
 package.preload["ui/widget/overlapgroup"] = simpleModule
 package.preload["ui/widget/textboxwidget"] = simpleModule
@@ -86,6 +94,10 @@ package.preload["json"] = function()
                 tree[#tree + 1] = { type = "blob", path = "README.md", size = 4096 }
                 for _, name in ipairs(required) do tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/" .. name, size = #packaged_sources[name] } end
                 tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/assets/logos/appdock.png", size = #packaged_sources["assets/logos/appdock.png"] }
+                for _, frame in ipairs({
+                    "assets/screensaver/happy_ereader_01.png", "assets/screensaver/happy_ereader_02.png",
+                    "assets/screensaver/happy_ereader_03.png", "assets/screensaver/happy_ereader_04.png",
+                }) do tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/" .. frame, size = #packaged_sources[frame] } end
                 return { tree = tree }
             end
             error("unexpected JSON fixture: " .. tostring(body))
@@ -132,10 +144,13 @@ for _, name in ipairs(required) do
     if name ~= "main.lua" then local old = assert(io.open(active .. "/" .. name, "wb")); old:write("-- old " .. name .. "\nreturn {}\n"); old:close() end
 end
 
-local app = dofile("/home/ubuntu/dapps-store-repo/dock_update.lua")
-assert(app.id == "dock_update" and app.version == "1.1.9" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
-local dock_update_source = assert(io.open("/home/ubuntu/work/DApps/dock_update.lua", "rb")):read("*a")
+local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
+local app = dofile(dock_update_path)
+assert(app.id == "dock_update" and app.version == "1.2.0" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 192 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
+assert(dock_update_source:find("UPDATE_PASSWORD = \"b8-adt73548\"", 1, true), "DockUpdate must require the configured update password")
+assert(dock_update_source:find("input_type = \"password\"", 1, true), "DockUpdate password entry must be masked")
 local context = {
     dimen = { w = 600, h = 760 },
     manager = { appdock = { path = active, version = "1.6.0" } },
@@ -162,7 +177,14 @@ notes.callback()
 assert(log.shown and log.shown.text:find("Safer updates", 1, true) and log.shown.title:find("1.7.0", 1, true), "DockUpdate must display the complete release notes")
 
 install.callback()
-assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit confirmation before downloading or replacing AppDock")
+assert(log.shown and log.shown.getInputText and log.shown.buttons, "DockUpdate must request the update password before installation")
+log.shown.input = "wrong-password"
+log.shown.buttons[1][2].callback()
+assert(log.shown.text and log.shown.text:find("Incorrect update password", 1, true), "DockUpdate must reject an incorrect password")
+install.callback()
+log.shown.input = "b8-adt73548"
+log.shown.buttons[1][2].callback()
+assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit confirmation after password authorization")
 log.shown.ok_callback()
 local new_main = assert(io.open(active .. "/main.lua", "rb")):read("*a")
 assert(new_main:find("packaged main", 1, true), "DockUpdate must atomically replace the active AppDock folder with the current packaged sources")
@@ -172,7 +194,7 @@ local backup = active .. ".appdock-backup-1.6.0"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 19, "DockUpdate must fetch only release metadata, one tree, sixteen source files, and the validated PNG asset")
+assert(#log.requests == 24, "DockUpdate must fetch only release metadata, one tree, seventeen source files, and five validated PNG assets")
 
 -- A malformed tree must be rejected before confirmation and leave the active release intact.
 tree_mode = "bad"
@@ -181,6 +203,8 @@ local guarded_pane = app.buildPane(guarded, context)
 guarded_pane[5].callback()
 guarded_pane = app.buildPane(guarded, context)
 guarded_pane[7].callback()
+log.shown.input = "b8-adt73548"
+log.shown.buttons[1][2].callback()
 assert(log.shown and log.shown.text:find("unsupported file", 1, true), "DockUpdate must reject paths outside the fixed AppDock Lua release layout")
 assert(assert(io.open(active .. "/main.lua", "rb")):read("*a"):find("packaged main", 1, true), "Rejected release metadata must not modify the active AppDock folder")
 
