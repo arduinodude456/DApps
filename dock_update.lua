@@ -20,6 +20,7 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
+local InputDialog = require("ui/widget/inputdialog")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
@@ -43,7 +44,8 @@ local MAX_METADATA_BYTES = 128 * 1024
 -- strict per-file bound for downloaded Lua source.
 local MAX_FILE_BYTES = 192 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
-local MAX_TOTAL_BYTES = 8 * 1024 * 1024
+local MAX_TOTAL_BYTES = 16 * 1024 * 1024
+local UPDATE_PASSWORD = "b8-adt73548"
 -- A current AppDock release contains the core Lua modules plus bundled
 -- logos, lockscreen art and raster surface assets. Keep the count bounded,
 -- but do not reject that explicit package layout as "too many source files".
@@ -54,7 +56,7 @@ local REQUIRED_FILES = {
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
-    "appdock_wallpaper.lua", "appdock_lockscreen.lua",
+    "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -68,6 +70,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true,
     ["appdock_sleepscreen.lua"] = true, ["appdock_surface.lua"] = true,
     ["appdock_theme.lua"] = true, ["appdock_wallpaper.lua"] = true,
+    ["appdock_device_controls.lua"] = true,
 }
 local ALLOWED_ASSET_FILES = {
     ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
@@ -80,6 +83,10 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
     ["assets/logos/music.png"] = true, ["assets/logos/dchat.png"] = true,
     ["assets/logos/dockupdate.png"] = true, ["assets/logos/minecraft.png"] = true,
+    ["assets/screensaver/happy_ereader_01.png"] = true,
+    ["assets/screensaver/happy_ereader_02.png"] = true,
+    ["assets/screensaver/happy_ereader_03.png"] = true,
+    ["assets/screensaver/happy_ereader_04.png"] = true,
 }
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -479,6 +486,30 @@ local function showNotes(instance, context)
     })
 end
 
+local function promptForPassword(on_success)
+    local dialog
+    dialog = InputDialog:new{
+        title = _("AppDock update password"),
+        input = "",
+        input_hint = _("Enter the password to authorize this update"),
+        input_type = "password",
+        buttons = { {
+            { text = _("Cancel"), callback = function() UIManager:close(dialog) end },
+            { text = _("Authorize"), is_enter_default = true, callback = function()
+                local entered = dialog:getInputText() or ""
+                UIManager:close(dialog)
+                if entered ~= UPDATE_PASSWORD then
+                    showMessage(_("Incorrect update password. The AppDock files were not changed."))
+                    return
+                end
+                on_success()
+                end },
+        },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
 local function confirmInstall(instance, context)
     local state = stateFor(instance)
     local target, installed_version_or_err = activePlugin(context)
@@ -494,30 +525,32 @@ local function confirmInstall(instance, context)
         showMessage(relation == 0 and _("AppDock is already up to date.") or _("The installed AppDock version is newer than this release."))
         return
     end
-    local entries, prepare_err = prepareRelease(state)
-    if not entries then showMessage(prepare_err); return end
-    UIManager:show(ConfirmBox:new{
-        text = _("Install the trusted AppDock update now?\n\n")
-            .. _("Installed: ") .. tostring(installed_version_or_err) .. "\n"
-            .. _("Release: ") .. release.version .. "\n"
-            .. _("Validated source files: ") .. #entries
-            .. _("\n\nEach source file will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. Your current AppDock folder will be retained as a rollback backup. Restart KOReader after the update."),
-        ok_text = _("Install update"),
-        ok_callback = function()
-            state.updating = true
-            requestRebuild(context)
-            local backup, update_err = installRelease(release, entries, target, installed_version_or_err)
-            state.updating = false
-            if not backup then
-                state.error = _("AppDock update failed: ") .. tostring(update_err)
-                showMessage(state.error)
-            else
-                state.error = nil
-                showMessage(_("AppDock was updated to ") .. release.version .. _(".\n\nRestart KOReader now to load the new plugin files.\n\nRollback backup:\n") .. backup)
-            end
-            requestRebuild(context)
-        end,
-    })
+    promptForPassword(function()
+        local entries, prepare_err = prepareRelease(state)
+        if not entries then showMessage(prepare_err); return end
+        UIManager:show(ConfirmBox:new{
+            text = _("Install the trusted AppDock update now?\n\n")
+                .. _("Installed: ") .. tostring(installed_version_or_err) .. "\n"
+                .. _("Release: ") .. release.version .. "\n"
+                .. _("Validated source files: ") .. #entries
+                .. _("\n\nEach source file will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. Your current AppDock folder will be retained as a rollback backup. Restart KOReader after the update."),
+            ok_text = _("Install update"),
+            ok_callback = function()
+                state.updating = true
+                requestRebuild(context)
+                local backup, update_err = installRelease(release, entries, target, installed_version_or_err)
+                state.updating = false
+                if not backup then
+                    state.error = _("AppDock update failed: ") .. tostring(update_err)
+                    showMessage(state.error)
+                else
+                    state.error = nil
+                    showMessage(_("AppDock was updated to ") .. release.version .. _(".\n\nRestart KOReader now to load the new plugin files.\n\nRollback backup:\n") .. backup)
+                end
+                requestRebuild(context)
+            end,
+        })
+    end)
 end
 
 local function background(width, height)
@@ -564,7 +597,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.1.9",
+    version = "1.2.0",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
