@@ -46,10 +46,9 @@ local MAX_FILE_BYTES = 192 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 local UPDATE_PASSWORD = "b8-adt73548"
--- A current AppDock release contains the core Lua modules plus bundled
--- logos, lockscreen art and raster surface assets. Keep the count bounded,
--- but do not reject that explicit package layout as "too many source files".
-local MAX_SOURCE_FILES = 48
+-- The AppDock 7.8.13 package has 49 allowlisted files (26 Lua modules and
+-- 23 PNG assets). Keep a hard cap with room for modest future additions.
+local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
@@ -245,7 +244,7 @@ local function sourceTreeFromJSON(body)
                 total = total + size
                 if total > MAX_TOTAL_BYTES then return nil, _("The release source package is too large.") end
                 entries[#entries + 1] = { path = path, source_path = source_path, size = size, kind = kind }
-                if #entries > MAX_SOURCE_FILES then return nil, _("The release contains too many source files.") end
+                if #entries > MAX_RELEASE_FILES then return nil, _("The release contains too many files.") end
             end
         end
     end
@@ -600,7 +599,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.1",
+    version = "1.2.2",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
