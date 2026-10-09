@@ -57,6 +57,7 @@ local REQUIRED_FILES = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
+    "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -71,6 +72,8 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_sleepscreen.lua"] = true, ["appdock_surface.lua"] = true,
     ["appdock_theme.lua"] = true, ["appdock_wallpaper.lua"] = true,
     ["appdock_device_controls.lua"] = true,
+    ["appdock_audio.lua"] = true, ["appdock_bwr.lua"] = true,
+    ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
 }
 local ALLOWED_ASSET_FILES = {
     ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
@@ -597,7 +600,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.0",
+    version = "1.2.1",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

@@ -44,6 +44,7 @@ local required = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
+    "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
 }
 local sources = {}
 for _, name in ipairs(required) do
@@ -146,9 +147,13 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.2.0" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.2.1" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 192 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
+for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua" }) do
+    assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
+        "DockUpdate must explicitly allow the AppDock module " .. module)
+end
 assert(dock_update_source:find("UPDATE_PASSWORD = \"b8-adt73548\"", 1, true), "DockUpdate must require the configured update password")
 assert(dock_update_source:find("input_type = \"password\"", 1, true), "DockUpdate password entry must be masked")
 local context = {
@@ -194,7 +199,7 @@ local backup = active .. ".appdock-backup-1.6.0"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 24, "DockUpdate must fetch only release metadata, one tree, seventeen source files, and five validated PNG assets")
+assert(#log.requests == 28, "DockUpdate must fetch only release metadata, one tree, twenty-one source files, and five validated PNG assets")
 
 -- A malformed tree must be rejected before confirmation and leave the active release intact.
 tree_mode = "bad"
