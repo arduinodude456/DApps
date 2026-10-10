@@ -40,13 +40,13 @@ local API_ROOT = "https://api.github.com/repos/" .. REPOSITORY
 local RAW_ROOT = "https://raw.githubusercontent.com/" .. REPOSITORY
 local RELEASE_URL = API_ROOT .. "/releases/latest"
 local MAX_METADATA_BYTES = 128 * 1024
--- AppDock 7.9.14's appdock_dapps.lua is 205,636 bytes. Keep a strict bounded
+-- AppDock 7.9.15's appdock_dapps.lua is 205,636 bytes. Keep a strict bounded
 -- source limit with headroom for the current DApp host and modest growth.
 local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 local UPDATE_PASSWORD = "b8-adt73548"
--- The AppDock 7.9.14 package has 52 allowlisted files (29 Lua modules and
+-- The AppDock 7.9.15 package has 52 allowlisted files (29 Lua modules and
 -- 23 PNG assets). Keep a hard cap with room for modest future additions.
 local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
@@ -208,7 +208,7 @@ local function sourceTreeFromJSON(body)
 
     -- Some repository layouts contain both the source files at the root and a
     -- packaged appdock.koplugin/ mirror. Prefer the complete packaged mirror:
-    -- AppDock 7.9.14 publishes the current plugin files there, while legacy
+    -- AppDock 7.9.15 publishes the current plugin files there, while legacy
     -- root mirrors can be stale. The destination is still the active plugin root.
     local packaged = {}
     for item_index, item in ipairs(raw.tree) do
@@ -602,7 +602,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.5",
+    version = "1.2.6",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
