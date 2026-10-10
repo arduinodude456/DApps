@@ -45,7 +45,7 @@ local required = {
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
-    "appdock_dialogs.lua", "appdock_draw.lua",
+    "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua",
 }
 local optional_sources = {
     "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
@@ -70,16 +70,16 @@ for _, name in ipairs(required) do
     sources[name] = "-- staged " .. name .. "\nreturn {}\n"
 end
 sources["main.lua"] = "-- new main\nreturn { name = 'appdock' }\n"
-sources["_meta.lua"] = "return { version = '1.7.0' }\n"
+sources["_meta.lua"] = "return { version = '7.9.13' }\n"
 local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
--- Match the actual AppDock 7.9.7 DApp-host module size so the installation
--- regression proves this release is accepted, not merely that the limit grew.
-packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 199793) .. "\n"
-assert(#packaged_sources["appdock_dapps.lua"] == 199796, "The AppDock 7.9.7 host fixture must match its published byte size")
-packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-1.8.1' }\n"
-packaged_sources["_meta.lua"] = "return { version = '1.8.1' }\n"
+-- Match the actual AppDock 7.9.14 DApp-host module size so this exact release
+-- proves acceptance under the bounded per-file size limit.
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 205633) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 205636, "The AppDock 7.9.14 host fixture must match its published byte size")
+packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-7.9.14' }\n"
+packaged_sources["_meta.lua"] = "return { version = '7.9.14' }\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
 local tree_mode = "valid"
@@ -107,7 +107,7 @@ package.preload["gettext"] = function() return function(value) return value end 
 package.preload["json"] = function()
     local decode = setmetatable({ simple = {} }, {
         __call = function(_, body)
-            if body == "release" then return { tag_name = "1.7.0", name = "AppDock 1.7", body = "# AppDock 1.7\n\n- Safer updates\n- Better Files", published_at = "2026-08-25T11:03:25Z", html_url = "https://github.com/arduinodude456/appdock.koplugin/releases/tag/1.7.0", draft = false, prerelease = false } end
+            if body == "release" then return { tag_name = "v7.9.14", name = "AppDock 7.9.14", body = "# AppDock 7.9.14\n\n- Lower YouTube playback memory\n- YouTube Music, faster conversion and Draw improvements", published_at = "2026-10-10T19:18:42Z", html_url = "https://github.com/arduinodude456/appdock.koplugin/releases/tag/v7.9.14", draft = false, prerelease = false } end
             if body == "tree" then
                 if tree_mode == "bad" then return { tree = { { type = "blob", path = "../escape.lua", size = 10 } } } end
                 local tree = {}
@@ -146,7 +146,7 @@ package.preload["ssl.https"] = function()
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
             local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$")
-            local relative = request.url:match("/1%.7%.0/appdock%.koplugin/(.+)$")
+            local relative = request.url:match("/v7%.9%.14/appdock%.koplugin/(.+)$")
             local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
             request.sink(source)
@@ -164,11 +164,11 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.2.4" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.2.5" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
-assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded 51-file AppDock package")
-for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_dialogs.lua", "appdock_draw.lua" }) do
+assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded 52-file AppDock package")
+for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua" }) do
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
         "DockUpdate must explicitly allow the AppDock module " .. module)
 end
@@ -176,7 +176,7 @@ assert(dock_update_source:find("UPDATE_PASSWORD = \"b8-adt73548\"", 1, true), "D
 assert(dock_update_source:find("input_type = \"password\"", 1, true), "DockUpdate password entry must be masked")
 local context = {
     dimen = { w = 600, h = 760 },
-    manager = { appdock = { path = active, version = "1.6.0" } },
+    manager = { appdock = { path = active, version = "7.9.13" } },
     requestRebuild = function() log.rebuilds = log.rebuilds + 1 end,
 }
 local instance = {}
@@ -195,9 +195,9 @@ assert(split_pane and split_pane.dimen and split_pane.dimen.h == 360 and split_p
 
 check.callback()
 pane = app.buildPane(instance, context); check, notes, install = pane[5], pane[6], pane[7]
-assert(install.title == "Install update" and install.subtitle == "AppDock 1.7.0", "DockUpdate must detect a newer stable release")
+assert(install.title == "Install update" and install.subtitle == "AppDock 7.9.14", "DockUpdate must detect a newer stable release")
 notes.callback()
-assert(log.shown and log.shown.text:find("Safer updates", 1, true) and log.shown.title:find("1.7.0", 1, true), "DockUpdate must display the complete release notes")
+assert(log.shown and log.shown.text:find("Lower YouTube playback memory", 1, true) and log.shown.title:find("v7.9.14", 1, true), "DockUpdate must display the complete release notes")
 
 install.callback()
 assert(log.shown and log.shown.getInputText and log.shown.buttons, "DockUpdate must request the update password before installation")
@@ -211,17 +211,19 @@ assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit co
 log.shown.ok_callback()
 local new_main = assert(io.open(active .. "/main.lua", "rb")):read("*a")
 assert(new_main:find("packaged main", 1, true), "DockUpdate must atomically replace the active AppDock folder with the current packaged sources")
-for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua" }) do
+local new_meta = assert(io.open(active .. "/_meta.lua", "rb")):read("*a")
+assert(new_meta:find("7.9.14", 1, true), "DockUpdate must prefer the current packaged release over the stale root mirror")
+for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_ytmusic.lua" }) do
     local installed = assert(io.open(active .. "/" .. module, "rb")):read("*a")
-    assert(installed:find("packaged " .. module, 1, true), "DockUpdate must install required AppDock 7.9.0 module " .. module)
+    assert(installed:find("packaged " .. module, 1, true), "DockUpdate must install required AppDock 7.9.14 module " .. module)
 end
 local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
 assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")
-local backup = active .. ".appdock-backup-1.6.0"
+local backup = active .. ".appdock-backup-7.9.13"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 53, "DockUpdate must fetch only release metadata, one tree, twenty-eight source files, and twenty-three validated PNG assets")
+assert(#log.requests == 54, "DockUpdate must fetch only release metadata, one tree, twenty-nine source files, and twenty-three validated PNG assets")
 
 -- A malformed tree must be rejected before confirmation and leave the active release intact.
 tree_mode = "bad"
