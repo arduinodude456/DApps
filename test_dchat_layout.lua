@@ -98,7 +98,12 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
-assert(dchat.id == "dchat" and dchat.version == "1.8.5", "DChat metadata must expose the updated version")
+assert(dchat.id == "dchat" and dchat.version == "1.8.6", "DChat metadata must expose the updated version")
+local background_instance = { dchat = { store = dchat._test.cloneStore({ last_background_check = 100 }) } }
+local ran_early, early_reason = dchat._test.backgroundCheck(background_instance, { now = 159 })
+assert(ran_early == false and early_reason == "interval", "DChat background checks must wait a full minute")
+local ran_on_minute, minute_reason = dchat._test.backgroundCheck(background_instance, { now = 160 })
+assert(ran_on_minute == false and minute_reason == "wifi", "DChat background check should become eligible after 60 seconds")
 local native_keyboard_opened = false
 local appdock_input_dialog = { onShowKeyboard = function() native_keyboard_opened = true end }
 dchat._test.showInputDialog(appdock_input_dialog)
@@ -309,6 +314,6 @@ for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
 assert(type(pane) == "table", "pane did not build")
 end
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dchat.lua | 1.8.5 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
+assert(catalog:find("dchat.lua | 1.8.6 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
 os.execute("rm -rf " .. string.format("%q", test_data_dir))
 print("dchat-pane-smoke-ok")

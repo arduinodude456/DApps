@@ -3,8 +3,8 @@ DChat for AppDock.
 
 A public, text-only room plus server-side private device-to-device messages.
 DChat makes no end-to-end encryption claim and has no account recovery. Its optional
-background check is disabled by default and only runs through AppDock's
-explicit background-notification permission.
+once-a-minute public-message check is disabled by default and only runs through
+AppDock's explicit background-notification permission.
 The reader keeps a local opaque device secret; the server only receives it in
 an HTTPS request and stores a one-way hash.
 --]]--
@@ -56,7 +56,7 @@ local MAX_VISIBLE_PER_PAGE = 5
 local MAX_RECIPIENTS = 30
 local CONNECT_TIMEOUT = 10
 local REQUEST_MAX_TIME = 25
-local BACKGROUND_CHECK_SECONDS = 15 * 60
+local BACKGROUND_CHECK_SECONDS = 60
 -- Keep the palette on named fallbacks: older KOReader builds expose fewer
 -- colour constants, while newer builds get a more expressive DChat theme.
 local CHAT_GREEN = Blitbuffer.COLOR_DARK_GREEN or Blitbuffer.COLOR_GRAY_8
@@ -1767,7 +1767,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.5",
+    version = "1.8.6",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
