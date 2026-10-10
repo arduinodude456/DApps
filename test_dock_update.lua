@@ -74,6 +74,10 @@ sources["_meta.lua"] = "return { version = '1.7.0' }\n"
 local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
+-- Match the actual AppDock 7.9.7 DApp-host module size so the installation
+-- regression proves this release is accepted, not merely that the limit grew.
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 199793) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 199796, "The AppDock 7.9.7 host fixture must match its published byte size")
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-1.8.1' }\n"
 packaged_sources["_meta.lua"] = "return { version = '1.8.1' }\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
@@ -160,9 +164,9 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.2.3" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.2.4" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
-assert(dock_update_source:find("MAX_FILE_BYTES = 192 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
+assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded 51-file AppDock package")
 for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_dialogs.lua", "appdock_draw.lua" }) do
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),

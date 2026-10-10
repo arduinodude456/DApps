@@ -40,9 +40,9 @@ local API_ROOT = "https://api.github.com/repos/" .. REPOSITORY
 local RAW_ROOT = "https://raw.githubusercontent.com/" .. REPOSITORY
 local RELEASE_URL = API_ROOT .. "/releases/latest"
 local MAX_METADATA_BYTES = 128 * 1024
--- Keep enough headroom for the growing AppDock DApp host while retaining a
--- strict per-file bound for downloaded Lua source.
-local MAX_FILE_BYTES = 192 * 1024
+-- AppDock 7.9.7's appdock_dapps.lua is 199,796 bytes. Keep a strict bounded
+-- source limit with headroom for the current DApp host and modest growth.
+local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 local UPDATE_PASSWORD = "b8-adt73548"
@@ -601,7 +601,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.3",
+    version = "1.2.4",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
