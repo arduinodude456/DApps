@@ -46,7 +46,7 @@ local MAX_FILE_BYTES = 192 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 local UPDATE_PASSWORD = "b8-adt73548"
--- The AppDock 7.8.13 package has 49 allowlisted files (26 Lua modules and
+-- The AppDock 7.9.0 package has 51 allowlisted files (28 Lua modules and
 -- 23 PNG assets). Keep a hard cap with room for modest future additions.
 local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
@@ -57,6 +57,7 @@ local REQUIRED_FILES = {
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
+    "appdock_dialogs.lua", "appdock_draw.lua",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -73,6 +74,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_device_controls.lua"] = true,
     ["appdock_audio.lua"] = true, ["appdock_bwr.lua"] = true,
     ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
+    ["appdock_dialogs.lua"] = true, ["appdock_draw.lua"] = true,
 }
 local ALLOWED_ASSET_FILES = {
     ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
@@ -599,7 +601,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.2",
+    version = "1.2.3",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
