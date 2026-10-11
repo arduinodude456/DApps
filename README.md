@@ -206,3 +206,9 @@ Die Grafikfläche arbeitet mit einem festen virtuellen Koordinatensystem von **1
 | **Mood Journal** | Privater täglicher Stimmungseintrag | Nur lokaler Sitzungszustand, kein Netzwerk |
 
 Alle fünf Apps erfüllen den AppDock-DApp-Vertrag mit `id`, `title` und `buildPane`. Ihre Oberflächen verwenden ausschließlich die vom Host übergebene Pane-Geometrie und sind für E-Ink mit großen, kontrastreichen Touch-Zielen gestaltet.
+
+## AI Chat Agent
+
+[`ai_chat.lua`](ai_chat.lua) ist ein kleiner, ausdrücklich gestarteter Chat-Client für zwei Betriebsarten: **Groq** über die OpenAI-kompatible Groq-API oder ein **lokales OpenAI-kompatibles Modell**, etwa Ollama oder llama.cpp. Provider, Modell, lokaler Endpoint, Systemprompt und Groq-Schlüssel werden lokal in KOReader gespeichert. Die Groq-Verbindung nutzt HTTPS; HTTP wird nur für Loopback- oder private lokale Modelladressen akzeptiert.
+
+Die DApp sendet erst nach dem Antippen von **Send**. Der lokale Verlauf ist auf eine kurze Anzahl von Nachrichten begrenzt und kann mit **Clear chat** gelöscht werden. Für Groq muss der Nutzer einen eigenen API-Schlüssel eintragen; für einen lokalen Endpoint wird kein Cloud-Konto benötigt. Chattexte und Schlüssel werden nicht an AppDock oder den DApps-Katalog übertragen.
