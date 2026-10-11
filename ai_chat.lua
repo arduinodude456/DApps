@@ -157,12 +157,24 @@ local RUNTIME_FILES = {
     { name = "libggml-cpu.so.0", source = "libggml-cpu.so.0.26.0", size = 1002552 },
 }
 local RUNTIME_BASE_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/9fcbc62/runtime/arm64/"
-local RUNTIME_VERSION = "arm64-smollm-1.5.2"
+local RUNTIME_VERSION = "arm64-smollm-1.5.3"
 
 runtimeDirectory = function()
     -- The installed DApp directory may be read-only. Keep the downloaded
     -- runtime in AppDock's writable data directory instead.
     return modelDirectory() .. "/runtime-arm64"
+end
+
+local function hasElfHeader(path)
+    local handle = path and io.open(path, "rb")
+    if not handle then return false end
+    local header = handle:read(4)
+    handle:close()
+    return header == "\127ELF"
+end
+
+local function runtimeFileIsValid(file, path)
+    return type(file) == "table" and fileSize(path) == tonumber(file.size) and hasElfHeader(path)
 end
 
 local function runtimeIsInstalled()
@@ -171,7 +183,7 @@ local function runtimeIsInstalled()
     if marker then marker:close() end
     if version ~= RUNTIME_VERSION then return false end
     for _, file in ipairs(RUNTIME_FILES) do
-        if not fileExists(runtimeDirectory() .. "/" .. file.name) then return false end
+        if not runtimeFileIsValid(file, runtimeDirectory() .. "/" .. file.name) then return false end
     end
     return true
 end
@@ -511,9 +523,30 @@ pumpRuntimeDownload = function(instance, context)
     end
     local worker = download.worker
     if not worker then
+        -- A prior session may have finished receiving a file but been closed
+        -- before the atomic rename below. Promote that verified partial instead
+        -- of asking the server for an impossible range beyond EOF.
+        if runtimeFileIsValid(file, file.partial) then
+            if os.rename(file.partial, file.target) then
+                download.index = download.index + 1
+                download.current_bytes = 0
+                runtimeProgress(download)
+                context.requestRebuild("fast")
+                UIManager:scheduleIn(0, function() pumpRuntimeDownload(instance, context) end)
+                return
+            end
+            state.status = _("Runtime download failed: could not install ") .. file.name
+            state.runtime_download = nil
+            context.requestRebuild("ui")
+            return
+        end
         download.current_bytes = fileSize(file.partial)
         download.worker = coroutine.create(function()
             local partial_size = fileSize(file.partial)
+            if partial_size > file.size then
+                os.remove(file.partial)
+                partial_size = 0
+            end
             local transfer = { partial = file.partial, bytes = partial_size, total = file.size, started_at = os.time(), last_activity = os.time() }
             local ok, err = streamModelUrl(transfer, RUNTIME_BASE_URL .. file.source, 0, partial_size)
             return ok, err
@@ -534,7 +567,7 @@ pumpRuntimeDownload = function(instance, context)
         UIManager:scheduleIn(DOWNLOAD_POLL_INTERVAL, function() pumpRuntimeDownload(instance, context) end)
         return
     end
-    if ok and fileSize(file.partial) >= file.size then
+    if ok and runtimeFileIsValid(file, file.partial) then
         if os.rename(file.partial, file.target) then
             download.index = download.index + 1
             download.worker = nil
@@ -727,10 +760,22 @@ local function localPrompt(settings, history)
     return table.concat(lines, "\n")
 end
 
+local function buildLocalLauncher(runtime, model_path, prompt_path, output_path, log_path, exit_path)
+    local runtime_dir = runtime:match("^(.*)/[^/]+$") or "."
+    return "#!/bin/sh\n"
+        .. "export LD_LIBRARY_PATH=" .. shellQuote(runtime_dir) .. "\n"
+        .. "if [ ! -x " .. shellQuote(runtime) .. " ]; then echo 'runtime executable is missing or not executable' >&2; echo 126 >" .. shellQuote(exit_path) .. "; exit 126; fi\n"
+        .. shellQuote(runtime) .. " --model " .. shellQuote(model_path)
+        .. " --file " .. shellQuote(prompt_path) .. " --predict 256 --threads 2"
+        .. " --no-display-prompt --single-turn --simple-io --temp 0.3"
+        .. " >" .. shellQuote(output_path) .. " 2>" .. shellQuote(log_path) .. "\n"
+        .. "code=$?\necho \"$code\" >" .. shellQuote(exit_path) .. "\nexit \"$code\"\n"
+end
+
 local function startLocalInference(instance, context)
     local state = stateFor(instance)
     local model_path = installedModelPath(state.settings)
-    if not model_path then
+    if not model_path or not hasGgufHeader(model_path) then
         state.status = _("Download a local GGUF model first, then select Local.")
         context.requestRebuild("ui")
         return false
@@ -740,7 +785,7 @@ local function startLocalInference(instance, context)
         return "pending"
     end
     local runtime = localRuntimePath()
-    local work = modelDirectory() .. "/.smollm-chat-" .. tostring(os.time())
+    local work = modelDirectory() .. "/.smollm-chat-" .. tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
     local prompt_path, output_path, log_path, exit_path, script_path = work .. ".prompt", work .. ".out", work .. ".log", work .. ".exit", work .. ".sh"
     local prompt = io.open(prompt_path, "wb")
     if not prompt then
@@ -758,20 +803,20 @@ local function startLocalInference(instance, context)
         context.requestRebuild("ui")
         return false
     end
-    -- Do not use `( ... )` subshell syntax here. Some Kobo firmware shells
-    -- reject it when launched through Lua's io.popen.
-    script:write("#!/bin/sh\n")
-    script:write(shellQuote(runtime) .. " --model " .. shellQuote(model_path)
-        .. " --file " .. shellQuote(prompt_path) .. " --predict 256 --threads 2"
-        .. " --no-display-prompt --single-turn --simple-io --temp 0.3"
-        .. " >" .. shellQuote(output_path) .. " 2>" .. shellQuote(log_path) .. "\n")
-    script:write("code=$?\necho $code >" .. shellQuote(exit_path) .. "\n")
+    -- The launcher is POSIX /bin/sh syntax only. Exporting the sibling
+    -- libraries also prevents loader errors when the runtime is in AppDock's
+    -- writable data folder rather than a system library directory.
+    script:write(buildLocalLauncher(runtime, model_path, prompt_path, output_path, log_path, exit_path))
     script:close()
     os.execute("chmod 755 " .. shellQuote(script_path) .. " >/dev/null 2>&1")
     local launch = "sh " .. shellQuote(script_path) .. " </dev/null >/dev/null 2>&1 & echo $!"
     local pipe = io.popen(launch, "r")
-    local pid = pipe and tonumber(pipe:read("*l")) or nil
-    if pipe then pipe:close() end
+    local read_ok, line = false, nil
+    if pipe then
+        read_ok, line = pcall(function() return pipe:read("*l") end)
+        pcall(function() pipe:close() end)
+    end
+    local pid = read_ok and tonumber(line) or nil
     if not pid then
         os.remove(prompt_path); os.remove(output_path); os.remove(log_path); os.remove(exit_path); os.remove(script_path)
         state.status = _("Could not start the bundled SmolLM runtime.")
@@ -795,8 +840,14 @@ pumpLocalInference = function(instance, context)
         UIManager:scheduleIn(.5, function() pumpLocalInference(instance, context) end)
         return
     end
-    local code = tonumber(exit:read("*a") or "1") or 1
+    local exit_marker = exit:read("*a") or ""
+    local code = tonumber(exit_marker:match("^%s*([%-]?%d+)%s*\n$"))
     exit:close()
+    if code == nil then
+        context.requestRebuild("fast")
+        UIManager:scheduleIn(.5, function() pumpLocalInference(instance, context) end)
+        return
+    end
     local output_handle = io.open(inference.output, "rb")
     local answer = output_handle and trim(output_handle:read("*a") or "") or ""
     if output_handle then output_handle:close() end
@@ -998,6 +1049,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.5.2", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
-    _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
+return { id = "ai_chat", version = "1.5.3", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+    _test = { modelCatalog = MODEL_CATALOG, runtimeFiles = RUNTIME_FILES, runtimeVersion = RUNTIME_VERSION, runtimeIsInstalled = runtimeIsInstalled, runtimeFileIsValid = runtimeFileIsValid, buildLocalLauncher = buildLocalLauncher, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }
