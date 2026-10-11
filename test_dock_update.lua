@@ -1,4 +1,6 @@
 local root = "/tmp/dock_update_test_data"
+unpack = unpack or table.unpack
+loadstring = loadstring or load
 os.execute("rm -rf " .. root)
 os.execute("mkdir -p " .. root .. "/plugins/appdock.koplugin")
 
@@ -46,6 +48,7 @@ local required = {
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
+    "appdock_suggestions.lua", "appdock_suggestions.db",
 }
 local optional_sources = {
     "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
@@ -71,6 +74,7 @@ for _, name in ipairs(required) do
 end
 sources["main.lua"] = "-- new main\nreturn { name = 'appdock' }\n"
 sources["_meta.lua"] = "return { version = '7.9.14' }\n"
+sources["appdock_suggestions.db"] = "# AppDock offline bilingual suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
@@ -80,6 +84,7 @@ packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 205633) .. "\n"
 assert(#packaged_sources["appdock_dapps.lua"] == 205636, "The AppDock 7.9.21 host fixture must match its published byte size")
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-7.9.21' }\n"
 packaged_sources["_meta.lua"] = "return { version = '7.9.21' }\n"
+packaged_sources["appdock_suggestions.db"] = "# AppDock offline bilingual suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
 local feed = [[<feed><entry>
@@ -131,7 +136,7 @@ package.preload["ssl.https"] = function()
         if request.url:find("releases.atom", 1, true) then request.sink(feed)
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
-            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$")
+            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.db)$")
             local relative = request.url:match("/v7%.9%.21/appdock%.koplugin/(.+)$")
             local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
@@ -150,10 +155,12 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.2.9" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.3.0" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
-assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded 52-file AppDock package")
+assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded AppDock package")
+assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
+assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage data files without Lua execution")
     for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua" }) do
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
         "DockUpdate must explicitly allow the AppDock module " .. module)
@@ -205,6 +212,8 @@ for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_yt
 end
 local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
 assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")
+local new_database = assert(io.open(active .. "/appdock_suggestions.db", "rb")):read("*a")
+assert(new_database:find("# AppDock offline bilingual suggestion database", 1, true) and new_database:find("de\t7.4", 1, true) and new_database:find("en\t7.4", 1, true), "DockUpdate must atomically install the suggestion database")
 local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")

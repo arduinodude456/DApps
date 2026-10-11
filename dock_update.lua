@@ -45,6 +45,7 @@ local MAX_METADATA_BYTES = 128 * 1024
 -- source limit with headroom for the current DApp host and modest growth.
 local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
+local MAX_DATA_BYTES = 512 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 local UPDATE_PASSWORD = "b8-adt73548"
 -- The AppDock 7.9.21 package has 53 allowlisted files (30 Lua modules and
@@ -59,6 +60,7 @@ local REQUIRED_FILES = {
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
+    "appdock_suggestions.lua", "appdock_suggestions.db",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -77,6 +79,10 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
     ["appdock_dialogs.lua"] = true, ["appdock_draw.lua"] = true,
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
+    ["appdock_suggestions.lua"] = true,
+}
+local ALLOWED_DATA_FILES = {
+    ["appdock_suggestions.db"] = true,
 }
 local ALLOWED_ASSET_FILES = {
     ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
@@ -207,9 +213,15 @@ local function safeAssetPath(path)
     return ALLOWED_ASSET_FILES[path] == true
 end
 
+local function safeDataPath(path)
+    if type(path) ~= "string" or #path == 0 or #path > 160 then return false end
+    return ALLOWED_DATA_FILES[path] == true
+end
+
 local function releasePathKind(path)
     if safeSourcePath(path) then return "source" end
     if safeAssetPath(path) then return "asset" end
+    if safeDataPath(path) then return "data" end
     return nil
 end
 
@@ -220,6 +232,9 @@ local function releaseEntries()
     end
     for path in pairs(ALLOWED_ASSET_FILES) do
         entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "asset" }
+    end
+    for path in pairs(ALLOWED_DATA_FILES) do
+        entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "data" }
     end
     if #entries > MAX_RELEASE_FILES then return nil, _("The fixed AppDock file list is too large.") end
     table.sort(entries, function(left, right) return left.path < right.path end)
@@ -287,13 +302,21 @@ local function stageRelease(release, entries, target)
 
     for entry_index, entry in ipairs(entries) do
         local is_asset = entry.kind == "asset"
-        local max_size = is_asset and MAX_ASSET_BYTES or MAX_FILE_BYTES
+        local is_data = entry.kind == "data"
+        local max_size = is_asset and MAX_ASSET_BYTES or (is_data and MAX_DATA_BYTES or MAX_FILE_BYTES)
         local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
         if entry.size and #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
         if is_asset then
             if not isPng(source) then removeTree(stage); return nil, _("Downloaded PNG asset has an invalid signature: ") .. entry.path end
+        elseif is_data then
+            if not source:match("^# AppDock offline bilingual suggestion database")
+                or not source:match("\n# language<TAB>frequency<TAB>word")
+                or not source:match("\nde\t[%d%.]+\t[^\r\n]+")
+                or not source:match("\nen\t[%d%.]+\t[^\r\n]+") then
+                removeTree(stage); return nil, _("Downloaded suggestion database has an invalid format: ") .. entry.path
+            end
         else
             local chunk, syntax_err = loadstring(source, "@dockupdate/" .. entry.path)
             if not chunk then removeTree(stage); return nil, _("Downloaded source has invalid Lua syntax: ") .. entry.path .. "\n" .. tostring(syntax_err) end
@@ -313,6 +336,14 @@ local function stageRelease(release, entries, target)
             if not content or (entry.size and #content ~= entry.size) or not isPng(content) then
                 removeTree(stage)
                 return nil, _("Staged PNG asset validation failed: ") .. entry.path
+            end
+        elseif entry.kind == "data" then
+            local file = io.open(stage .. "/" .. entry.path, "rb")
+            local content = file and file:read("*a") or nil
+            if file then file:close() end
+            if not content or not content:match("^# AppDock offline bilingual suggestion database") then
+                removeTree(stage)
+                return nil, _("Staged suggestion database validation failed: ") .. entry.path
             end
         else
             local chunk, syntax_err = loadfile(stage .. "/" .. entry.path)
@@ -567,7 +598,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.9",
+    version = "1.3.0",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
