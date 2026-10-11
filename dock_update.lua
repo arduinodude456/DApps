@@ -70,7 +70,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_logo.lua"] = true, ["appdock_manager.lua"] = true,
     ["appdock_motion.lua"] = true, ["appdock_notifications.lua"] = true,
     ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true,
-    ["appdock_sleepscreen.lua"] = true, ["appdock_surface.lua"] = true,
+    ["appdock_sleepscreen.lua"] = true,
     ["appdock_theme.lua"] = true, ["appdock_wallpaper.lua"] = true,
     ["appdock_device_controls.lua"] = true,
     ["appdock_audio.lua"] = true, ["appdock_bwr.lua"] = true,
@@ -567,7 +567,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.8",
+    version = "1.2.9",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
