@@ -657,16 +657,13 @@ local function fetchMessages(state, context)
     refresh(context)
 end
 
-local function backgroundCheck(instance, context)
+local function applyBackgroundResult(instance, context, result)
     local state = stateFor(instance)
-    local now = math.max(0, math.floor(tonumber(context and context.now) or os.time()))
-    if now - state.store.last_background_check < BACKGROUND_CHECK_SECONDS then return false, "interval" end
-    if not wifiIsOn() then return false, "wifi" end
-    state.store.last_background_check = now
-    local response = httpJson(state.store, "GET", "/messages?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, false)
+    if type(result) ~= "table" or result.kind ~= "dchat_messages" then return false end
+    local response = result.response
     if type(response) ~= "table" or type(response.messages) ~= "table" then
         saveStore(state.store)
-        return false, "network"
+        return false
     end
     local previous_seen = state.store.last_seen_message_id
     replaceMessages(state.store, response.messages)
@@ -675,7 +672,7 @@ local function backgroundCheck(instance, context)
         state.store.last_seen_message_id = newest_id
         state.store.background_baseline_ready = true
         saveStore(state.store)
-        return true, "baseline"
+        return true
     end
     local new_count = previous_seen == "" and #state.store.messages or countNewMessages(state.store.messages, previous_seen)
     state.store.last_seen_message_id = newest_id ~= "" and newest_id or previous_seen
@@ -687,9 +684,22 @@ local function backgroundCheck(instance, context)
             source = "DChat",
             priority = "normal",
         })
-        return true, "notified"
+        return true
     end
-    return true, "current"
+    return true
+end
+
+local function backgroundCheck(instance, context)
+    local state = stateFor(instance)
+    local now = math.max(0, math.floor(tonumber(context and context.now) or os.time()))
+    if now - state.store.last_background_check < BACKGROUND_CHECK_SECONDS then return { kind = "dchat_messages", skipped = "interval" } end
+    if not wifiIsOn() then return { kind = "dchat_messages", skipped = "wifi" } end
+    state.store.last_background_check = now
+    local response, code, err = httpJson(state.store, "GET", "/messages?limit=" .. tostring(MAX_CACHE_MESSAGES), nil, false)
+    if context and context.subprocess then
+        return { kind = "dchat_messages", response = response, code = code, error = err }
+    end
+    return applyBackgroundResult(instance, context, { kind = "dchat_messages", response = response, code = code, error = err })
 end
 
 local function sendMessage(state, context, text)
@@ -1772,7 +1782,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.7",
+    version = "1.8.8",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -1787,5 +1797,6 @@ return {
         return timelinePane(instance, context)
     end,
     backgroundTick = backgroundCheck,
+    backgroundComplete = applyBackgroundResult,
     _test = { showInputDialog = showInputDialog, validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
 }
