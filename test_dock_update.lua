@@ -49,7 +49,7 @@ local required = {
 }
 local optional_sources = {
     "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
-    "appdock_order.lua", "appdock_sleepscreen.lua",
+    "appdock_order.lua", "appdock_sleepscreen.lua", "appdock_surface.lua",
 }
 local png_assets = {
     "assets/lockscreen/appdock_lockscreen_hero.png",
@@ -82,7 +82,13 @@ packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-7.9.2
 packaged_sources["_meta.lua"] = "return { version = '7.9.21' }\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
-local tree_mode = "valid"
+local feed = [[<feed><entry>
+<id>tag:github.com,2008:Repository/1345844414/v7.9.21</id>
+<updated>2026-10-11T07:53:22Z</updated>
+<link rel="alternate" type="text/html" href="https://github.com/arduinodude456/appdock.koplugin/releases/tag/v7.9.21"/>
+<title>AppDock 7.9.21</title>
+<content type="html">&lt;h1&gt;AppDock 7.9.21&lt;/h1&gt;&lt;p&gt;Kobo stylus pressure, eraser and marker support in Draw&lt;/p&gt;</content>
+</entry></feed>]]
 
 package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "white", COLOR_BLACK = "black", COLOR_DARK_GRAY = "dark", COLOR_LIGHT_GRAY = "light", COLOR_GRAY_8 = "g8" } end
 package.preload["datastorage"] = function() return { getDataDir = function() return root end } end
@@ -104,25 +110,6 @@ package.preload["ui/widget/textwidget"] = simpleModule
 package.preload["ui/widget/container/widgetcontainer"] = function() return WidgetContainer end
 package.preload["ui/uimanager"] = function() return { show = function(_, item) log.shown = item end, close = function() end } end
 package.preload["gettext"] = function() return function(value) return value end end
-package.preload["json"] = function()
-    local decode = setmetatable({ simple = {} }, {
-        __call = function(_, body)
-            if body == "release" then return { tag_name = "v7.9.21", name = "AppDock 7.9.21", body = "# AppDock 7.9.21\n\n- Kobo stylus pressure, eraser and marker support in Draw", published_at = "2026-10-11T07:53:22Z", html_url = "https://github.com/arduinodude456/appdock.koplugin/releases/tag/v7.9.21", draft = false, prerelease = false } end
-            if body == "tree" then
-                if tree_mode == "bad" then return { tree = { { type = "blob", path = "../escape.lua", size = 10 } } } end
-                local tree = {}
-                for _, name in ipairs(required) do tree[#tree + 1] = { type = "blob", path = name, size = #sources[name] } end
-                tree[#tree + 1] = { type = "blob", path = "README.md", size = 4096 }
-                for _, name in ipairs(required) do tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/" .. name, size = #packaged_sources[name] } end
-                for _, name in ipairs(optional_sources) do tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/" .. name, size = #packaged_sources[name] } end
-                for _, asset in ipairs(png_assets) do tree[#tree + 1] = { type = "blob", path = "appdock.koplugin/" .. asset, size = #packaged_sources[asset] } end
-                return { tree = tree }
-            end
-            error("unexpected JSON fixture: " .. tostring(body))
-        end,
-    })
-    return { decode = decode }
-end
 package.preload["libs/libkoreader-lfs"] = function()
     return {
         attributes = function(path, attribute)
@@ -141,8 +128,7 @@ package.preload["socketutil"] = function() return { USER_AGENT = "DockUpdateTest
 package.preload["ssl.https"] = function()
     return { request = function(request)
         log.requests[#log.requests + 1] = request.url
-        if request.url:find("releases/latest", 1, true) then request.sink("release")
-        elseif request.url:find("/git/trees/", 1, true) then request.sink("tree")
+        if request.url:find("releases.atom", 1, true) then request.sink(feed)
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
             local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$")
@@ -164,7 +150,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-    assert(app.id == "dock_update" and app.version == "1.2.7" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.2.8" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded 52-file AppDock package")
@@ -223,19 +209,11 @@ local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-    assert(#log.requests == 55, "DockUpdate must fetch only release metadata, one tree, thirty source files, and twenty-three validated PNG assets")
-
--- A malformed tree must be rejected before confirmation and leave the active release intact.
-tree_mode = "bad"
-local guarded = {}
-local guarded_pane = app.buildPane(guarded, context)
-guarded_pane[5].callback()
-guarded_pane = app.buildPane(guarded, context)
-guarded_pane[7].callback()
-log.shown.input = "b8-adt73548"
-log.shown.buttons[1][2].callback()
-assert(log.shown and log.shown.text:find("unsupported file", 1, true), "DockUpdate must reject paths outside the fixed AppDock Lua release layout")
-assert(assert(io.open(active .. "/main.lua", "rb")):read("*a"):find("packaged main", 1, true), "Rejected release metadata must not modify the active AppDock folder")
+assert(#log.requests == 1 + #required + #optional_sources + #png_assets,
+    "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
+for _, url in ipairs(log.requests) do
+    assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
+end
 
 os.execute("rm -rf " .. root)
 print("DockUpdate test: OK")

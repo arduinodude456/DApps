@@ -28,7 +28,6 @@ local TextViewer = require("ui/widget/textviewer")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local JSON = require("json")
 local _ = require("gettext")
 
 local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
@@ -36,9 +35,11 @@ if not ok_lfs then lfs = require("lfs") end
 
 local Screen = Device.screen
 local REPOSITORY = "arduinodude456/appdock.koplugin"
-local API_ROOT = "https://api.github.com/repos/" .. REPOSITORY
 local RAW_ROOT = "https://raw.githubusercontent.com/" .. REPOSITORY
-local RELEASE_URL = API_ROOT .. "/releases/latest"
+-- GitHub's unauthenticated REST API is limited per public IP.  Use the
+-- public Atom feed for release metadata and raw.githubusercontent.com for the
+-- fixed, local allowlist instead; neither endpoint consumes the REST quota.
+local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
 -- AppDock 7.9.21's appdock_dapps.lua is 205,636 bytes. Keep a strict bounded
 -- source limit with headroom for the current DApp host and modest growth.
@@ -158,26 +159,38 @@ local function fetch(url, limit, accept)
     return table.concat(chunks)
 end
 
-local function decodeJSON(body)
-    local ok, decoded = pcall(JSON.decode, body, JSON.decode.simple)
-    if not ok or type(decoded) ~= "table" then return nil, _("The update metadata is not valid JSON.") end
-    return decoded
+local function xmlUnescape(value)
+    return tostring(value or ""):gsub("&lt;", "<"):gsub("&gt;", ">")
+        :gsub("&quot;", '"'):gsub("&#39;", "'"):gsub("&amp;", "&")
 end
 
-local function releaseFromJSON(body)
-    local raw, err = decodeJSON(body)
-    if not raw then return nil, err end
-    if raw.draft or raw.prerelease then return nil, _("The latest AppDock release is not a stable release.") end
-    local tag = trim(raw.tag_name)
-    if not normalizedVersion(tag) then return nil, _("The release tag has an unsupported version format.") end
-    local notes = type(raw.body) == "string" and raw.body:sub(1, MAX_RELEASE_NOTES) or ""
+local function atomText(entry, tag)
+    local value = entry:match("<" .. tag .. "[^>]*>(.-)</" .. tag .. ">")
+    return trim(xmlUnescape(value))
+end
+
+local function releaseFromAtom(body)
+    if type(body) ~= "string" then return nil, _("The release feed is invalid.") end
+    local entry = body:match("<entry[^>]*>(.-)</entry>")
+    if not entry then return nil, _("The release feed contains no releases.") end
+    local tag, selected
+    -- The feed is newest-first. Skip prerelease-style tags and select the
+    -- first strict numeric version, which is our stable-release equivalent.
+    for candidate in entry:gmatch("<id[^>]*>.-/(v?%d[%d%.]*)</id>") do
+        if normalizedVersion(candidate) then tag = candidate; break end
+    end
+    if not tag then return nil, _("The latest AppDock release is not a stable release.") end
+    local title = atomText(entry, "title")
+    local content = atomText(entry, "content")
+    content = content:gsub("<br%s*/?>", "\n"):gsub("</p>", "\n\n"):gsub("<li>", "- "):gsub("</li>", "\n")
+    content = content:gsub("<[^>]+>", "")
     return {
         tag = tag,
         version = tag:gsub("^v", ""),
-        name = trim(raw.name) ~= "" and trim(raw.name) or ("AppDock " .. tag),
-        notes = notes ~= "" and notes or _("This release has no notes."),
-        published = trim(raw.published_at),
-        url = trim(raw.html_url),
+        name = title ~= "" and title or ("AppDock " .. tag),
+        notes = trim(content) ~= "" and trim(content):sub(1, MAX_RELEASE_NOTES) or _("This release has no notes."),
+        published = atomText(entry, "updated"),
+        url = (entry:match('<link[^>]-rel="alternate"[^>]-href="([^"]+)"') or ""),
     }
 end
 
@@ -200,60 +213,15 @@ local function releasePathKind(path)
     return nil
 end
 
-local function sourceTreeFromJSON(body)
-    local raw, err = decodeJSON(body)
-    if not raw then return nil, err end
-    if raw.truncated then return nil, _("The release file list is incomplete.") end
-    if type(raw.tree) ~= "table" then return nil, _("The release contains no readable file list.") end
-
-    -- Some repository layouts contain both the source files at the root and a
-    -- packaged appdock.koplugin/ mirror. Prefer the complete packaged mirror:
-    -- AppDock 7.9.21 publishes the current plugin files there, while legacy
-    -- root mirrors can be stale. The destination is still the active plugin root.
-    local packaged = {}
-    for item_index, item in ipairs(raw.tree) do
-        if type(item) == "table" and item.type == "blob" and type(item.path) == "string" then
-            local inner = item.path:match("^appdock%.koplugin/(.+)$")
-            if inner and releasePathKind(inner) then packaged[inner] = true end
-        end
+local function releaseEntries()
+    local entries = {}
+    for path in pairs(ALLOWED_SOURCE_FILES) do
+        entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "source" }
     end
-    local use_packaged = true
-    for required_index, required in ipairs(REQUIRED_FILES) do
-        if not packaged[required] then use_packaged = false; break end
+    for path in pairs(ALLOWED_ASSET_FILES) do
+        entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "asset" }
     end
-
-    local entries, seen, total = {}, {}, 0
-    for item_index, item in ipairs(raw.tree) do
-        if type(item) == "table" and item.type == "blob" then
-            local original_path, path, size = item.path, item.path, tonumber(item.size)
-            local source_path = original_path
-            if use_packaged then
-                path = type(original_path) == "string" and original_path:match("^appdock%.koplugin/(.+)$") or nil
-                if not path then
-                    -- Root files are an older repository mirror when a complete
-                    -- package directory exists; they must not override it.
-                    path = nil
-                else
-                    source_path = original_path
-                end
-            end
-            if path and not path:match("%.md$") then
-                local kind = releasePathKind(path)
-                if not kind then return nil, _("The release contains an unsupported file: ") .. tostring(original_path) end
-                local max_size = kind == "asset" and MAX_ASSET_BYTES or MAX_FILE_BYTES
-                if not size or size < 1 or size > max_size then return nil, kind == "asset" and _("A release PNG asset has an invalid size.") or _("A release source file has an invalid size.") end
-                if seen[path] then return nil, _("The release contains duplicate source files.") end
-                seen[path] = true
-                total = total + size
-                if total > MAX_TOTAL_BYTES then return nil, _("The release source package is too large.") end
-                entries[#entries + 1] = { path = path, source_path = source_path, size = size, kind = kind }
-                if #entries > MAX_RELEASE_FILES then return nil, _("The release contains too many files.") end
-            end
-        end
-    end
-    for required_index, required in ipairs(REQUIRED_FILES) do
-        if not seen[required] then return nil, _("The release lacks a required AppDock module: ") .. required end
-    end
+    if #entries > MAX_RELEASE_FILES then return nil, _("The fixed AppDock file list is too large.") end
     table.sort(entries, function(left, right) return left.path < right.path end)
     return entries
 end
@@ -323,7 +291,7 @@ local function stageRelease(release, entries, target)
         local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
-        if #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
+        if entry.size and #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
         if is_asset then
             if not isPng(source) then removeTree(stage); return nil, _("Downloaded PNG asset has an invalid signature: ") .. entry.path end
         else
@@ -342,7 +310,7 @@ local function stageRelease(release, entries, target)
             local file = io.open(stage .. "/" .. entry.path, "rb")
             local content = file and file:read("*a") or nil
             if file then file:close() end
-            if not content or #content ~= entry.size or not isPng(content) then
+            if not content or (entry.size and #content ~= entry.size) or not isPng(content) then
                 removeTree(stage)
                 return nil, _("Staged PNG asset validation failed: ") .. entry.path
             end
@@ -427,22 +395,22 @@ end
 local function checkForRelease(instance, context)
     local state = stateFor(instance)
     state.error, state.files = nil, nil
-    local body, fetch_err = fetch(RELEASE_URL, MAX_METADATA_BYTES, "application/vnd.github+json")
+    local body, fetch_err = fetch(RELEASE_URL, MAX_METADATA_BYTES, "application/atom+xml,text/xml;q=0.9")
     if not body then
         state.release, state.error, state.checked = nil, _("Could not check AppDock releases: ") .. tostring(fetch_err), true
         requestRebuild(context)
         return
     end
-    local release, parse_err = releaseFromJSON(body)
+    local release, parse_err = releaseFromAtom(body)
     state.release, state.error, state.checked = release, parse_err, true
     requestRebuild(context)
 end
 
 local function backgroundTick(instance, context)
     local state = stateFor(instance)
-    local body = fetch(RELEASE_URL, MAX_METADATA_BYTES, "application/vnd.github+json")
+    local body = fetch(RELEASE_URL, MAX_METADATA_BYTES, "application/atom+xml,text/xml;q=0.9")
     if not body then return false end
-    local release = releaseFromJSON(body)
+    local release = releaseFromAtom(body)
     if not release then return false end
     state.background_checked_at = os.time()
     local installed = context and context.appdock and context.appdock.version
@@ -468,10 +436,7 @@ end
 local function prepareRelease(state)
     if not state.release then return nil, _("Check for an AppDock release first.") end
     if state.files then return state.files end
-    local url = API_ROOT .. "/git/trees/" .. state.release.tag .. "?recursive=1"
-    local body, fetch_err = fetch(url, MAX_METADATA_BYTES, "application/vnd.github+json")
-    if not body then return nil, _("Could not read the release file list: ") .. tostring(fetch_err) end
-    local entries, tree_err = sourceTreeFromJSON(body)
+    local entries, tree_err = releaseEntries()
     if not entries then return nil, tree_err end
     state.files = entries
     return entries
@@ -602,7 +567,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.2.7",
+    version = "1.2.8",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
