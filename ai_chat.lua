@@ -405,7 +405,7 @@ local function finishModelDownload(instance, context, succeeded, err)
         local renamed, rename_err = os.rename(download.partial, download.target)
         if renamed then
             if state.settings.provider == "local" then state.settings.model = download.model.filename end
-            state.status = _("Downloaded: ") .. download.model.title
+            state.status = _("Downloaded: ") .. download.model.title .. _(". Start a local llama.cpp/Ollama server to use it.")
             saveSettings(state.settings)
         else
             state.status = _("Model download failed: could not save the file (") .. short(rename_err or "rename failed", 80) .. ")"
@@ -481,7 +481,16 @@ local function validEndpoint(endpoint)
 end
 
 local function httpJson(endpoint, payload, headers)
-    local socket, socketutil, ltn12, https = require("socket"), require("socketutil"), require("ltn12"), require("ssl.https")
+    local socketutil, ltn12 = require("socketutil"), require("ltn12")
+    local parsed = require("socket.url").parse(endpoint)
+    local http
+    if parsed and parsed.scheme == "https" then
+        http = require("ssl.https")
+    elseif parsed and parsed.scheme == "http" then
+        http = require("socket.http")
+    else
+        return nil, _("The model endpoint must start with http:// or https://.")
+    end
     local JSON = require("json")
     local encoded_ok, body = pcall(JSON.encode, payload)
     if not encoded_ok or type(body) ~= "string" or #body > MAX_PROMPT * 20 then return nil, _("The chat request is too large.") end
@@ -501,12 +510,15 @@ local function httpJson(endpoint, payload, headers)
     headers["accept"] = "application/json"
     headers["user-agent"] = "AppDock-AIChat/1.0"
     socketutil:set_timeout(CONNECT_TIMEOUT, REQUEST_TIMEOUT)
-    local ok, code, response_headers, status = pcall(function()
-        return socket.skip(1, https.request{ url = endpoint, method = "POST", source = ltn12.source.string(body), sink = sink, headers = headers })
+    local ok, result, code, response_headers, status = pcall(function()
+        return http.request{ url = endpoint, method = "POST", source = ltn12.source.string(body), sink = sink, headers = headers }
     end)
     socketutil:reset_timeout()
+    local raw_code = code
     code = tonumber(code)
-    if not ok or not response_headers then return nil, status or _("The model could not be reached.") end
+    if not ok then return nil, _("The model request failed: ") .. short(result, 220) end
+    if not result then return nil, _("The model could not be reached: ") .. short(raw_code or status or "connection failed", 220) end
+    if not code or not response_headers then return nil, _("The model returned no HTTP status.") end
     local raw = table.concat(response)
     if code < 200 or code > 299 then return nil, _("The model returned HTTP ") .. tostring(code) .. ": " .. short(raw, 220) end
     local decoded_ok, decoded = pcall(JSON.decode, raw, JSON.decode.simple)
@@ -699,7 +711,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return {
-    id = "ai_chat", version = "1.2.0", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane,
-    _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload },
+return { id = "ai_chat", version = "1.3.0", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane,
+    _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson },
 }

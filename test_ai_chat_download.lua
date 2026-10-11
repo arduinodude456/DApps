@@ -119,7 +119,26 @@ install("socket.url", {
 })
 
 local app = assert(loadfile("ai_chat.lua"))()
-assert(app.id == "ai_chat" and app.version == "1.2.0", "AI Chat must publish version 1.2.0")
+assert(app.id == "ai_chat" and app.version == "1.3.0", "AI Chat must publish version 1.3.0")
+
+-- Local endpoints use plain LuaSocket HTTP, and connection errors must retain
+-- the actual reason instead of collapsing into a generic message.
+package.preload["socketutil"] = function()
+    return { set_timeout = function() end, reset_timeout = function() end }
+end
+package.preload["ltn12"] = function()
+    return { source = { string = function() return function() return nil end end } }
+end
+package.preload["json"] = function()
+    local json = { decode = { simple = true } }
+    json.encode = function() return "{}" end
+    return json
+end
+package.preload["socket.http"] = function()
+    return { request = function() return nil, "connection refused on 127.0.0.1:11434" end }
+end
+local _, local_error = app._test.httpJson("http://127.0.0.1:11434/v1/chat/completions", {}, {})
+assert(local_error:find("connection refused", 1, true), "local connection error was hidden")
 
 local function run_scheduled()
     local limit = 50
