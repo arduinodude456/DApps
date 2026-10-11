@@ -70,6 +70,11 @@ local CHAT_BACKGROUND = Blitbuffer.COLOR_LIGHT_GRAY
 local active_palette
 
 local function paletteFor(context)
+    -- AppDock passes the resolved palette in the pane context. Prefer it over
+    -- a local fallback so Store designs cannot turn DChat surfaces white.
+    if context and type(context.palette) == "table" then
+        return context.palette
+    end
     local appdock = context and context.manager and context.manager.appdock
     if ok_theme and Theme.getPalette then
         local ok, palette = pcall(Theme.getPalette, appdock)
@@ -1767,7 +1772,7 @@ end
 
 return {
     id = "dchat",
-    version = "1.8.6",
+    version = "1.8.7",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
