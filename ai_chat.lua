@@ -97,6 +97,8 @@ end
 local stateFor
 local pumpModelDownload
 local pumpLocalInference
+local startRuntimeDownload
+local pumpRuntimeDownload
 
 local function shellQuote(value)
     return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
@@ -141,6 +143,28 @@ end
 
 local function localRuntimePath()
     return sourceDirectory() .. "/runtime/arm64/llama-completion"
+end
+
+local RUNTIME_FILES = {
+    { name = "llama-completion", size = 70304 },
+    { name = "libllama-completion-impl.so", size = 168584 },
+    { name = "libllama-common.so.0", source = "libllama-common.so.0.6.0", size = 5486648 },
+    { name = "libllama.so.0", source = "libllama.so.0.6.0", size = 4623920 },
+    { name = "libggml-base.so.0", source = "libggml-base.so.0.26.0", size = 876752 },
+    { name = "libggml.so.0", source = "libggml.so.0.26.0", size = 78456 },
+    { name = "libggml-cpu.so.0", source = "libggml-cpu.so.0.26.0", size = 1002552 },
+}
+local RUNTIME_BASE_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/9fcbc62/runtime/arm64/"
+
+local function runtimeDirectory()
+    return sourceDirectory() .. "/runtime/arm64"
+end
+
+local function runtimeIsInstalled()
+    for _, file in ipairs(RUNTIME_FILES) do
+        if not fileExists(runtimeDirectory() .. "/" .. file.name) then return false end
+    end
+    return true
 end
 
 local function installedModelPath(settings)
@@ -429,6 +453,96 @@ local function downloadModel(download)
     return streamModelUrl(download, download.model.url, 0, partial_size)
 end
 
+local function runtimeProgress(download)
+    local completed, total = 0, 0
+    for index, file in ipairs(download.files) do
+        total = total + file.size
+        if index < download.index then
+            completed = completed + file.size
+        elseif index == download.index then
+            completed = completed + math.min(file.size, download.current_bytes or 0)
+        end
+    end
+    download.progress = total > 0 and math.floor(math.min(100, 100 * completed / total)) or 0
+end
+
+startRuntimeDownload = function(instance, context)
+    local state = stateFor(instance)
+    if runtimeIsInstalled() then return true end
+    if state.runtime_download then return true end
+    os.execute("mkdir -p " .. shellQuote(runtimeDirectory()) .. " >/dev/null 2>&1")
+    local files = {}
+    for _, source in ipairs(RUNTIME_FILES) do
+        local file = {}
+        for key, value in pairs(source) do file[key] = value end
+        file.source = file.source or file.name
+        file.target = runtimeDirectory() .. "/" .. file.name
+        file.partial = file.target .. ".part"
+        files[#files + 1] = file
+    end
+    state.runtime_download = { files = files, index = 1, current_bytes = 0, progress = 0 }
+    state.status = _("Downloading the local SmolLM runtime…")
+    context.requestRebuild("ui")
+    UIManager:scheduleIn(0, function() pumpRuntimeDownload(instance, context) end)
+    return true
+end
+
+pumpRuntimeDownload = function(instance, context)
+    local state = stateFor(instance)
+    local download = state.runtime_download
+    if not download then return end
+    local file = download.files[download.index]
+    if not file then
+        state.runtime_download = nil
+        state.status = _("SmolLM runtime installed. Ready to run locally.")
+        context.requestRebuild("ui")
+        return
+    end
+    local worker = download.worker
+    if not worker then
+        download.current_bytes = fileSize(file.partial)
+        download.worker = coroutine.create(function()
+            local partial_size = fileSize(file.partial)
+            local transfer = { partial = file.partial, bytes = partial_size, total = file.size, started_at = os.time(), last_activity = os.time() }
+            local ok, err = streamModelUrl(transfer, RUNTIME_BASE_URL .. file.source, 0, partial_size)
+            return ok, err
+        end)
+        worker = download.worker
+    end
+    local resumed, ok, err = coroutine.resume(worker)
+    if not resumed then
+        state.status = _("Runtime download failed: ") .. short(ok, 180)
+        state.runtime_download = nil
+        context.requestRebuild("ui")
+        return
+    end
+    download.current_bytes = fileSize(file.partial)
+    runtimeProgress(download)
+    if coroutine.status(worker) ~= "dead" then
+        context.requestRebuild("fast")
+        UIManager:scheduleIn(DOWNLOAD_POLL_INTERVAL, function() pumpRuntimeDownload(instance, context) end)
+        return
+    end
+    if ok and fileSize(file.partial) >= file.size then
+        if os.rename(file.partial, file.target) then
+            download.index = download.index + 1
+            download.worker = nil
+            download.current_bytes = 0
+            runtimeProgress(download)
+            context.requestRebuild("fast")
+            UIManager:scheduleIn(0, function() pumpRuntimeDownload(instance, context) end)
+        else
+            state.status = _("Runtime download failed: could not install ") .. file.name
+            state.runtime_download = nil
+            context.requestRebuild("ui")
+        end
+    else
+        state.status = _("Runtime download failed: ") .. short(err or ("incomplete " .. file.name), 180)
+        state.runtime_download = nil
+        context.requestRebuild("ui")
+    end
+end
+
 local function finishModelDownload(instance, context, succeeded, err)
     local state = stateFor(instance)
     local download = state.download
@@ -440,6 +554,7 @@ local function finishModelDownload(instance, context, succeeded, err)
             if state.settings.provider == "local" then state.settings.model = download.model.filename end
             state.status = _("Downloaded: ") .. download.model.title .. _(". Ready to run directly on this Kobo.")
             saveSettings(state.settings)
+            startRuntimeDownload(instance, context)
         else
             state.status = _("Model download failed: could not save the file (") .. short(rename_err or "rename failed", 80) .. ")"
         end
@@ -609,12 +724,11 @@ local function startLocalInference(instance, context)
         context.requestRebuild("ui")
         return false
     end
-    local runtime = localRuntimePath()
-    if not fileExists(runtime) then
-        state.status = _("The bundled ARM64 SmolLM runtime is missing from this DApp.")
-        context.requestRebuild("ui")
-        return false
+    if not runtimeIsInstalled() then
+        startRuntimeDownload(instance, context)
+        return "pending"
     end
+    local runtime = localRuntimePath()
     local work = modelDirectory() .. "/.smollm-chat-" .. tostring(os.time())
     local prompt_path, output_path, log_path, exit_path = work .. ".prompt", work .. ".out", work .. ".log", work .. ".exit"
     local prompt = io.open(prompt_path, "wb")
@@ -778,7 +892,8 @@ local function sendMessage(instance, context)
                 context.requestRebuild("ui")
                 return
             end
-            if startLocalInference(instance, context) then return end
+            local started = startLocalInference(instance, context)
+            if started then return end
             table.remove(history, #history)
             return
         end
@@ -838,6 +953,15 @@ local function buildPane(instance, context)
             face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY,
             max_width = width - 2 * margin, overlap_offset = { margin, upper_buttons_y - px(32) },
         }
+    elseif state.runtime_download then
+        local progress = ModelProgress:new{ width = width - 2 * margin, height = px(10), progress = state.runtime_download.progress or 0 }
+        progress.overlap_offset = { margin, upper_buttons_y - px(18) }
+        content[#content + 1] = progress
+        content[#content + 1] = TextWidget:new{
+            text = string.format(_("Installing local SmolLM runtime · %d%%"), state.runtime_download.progress or 0),
+            face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+            max_width = width - 2 * margin, overlap_offset = { margin, upper_buttons_y - px(32) },
+        }
     end
     content[#content + 1] = TextWidget:new{ text = short(state.status, 160), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, upper_buttons_y - px(46) } }
     content[#content + 1] = Action:new{ title = _("Send"), width = third, height = button_h, primary = true, callback = function() sendMessage(instance, context) end, overlap_offset = { margin, y } }
@@ -851,6 +975,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.4.1", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+return { id = "ai_chat", version = "1.5.0", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
     _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }
