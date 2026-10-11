@@ -390,6 +390,9 @@ local function buildPane(instance, context)
     local width, height, px = context.dimen.w, context.dimen.h, context.px or scale
     local margin, gap = px(10), px(6)
     local button_h = math.max(px(36), math.floor(height * .09))
+    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
+    local y = height - margin - button_h
+    local upper_buttons_y = y - button_h - gap
     local content = { FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, HorizontalSpan:new{ width = 0 } },
         TextWidget:new{ text = _("AI Chat Agent"), face = Font:getFace("cfont", px(20)), bold = true, overlap_offset = { margin, px(10) } },
         TextWidget:new{ text = (settings.provider == "groq" and "Groq" or _("Local model")) .. " · " .. short(settings.model, 28), face = Font:getFace("smallinfofont", px(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, overlap_offset = { margin, px(38) } },
@@ -404,21 +407,21 @@ local function buildPane(instance, context)
         transcript = table.concat(lines, "\n\n")
     end
     local chat_y = px(68)
-    local chat_h = math.max(px(120), height - px(190))
+    -- Reserve a status strip above the two button rows. Without this explicit
+    -- space the progress bar was painted underneath the model/settings row.
+    local chat_h = math.max(px(120), upper_buttons_y - chat_y - px(50))
     content[#content + 1] = TextBoxWidget:new{ text = transcript, face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = chat_h, line_height = 0.3, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, chat_y } }
     if state.download then
         local progress = ModelProgress:new{ width = width - 2 * margin, height = px(10), progress = state.download.progress or 0 }
-        progress.overlap_offset = { margin, height - px(140) }
+        progress.overlap_offset = { margin, upper_buttons_y - px(18) }
         content[#content + 1] = progress
         content[#content + 1] = TextWidget:new{
             text = string.format(_("Downloading %s · %d%%"), state.download.model.title, state.download.progress or 0),
             face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY,
-            max_width = width - 2 * margin, overlap_offset = { margin, height - px(128) },
+            max_width = width - 2 * margin, overlap_offset = { margin, upper_buttons_y - px(32) },
         }
     end
-    content[#content + 1] = TextWidget:new{ text = short(state.status, 160), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - px(112) } }
-    local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    local y = height - margin - button_h
+    content[#content + 1] = TextWidget:new{ text = short(state.status, 160), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, upper_buttons_y - px(46) } }
     content[#content + 1] = Action:new{ title = _("Send"), width = third, height = button_h, primary = true, callback = function() sendMessage(instance, context) end, overlap_offset = { margin, y } }
     content[#content + 1] = Action:new{ title = settings.provider == "groq" and _("Groq") or _("Local"), width = third, height = button_h, callback = function() toggleProvider(instance, context) end, overlap_offset = { margin + third + gap, y } }
     content[#content + 1] = Action:new{ title = _("Settings"), width = third, height = button_h, callback = function()
@@ -430,4 +433,4 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.1.0", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane }
+return { id = "ai_chat", version = "1.1.1", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane }
