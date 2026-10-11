@@ -119,7 +119,7 @@ install("socket.url", {
 })
 
 local app = assert(loadfile("ai_chat.lua"))()
-assert(app.id == "ai_chat" and app.version == "1.5.2", "AI Chat must publish version 1.5.2")
+assert(app.id == "ai_chat" and app.version == "1.5.3", "AI Chat must publish version 1.5.3")
 
 -- Local endpoints use plain LuaSocket HTTP, and connection errors must retain
 -- the actual reason instead of collapsing into a generic message.
@@ -169,13 +169,33 @@ local target = model_dir .. "/" .. model.filename
 local runtime_dir = model_dir .. "/runtime-arm64"
 os.execute("mkdir -p " .. string.format("%q", runtime_dir))
 local runtime_marker = assert(io.open(runtime_dir .. "/.version", "wb"))
-runtime_marker:write("arm64-smollm-1.5.2\n")
+runtime_marker:write(app._test.runtimeVersion .. "\n")
 runtime_marker:close()
-for _, name in ipairs({ "llama-completion", "libllama-completion-impl.so", "libllama-common.so.0", "libllama.so.0", "libggml-base.so.0", "libggml.so.0", "libggml-cpu.so.0" }) do
-    local runtime_file = assert(io.open(runtime_dir .. "/" .. name, "wb"))
-    runtime_file:write("test-runtime")
+for _, metadata in ipairs(app._test.runtimeFiles) do
+    local runtime_file = assert(io.open(runtime_dir .. "/" .. metadata.name, "wb"))
+    runtime_file:write("\127ELF")
+    assert(runtime_file:seek("set", metadata.size - 1))
+    runtime_file:write("\0")
     runtime_file:close()
 end
+assert(app._test.runtimeIsInstalled(), "A complete ELF runtime with the current marker must be accepted")
+local corrupted_runtime = assert(io.open(runtime_dir .. "/llama-completion", "wb"))
+corrupted_runtime:write("not an executable")
+corrupted_runtime:close()
+assert(not app._test.runtimeIsInstalled(), "A stale or non-ELF runtime must be rejected before local inference")
+local restored_runtime = assert(io.open(runtime_dir .. "/llama-completion", "wb"))
+restored_runtime:write("\127ELF")
+assert(restored_runtime:seek("set", app._test.runtimeFiles[1].size - 1))
+restored_runtime:write("\0")
+restored_runtime:close()
+assert(app._test.runtimeIsInstalled(), "The restored runtime fixture must avoid a network runtime download in model tests")
+local launcher = app._test.buildLocalLauncher("/tmp/runtime/llama-completion", "/tmp/model.gguf", "/tmp/prompt", "/tmp/output", "/tmp/log", "/tmp/exit")
+assert(launcher:find("LD_LIBRARY_PATH", 1, true) and launcher:find("echo \"$code\"", 1, true), "The local launcher must export sibling libraries and write a quoted exit marker")
+local launcher_path = test_dir .. "/launcher.sh"
+local launcher_file = assert(io.open(launcher_path, "wb"))
+launcher_file:write(launcher)
+launcher_file:close()
+assert(os.execute("sh -n " .. string.format("%q", launcher_path)) == 0, "The local launcher must be valid POSIX shell")
 
 -- The first request redirects to a CDN; the final response must be streamed,
 -- verified as GGUF and atomically renamed into its final name.

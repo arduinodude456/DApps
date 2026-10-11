@@ -32,11 +32,11 @@ local PLAYER_SIZE = 23
 local GRAVITY = 1090
 local JUMP_VELOCITY = -410
 local PAD_VELOCITY = -510
-local RUN_SPEED = 225
+local RUN_SPEED = 205
 -- 20 Hz is a practical fast-waveform cadence: it is visibly smoother than the
 -- original 12.5 Hz while remaining confined to the small game arena.
 local FRAME_SECONDS = 0.05
-local LEVEL_LENGTH = 5350
+local DEFAULT_LEVEL_LENGTH = 2250
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
@@ -60,34 +60,83 @@ local function addPad(level, x)
     level[#level + 1] = { kind = "pad", x = x, y = GROUND_Y - 7, w = 34, h = 7 }
 end
 
-local function buildLevel()
+local function buildWarmup()
     local level = {}
-    -- 1. Launch line: readable single and double jumps.
-    addSpike(level, 360, 1); addSpike(level, 520, 2); addBlock(level, 690, 42, 44)
+    -- Generous approach lanes introduce jumping, landing, and pads one at a time.
+    addSpike(level, 390, 1); addSpike(level, 590, 1); addBlock(level, 770, 36, 52)
+    addSpike(level, 900, 1); addPad(level, 1060); addSpike(level, 1180, 1)
+    addBlock(level, 1370, 48, 58); addSpike(level, 1510, 1)
+    addPad(level, 1690); addBlock(level, 1820, 62, 64); addSpike(level, 1940, 1)
+    addSpike(level, 2100, 1)
+    return level
+end
+
+local function buildMeadow()
+    local level = {}
+    -- Gentle pairs and low platforms make timing forgiving without removing rhythm.
+    addSpike(level, 360, 1); addSpike(level, 545, 2); addBlock(level, 730, 42, 52)
+    addPad(level, 930); addSpike(level, 1040, 1); addBlock(level, 1210, 58, 58)
+    addSpike(level, 1345, 1); addPad(level, 1510); addSpike(level, 1625, 2)
+    addBlock(level, 1850, 46, 58); addBlock(level, 1980, 70, 64); addSpike(level, 2115, 1)
+    addPad(level, 2280); addSpike(level, 2400, 2); addBlock(level, 2600, 82, 70)
+    addSpike(level, 2760, 1); addPad(level, 2910)
+    return level
+end
+
+local function buildSteps()
+    local level = {}
+    -- A longer level with clearly spaced stair patterns and no triple spikes.
+    addSpike(level, 380, 1); addSpike(level, 550, 2); addBlock(level, 745, 40, 50)
+    addPad(level, 920); addSpike(level, 1040, 1); addBlock(level, 1210, 54, 56)
+    addSpike(level, 1340, 1); addBlock(level, 1500, 72, 60); addPad(level, 1650)
+    addSpike(level, 1770, 2); addBlock(level, 1990, 38, 42); addBlock(level, 2050, 62, 42); addBlock(level, 2110, 86, 42)
+    addSpike(level, 2230, 1); addPad(level, 2390); addSpike(level, 2510, 2)
+    addBlock(level, 2730, 70, 74); addSpike(level, 2860, 1); addBlock(level, 3030, 98, 72)
+    addPad(level, 3210); addSpike(level, 3340, 2); addBlock(level, 3540, 80, 70)
+    addSpike(level, 3690, 1)
+    return level
+end
+
+local function buildClassic()
+    local level = {}
+    -- The original marathon, softened with slower travel, lower platforms, and
+    -- double (rather than triple) spike groups.
+    addSpike(level, 360, 1); addSpike(level, 520, 2); addBlock(level, 690, 38, 44)
     addSpike(level, 790, 1); addPad(level, 915); addSpike(level, 1000, 2)
-    -- 2. Block rhythm: raised landings and gated gaps.
-    addBlock(level, 1190, 54, 52); addSpike(level, 1260, 1)
-    addBlock(level, 1370, 78, 58); addSpike(level, 1450, 2)
-    addPad(level, 1585); addBlock(level, 1695, 102, 66); addSpike(level, 1782, 1)
-    -- 3. Pressure corridor: alternating triples, pads, and stair blocks.
-    addSpike(level, 1900, 3); addPad(level, 2020); addSpike(level, 2120, 2)
-    addBlock(level, 2240, 40, 38); addBlock(level, 2294, 68, 38); addBlock(level, 2348, 96, 38)
-    addSpike(level, 2440, 2); addPad(level, 2545); addSpike(level, 2640, 3)
-    -- 4. Skyline: long jumps across elevated blocks.
-    addBlock(level, 2800, 74, 82); addSpike(level, 2898, 1)
-    addBlock(level, 3030, 116, 70); addSpike(level, 3118, 2)
-    addPad(level, 3240); addBlock(level, 3350, 142, 74); addSpike(level, 3440, 1)
-    -- 5. Finale: dense but deterministic final rhythm.
-    addSpike(level, 3580, 2); addPad(level, 3690); addSpike(level, 3780, 3)
-    addBlock(level, 3910, 52, 46); addSpike(level, 3974, 1); addBlock(level, 4070, 88, 52)
-    addPad(level, 4175); addSpike(level, 4265, 2); addBlock(level, 4380, 120, 64)
-    addSpike(level, 4462, 1); addSpike(level, 4580, 3); addPad(level, 4705)
-    addBlock(level, 4815, 64, 46); addBlock(level, 4877, 92, 46); addSpike(level, 4950, 2)
+    addBlock(level, 1190, 48, 52); addSpike(level, 1260, 1)
+    addBlock(level, 1370, 64, 58); addSpike(level, 1450, 2)
+    addPad(level, 1585); addBlock(level, 1695, 82, 66); addSpike(level, 1782, 1)
+    addSpike(level, 1900, 2); addPad(level, 2020); addSpike(level, 2120, 2)
+    addBlock(level, 2240, 38, 38); addBlock(level, 2294, 58, 38); addBlock(level, 2348, 78, 38)
+    addSpike(level, 2440, 2); addPad(level, 2545); addSpike(level, 2640, 2)
+    addBlock(level, 2800, 62, 82); addSpike(level, 2898, 1)
+    addBlock(level, 3030, 86, 70); addSpike(level, 3118, 2)
+    addPad(level, 3240); addBlock(level, 3350, 104, 74); addSpike(level, 3440, 1)
+    addSpike(level, 3580, 2); addPad(level, 3690); addSpike(level, 3780, 2)
+    addBlock(level, 3910, 46, 46); addSpike(level, 3974, 1); addBlock(level, 4070, 72, 52)
+    addPad(level, 4175); addSpike(level, 4265, 2); addBlock(level, 4380, 96, 64)
+    addSpike(level, 4462, 1); addSpike(level, 4580, 2); addPad(level, 4705)
+    addBlock(level, 4815, 58, 46); addBlock(level, 4877, 76, 46); addSpike(level, 4950, 2)
     addPad(level, 5070); addSpike(level, 5170, 1)
     return level
 end
 
-local LEVEL = buildLevel()
+local LEVELS = {
+    { id = "warmup", title = _("Warm-up"), length = 2250, objects = buildWarmup() },
+    { id = "meadow", title = _("Meadow"), length = 3100, objects = buildMeadow() },
+    { id = "steps", title = _("Steps"), length = 3950, objects = buildSteps() },
+    { id = "classic", title = _("Classic"), length = 5350, objects = buildClassic() },
+}
+
+local function levelFor(index)
+    index = math.floor(tonumber(index) or 1)
+    if index < 1 or index > #LEVELS then index = 1 end
+    return LEVELS[index], index
+end
+
+local function buildLevel(index)
+    return levelFor(index).objects
+end
 
 local function rectangleOverlap(left_a, top_a, width_a, height_a, left_b, top_b, width_b, height_b)
     return left_a < left_b + width_b and left_a + width_a > left_b and top_a < top_b + height_b and top_a + height_a > top_b
@@ -100,7 +149,7 @@ end
 local function nearbyObjects(session)
     local objects = {}
     local lower, upper = session.distance - 110, session.distance + WORLD_W + 110
-    for _, object in ipairs(LEVEL) do
+    for _, object in ipairs(session.level.objects) do
         if object.x + object.w >= lower and object.x <= upper then objects[#objects + 1] = object end
     end
     return objects
@@ -109,8 +158,9 @@ end
 local GameSession = {}
 GameSession.__index = GameSession
 
-function GameSession.new(on_event)
-    local self = setmetatable({ canvas = nil, paused = true, over = false, complete = false, distance = 0, player_y = GROUND_Y - PLAYER_SIZE, velocity_y = 0, grounded = true, pad_latch = {}, frames = 0, on_event = on_event }, GameSession)
+function GameSession.new(on_event, level_index)
+    local level, index = levelFor(level_index)
+    local self = setmetatable({ canvas = nil, paused = true, over = false, complete = false, distance = 0, player_y = GROUND_Y - PLAYER_SIZE, velocity_y = 0, grounded = true, pad_latch = {}, frames = 0, on_event = on_event, level = level, level_index = index }, GameSession)
     self._tick = function() self:tick() end
     return self
 end
@@ -118,6 +168,18 @@ end
 function GameSession:setCanvas(canvas)
     self.canvas = canvas
     if canvas then canvas.session = self end
+end
+
+function GameSession:setLevel(index)
+    local level, normalized = levelFor(index)
+    self.level, self.level_index = level, normalized
+    self:reset()
+    self:emit("level", string.format(_("%s selected — tap Play when ready."), level.title))
+    return level
+end
+
+function GameSession:nextLevel()
+    return self:setLevel((self.level_index % #LEVELS) + 1)
 end
 
 function GameSession:emit(kind, message)
@@ -168,7 +230,7 @@ end
 function GameSession:finish()
     self.complete, self.paused = true, true
     UIManager:unschedule(self._tick)
-    self:emit("complete", _("Level complete! Tap Retry for another run."))
+    self:emit("complete", string.format(_("%s complete! Choose the next level or tap Retry."), self.level.title))
 end
 
 function GameSession:advance(delta)
@@ -200,7 +262,7 @@ function GameSession:advance(delta)
     if not landed and not launched and self.player_y + PLAYER_SIZE >= GROUND_Y then
         self.player_y, self.velocity_y, self.grounded = GROUND_Y - PLAYER_SIZE, 0, true
     end
-    if self.distance >= LEVEL_LENGTH then self:finish(); return false end
+    if self.distance >= self.level.length then self:finish(); return false end
     self.frames = self.frames + 1
     return true
 end
@@ -276,7 +338,7 @@ function ArenaCanvas:paintTo(bb, x, y)
     self:_rect(bb, PLAYER_X + 5, session.player_y + 5, PLAYER_SIZE - 10, PLAYER_SIZE - 10, Blitbuffer.COLOR_WHITE)
     self:_rect(bb, PLAYER_X + 8, session.player_y + 8, 4, 4, Blitbuffer.COLOR_BLACK)
     self:_rect(bb, PLAYER_X + 15, session.player_y + 8, 4, 4, Blitbuffer.COLOR_BLACK)
-    local progress = clamp(session.distance / LEVEL_LENGTH, 0, 1)
+    local progress = clamp(session.distance / session.level.length, 0, 1)
     self:_rect(bb, 18, 17, WORLD_W - 36, 5, Blitbuffer.COLOR_LIGHT_GRAY)
     self:_rect(bb, 18, 17, math.floor((WORLD_W - 36) * progress), 5, Blitbuffer.COLOR_BLACK)
 end
@@ -326,7 +388,7 @@ end
 
 return {
     id = "geometry_dash",
-    version = "1.0.2",
+    version = "1.0.3",
     title = "Geometry Dash",
     subtitle = "Fast-refresh obstacle runner",
     symbol = "G",
@@ -350,12 +412,14 @@ return {
         if groups.Back then pane.key_events.GeometryDashPause = { { groups.Back }, event = "GeometryDashPause" } end
         local arena = ArenaCanvas:new{ width = width - 2 * margin, height = arena_h, session = state.session }
         state.session:setCanvas(arena)
-        local button_w = math.floor((width - 2 * margin - gap) / 2)
+        local button_w = math.floor((width - 2 * margin - 2 * gap) / 3)
         local play_title = (state.session.over or state.session.complete) and _("Retry") or (state.session.paused and _("Play") or _("Pause"))
+        local level = state.session.level
         local layers = {
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
             TextWidget:new{ text = "GEOMETRY DASH", face = Font:getFace("cfont", px(19)), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, px(7) } },
-            TextWidget:new{ text = string.format("%d%%", math.floor(clamp(state.session.distance / LEVEL_LENGTH, 0, 1) * 100)), face = Font:getFace("smallinfofont", px(11)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = px(58), overlap_offset = { width - margin - px(58), px(13) } },
+            TextWidget:new{ text = level.title, face = Font:getFace("smallinfofont", px(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = math.floor(width * .36), overlap_offset = { margin, px(30) } },
+            TextWidget:new{ text = string.format("%d%%", math.floor(clamp(state.session.distance / level.length, 0, 1) * 100)), face = Font:getFace("smallinfofont", px(11)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = px(58), overlap_offset = { width - margin - px(58), px(13) } },
             arena,
             GameButton:new{ title = play_title, primary = true, width = button_w, height = controls_h, callback = function()
                 if state.session.over or state.session.complete then state.session:reset(); context.requestRebuild("ui")
@@ -363,6 +427,7 @@ return {
                 else state.session:pause() end
             end, overlap_offset = { margin, arena_y + arena_h + gap } },
             GameButton:new{ title = _("Restart"), width = button_w, height = controls_h, callback = function() state.session:reset(); context.requestRebuild("ui") end, overlap_offset = { margin + button_w + gap, arena_y + arena_h + gap } },
+            GameButton:new{ title = string.format(_("Level %d/%d"), state.session.level_index, #LEVELS), width = button_w, height = controls_h, callback = function() state.session:nextLevel(); context.requestRebuild("ui") end, overlap_offset = { margin + 2 * (button_w + gap), arena_y + arena_h + gap } },
             TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - px(16) } },
         }
         arena.overlap_offset = { margin, arena_y }
@@ -373,5 +438,5 @@ return {
         local state = instance and instance.geometry_dash
         if state and state.session then state.session:pause() end
     end,
-    _test = { GameSession = GameSession, buildLevel = buildLevel, rectangleOverlap = rectangleOverlap, LEVEL_LENGTH = LEVEL_LENGTH, FRAME_SECONDS = FRAME_SECONDS, GROUND_Y = GROUND_Y },
+    _test = { GameSession = GameSession, buildLevel = buildLevel, levels = LEVELS, levelFor = levelFor, rectangleOverlap = rectangleOverlap, defaultLevelLength = DEFAULT_LEVEL_LENGTH, runSpeed = RUN_SPEED, frameSeconds = FRAME_SECONDS, groundY = GROUND_Y },
 }
