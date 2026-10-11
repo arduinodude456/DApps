@@ -119,7 +119,7 @@ install("socket.url", {
 })
 
 local app = assert(loadfile("ai_chat.lua"))()
-assert(app.id == "ai_chat" and app.version == "1.3.0", "AI Chat must publish version 1.3.0")
+assert(app.id == "ai_chat" and app.version == "1.4.0", "AI Chat must publish version 1.4.0")
 
 -- Local endpoints use plain LuaSocket HTTP, and connection errors must retain
 -- the actual reason instead of collapsing into a generic message.
@@ -184,7 +184,7 @@ local instance = {}
 app._test.startModelDownload(instance, context, model)
 run_scheduled()
 assert(read_file(target) == "GGUFModel", "redirected GGUF file was not written")
-assert(instance.ai_chat.settings.model == model.filename, "local model was not selected after download")
+assert(instance.ai_chat.settings.local_model == model.filename, "local model was not selected after download")
 assert(instance.ai_chat.status:find("Downloaded:", 1, true), "successful download was not reported")
 assert(#requests == 2 and requests[1]:find("GET ", 1, true) and requests[2]:find("GET /model HTTP/1.1", 1, true), "HTTPS redirect was not followed")
 

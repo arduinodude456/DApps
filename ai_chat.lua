@@ -78,6 +78,7 @@ local function cloneSettings(stored)
         provider = stored.provider == "local" and "local" or "groq",
         endpoint = trim(stored.endpoint) ~= "" and trim(stored.endpoint) or DEFAULT_LOCAL_ENDPOINT,
         model = trim(stored.model) ~= "" and trim(stored.model) or DEFAULT_GROQ_MODEL,
+        local_model = trim(stored.local_model),
         api_key = trim(stored.api_key),
         system = trim(stored.system) ~= "" and trim(stored.system) or "You are a concise, helpful assistant. Reply in the user's language.",
         history = type(stored.history) == "table" and stored.history or {},
@@ -95,6 +96,7 @@ end
 
 local stateFor
 local pumpModelDownload
+local pumpLocalInference
 
 local function shellQuote(value)
     return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
@@ -129,6 +131,26 @@ local function modelById(id)
     for _, model in ipairs(MODEL_CATALOG) do
         if model.id == id then return model end
     end
+end
+
+local function sourceDirectory()
+    local source = debug.getinfo(1, "S").source or ""
+    source = source:gsub("^@", "")
+    return source:match("^(.*)/[^/]+$") or "."
+end
+
+local function localRuntimePath()
+    return sourceDirectory() .. "/runtime/arm64/llama-completion"
+end
+
+local function installedModelPath(settings)
+    for _, model in ipairs(MODEL_CATALOG) do
+        if settings.model == model.id or settings.model == model.filename or settings.local_model == model.filename then
+            local path = modelPath(model)
+            if fileExists(path) then return path end
+        end
+    end
+    return nil
 end
 
 local function hasGgufHeader(path)
@@ -404,8 +426,9 @@ local function finishModelDownload(instance, context, succeeded, err)
     if succeeded and hasGgufHeader(download.partial) then
         local renamed, rename_err = os.rename(download.partial, download.target)
         if renamed then
+            state.settings.local_model = download.model.filename
             if state.settings.provider == "local" then state.settings.model = download.model.filename end
-            state.status = _("Downloaded: ") .. download.model.title .. _(". Start a local llama.cpp/Ollama server to use it.")
+            state.status = _("Downloaded: ") .. download.model.title .. _(". Ready to run directly on this Kobo.")
             saveSettings(state.settings)
         else
             state.status = _("Model download failed: could not save the file (") .. short(rename_err or "rename failed", 80) .. ")"
@@ -555,6 +578,98 @@ local function askModel(settings, history)
     return short(message.content, MAX_RESPONSE)
 end
 
+local function localPrompt(settings, history)
+    local lines = { "<|im_start|>system", settings.system, "<|im_end|>" }
+    for _, item in ipairs(history) do
+        if type(item) == "table" and (item.role == "user" or item.role == "assistant") then
+            lines[#lines + 1] = "<|im_start|>" .. item.role
+            lines[#lines + 1] = item.content
+            lines[#lines + 1] = "<|im_end|>"
+        end
+    end
+    lines[#lines + 1] = "<|im_start|>assistant"
+    return table.concat(lines, "\n")
+end
+
+local function startLocalInference(instance, context)
+    local state = stateFor(instance)
+    local model_path = installedModelPath(state.settings)
+    if not model_path then
+        state.status = _("Download a local GGUF model first, then select Local.")
+        context.requestRebuild("ui")
+        return false
+    end
+    local runtime = localRuntimePath()
+    if not fileExists(runtime) then
+        state.status = _("The bundled ARM64 SmolLM runtime is missing from this DApp.")
+        context.requestRebuild("ui")
+        return false
+    end
+    local work = modelDirectory() .. "/.smollm-chat-" .. tostring(os.time())
+    local prompt_path, output_path, log_path, exit_path = work .. ".prompt", work .. ".out", work .. ".log", work .. ".exit"
+    local prompt = io.open(prompt_path, "wb")
+    if not prompt then
+        state.status = _("Could not create the local SmolLM prompt file.")
+        context.requestRebuild("ui")
+        return false
+    end
+    prompt:write(localPrompt(state.settings, state.settings.history))
+    prompt:close()
+    os.remove(output_path); os.remove(log_path); os.remove(exit_path)
+    local command = shellQuote(runtime) .. " --model " .. shellQuote(model_path)
+        .. " --file " .. shellQuote(prompt_path) .. " --predict 256 --threads 2"
+        .. " --no-display-prompt --single-turn --simple-io --temp 0.3"
+        .. " >" .. shellQuote(output_path) .. " 2>" .. shellQuote(log_path)
+        .. "; code=$?; echo $code >" .. shellQuote(exit_path)
+    local launch = "( " .. command .. " ) </dev/null >/dev/null 2>&1 & echo $!"
+    local pipe = io.popen("sh -c " .. shellQuote(launch), "r")
+    local pid = pipe and tonumber(pipe:read("*l")) or nil
+    if pipe then pipe:close() end
+    if not pid then
+        os.remove(prompt_path); os.remove(output_path); os.remove(log_path); os.remove(exit_path)
+        state.status = _("Could not start the bundled SmolLM runtime.")
+        context.requestRebuild("ui")
+        return false
+    end
+    state.inference = { pid = pid, prompt = prompt_path, output = output_path, log = log_path, exit = exit_path }
+    state.status = _("Running SmolLM directly on this Kobo…")
+    context.requestRebuild("ui")
+    UIManager:scheduleIn(.5, function() pumpLocalInference(instance, context) end)
+    return true
+end
+
+pumpLocalInference = function(instance, context)
+    local state = stateFor(instance)
+    local inference = state.inference
+    if not inference then return end
+    local exit = io.open(inference.exit, "rb")
+    if not exit then
+        context.requestRebuild("fast")
+        UIManager:scheduleIn(.5, function() pumpLocalInference(instance, context) end)
+        return
+    end
+    local code = tonumber(exit:read("*a") or "1") or 1
+    exit:close()
+    local output_handle = io.open(inference.output, "rb")
+    local answer = output_handle and trim(output_handle:read("*a") or "") or ""
+    if output_handle then output_handle:close() end
+    local log_handle = io.open(inference.log, "rb")
+    local log = log_handle and trim(log_handle:read("*a") or "") or ""
+    if log_handle then log_handle:close() end
+    os.remove(inference.prompt); os.remove(inference.output); os.remove(inference.log); os.remove(inference.exit)
+    state.inference = nil
+    if code == 0 and answer ~= "" then
+        state.settings.history[#state.settings.history + 1] = { role = "assistant", content = short(answer, MAX_RESPONSE) }
+        while #state.settings.history > MAX_HISTORY do table.remove(state.settings.history, 1) end
+        saveSettings(state.settings)
+        state.status = _("SmolLM replied locally; chat saved.")
+    else
+        table.remove(state.settings.history, #state.settings.history)
+        state.status = _("SmolLM failed: ") .. short(log ~= "" and log or ("exit code " .. tostring(code)), 180)
+    end
+    context.requestRebuild("ui")
+end
+
 local Action = InputContainer:extend{ title = "", subtitle = "", callback = nil, width = 0, height = 0, primary = false }
 function Action:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -626,7 +741,11 @@ end
 local function toggleProvider(instance, context)
     local settings = instance.ai_chat.settings
     settings.provider = settings.provider == "groq" and "local" or "groq"
-    settings.model = settings.provider == "groq" and DEFAULT_GROQ_MODEL or DEFAULT_LOCAL_MODEL
+    if settings.provider == "groq" then
+        settings.model = DEFAULT_GROQ_MODEL
+    else
+        settings.model = settings.local_model ~= "" and settings.local_model or DEFAULT_LOCAL_MODEL
+    end
     saveSettings(settings)
     instance.ai_chat.status = settings.provider == "groq" and _("Groq selected.") or _("Local model selected.")
     context.requestRebuild("ui")
@@ -642,6 +761,17 @@ local function sendMessage(instance, context)
         while #history > MAX_HISTORY do table.remove(history, 1) end
         instance.ai_chat.status = _("Contacting the model…")
         context.requestRebuild("ui")
+        if settings.provider == "local" then
+            if instance.ai_chat.inference then
+                table.remove(history, #history)
+                instance.ai_chat.status = _("SmolLM is already generating a reply.")
+                context.requestRebuild("ui")
+                return
+            end
+            if startLocalInference(instance, context) then return end
+            table.remove(history, #history)
+            return
+        end
         local answer, err = askModel(settings, history)
         if answer then
             history[#history + 1] = { role = "assistant", content = answer }
@@ -711,6 +841,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.3.0", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane,
-    _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson },
+return { id = "ai_chat", version = "1.4.0", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+    _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }
