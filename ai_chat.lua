@@ -138,7 +138,7 @@ local function startModelDownload(instance, context, model)
     end
     local target = modelPath(model)
     if fileExists(target) then
-        state.settings.model = model.filename
+        if state.settings.provider == "local" then state.settings.model = model.filename end
         state.status = _("Model is already downloaded: ") .. model.title
         saveSettings(state.settings)
         context.requestRebuild("ui")
@@ -189,7 +189,7 @@ pollModelDownload = function(instance, context)
     os.remove(download.exit)
     if code == 0 and fileSize(download.partial) > 0 then
         os.rename(download.partial, download.target)
-        state.settings.model = download.model.filename
+        if state.settings.provider == "local" then state.settings.model = download.model.filename end
         state.status = _("Downloaded: ") .. download.model.title
         saveSettings(state.settings)
     else
