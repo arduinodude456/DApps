@@ -13,6 +13,7 @@ local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
+local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
@@ -248,4 +249,4 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.0.0", title = "AI Chat Agent", subtitle = "Groq or local model", symbol = "AI", logo = "dchat", buildPane = buildPane }
+return { id = "ai_chat", version = "1.0.1", title = "AI Chat Agent", subtitle = "Groq or local model", symbol = "AI", logo = "dchat", buildPane = buildPane }
