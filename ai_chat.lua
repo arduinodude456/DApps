@@ -8,6 +8,7 @@ No request is made until the user taps Send.
 
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
+local DataStorage = require("datastorage")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -17,6 +18,7 @@ local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
+local ButtonDialog = require("ui/widget/buttondialog")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
@@ -33,6 +35,32 @@ local MAX_PROMPT = 4000
 local MAX_RESPONSE = 12000
 local MAX_HISTORY = 20
 local CONNECT_TIMEOUT, REQUEST_TIMEOUT = 12, 90
+
+-- These are direct Hugging Face resolve URLs for small GGUF files suitable for
+-- an E-Ink reader. The files are only downloaded after the user selects one.
+local MODEL_CATALOG = {
+    {
+        id = "smollm2-360m-q8",
+        title = "SmolLM2 360M · Q8",
+        size = "~386 MB",
+        filename = "SmolLM2-360M-Instruct-Q8_0.gguf",
+        url = "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q8_0.gguf",
+    },
+    {
+        id = "qwen25-05b-q4",
+        title = "Qwen2.5 0.5B · Q4_K_M",
+        size = "~491 MB",
+        filename = "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+        url = "https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+    },
+    {
+        id = "qwen25-15b-q4",
+        title = "Qwen2.5 1.5B · Q4_K_M",
+        size = "~1.1 GB",
+        filename = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+        url = "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+    },
+}
 
 local Screen = Device.screen
 local function scale(value) return Screen:scaleBySize(value) end
@@ -61,6 +89,116 @@ end
 local function saveSettings(settings)
     G_reader_settings:saveSetting(SETTINGS_KEY, settings)
     if G_reader_settings.flush then G_reader_settings:flush() end
+end
+
+local stateFor
+local pollModelDownload
+
+local function shellQuote(value)
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function modelDirectory()
+    local base = DataStorage:getDataDir()
+    local directory = base .. "/appdock/ai-models"
+    os.execute("mkdir -p " .. shellQuote(directory) .. " >/dev/null 2>&1")
+    return directory
+end
+
+local function fileExists(path)
+    local handle = path and io.open(path, "rb")
+    if handle then handle:close(); return true end
+    return false
+end
+
+local function fileSize(path)
+    local handle = path and io.open(path, "rb")
+    if not handle then return 0 end
+    local size = handle:seek("end") or 0
+    handle:close()
+    return size
+end
+
+local function modelPath(model)
+    return modelDirectory() .. "/" .. model.filename
+end
+
+local function modelById(id)
+    for _, model in ipairs(MODEL_CATALOG) do
+        if model.id == id then return model end
+    end
+end
+
+local function startModelDownload(instance, context, model)
+    local state = stateFor(instance)
+    if state.download then
+        state.status = _("A model download is already running.")
+        context.requestRebuild("ui")
+        return
+    end
+    local target = modelPath(model)
+    if fileExists(target) then
+        state.settings.model = model.filename
+        state.status = _("Model is already downloaded: ") .. model.title
+        saveSettings(state.settings)
+        context.requestRebuild("ui")
+        return
+    end
+    local work = modelDirectory() .. "/." .. model.id .. ".download"
+    local log_path, exit_path, partial = work .. ".log", work .. ".exit", target .. ".part"
+    os.remove(log_path); os.remove(exit_path); os.remove(partial)
+    local command = "curl -L --fail --retry 2 --connect-timeout 15 --max-time 7200 --progress-bar"
+        .. " -o " .. shellQuote(partial) .. " " .. shellQuote(model.url)
+        .. " >" .. shellQuote(log_path) .. " 2>&1; code=$?; echo $code >" .. shellQuote(exit_path)
+    local launch = "( " .. command .. " ) </dev/null >/dev/null 2>&1 & echo $!"
+    local pipe = io.popen("sh -c " .. shellQuote(launch), "r")
+    local pid = pipe and tonumber(pipe:read("*l")) or nil
+    if pipe then pipe:close() end
+    if not pid then
+        state.status = _("The model download could not be started.")
+        context.requestRebuild("ui")
+        return
+    end
+    state.download = { model_id = model.id, model = model, pid = pid, log = log_path, exit = exit_path, partial = partial, target = target, progress = 0 }
+    state.status = _("Downloading ") .. model.title .. "…"
+    saveSettings(state.settings)
+    context.requestRebuild("ui")
+    UIManager:scheduleIn(.5, function() pollModelDownload(instance, context) end)
+end
+
+pollModelDownload = function(instance, context)
+    local state = stateFor(instance)
+    local download = state.download
+    if not download then return end
+    local log = io.open(download.log, "rb")
+    if log then
+        local text = log:read("*a") or ""
+        log:close()
+        local latest
+        for value in text:gmatch("([%d]+[%.]?[%d]*)%%") do latest = tonumber(value) end
+        if latest then download.progress = math.max(0, math.min(100, latest)) end
+    end
+    local exit = io.open(download.exit, "rb")
+    if not exit then
+        UIManager:scheduleIn(.5, function() pollModelDownload(instance, context) end)
+        context.requestRebuild("fast")
+        return
+    end
+    local code = tonumber(exit:read("*a") or "1") or 1
+    exit:close()
+    os.remove(download.exit)
+    if code == 0 and fileSize(download.partial) > 0 then
+        os.rename(download.partial, download.target)
+        state.settings.model = download.model.filename
+        state.status = _("Downloaded: ") .. download.model.title
+        saveSettings(state.settings)
+    else
+        os.remove(download.partial)
+        state.status = _("Model download failed. Check the network connection.")
+    end
+    os.remove(download.log)
+    state.download = nil
+    context.requestRebuild("ui")
 end
 
 local function validEndpoint(endpoint)
@@ -148,7 +286,20 @@ function Action:init()
 end
 function Action:onTapAIChatAction() if self.callback then self.callback() end; return true end
 
-local function stateFor(instance)
+local ModelProgress = WidgetContainer:extend{ width = 0, height = 0, progress = 0 }
+function ModelProgress:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+end
+function ModelProgress:paintTo(bb, x, y)
+    local border = math.max(1, scale(1))
+    local value = math.max(0, math.min(100, tonumber(self.progress) or 0)) / 100
+    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_GRAY_8)
+    bb:paintRect(x, y, math.floor(self.width * value), self.height, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, self.width, border, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y + self.height - border, self.width, border, Blitbuffer.COLOR_BLACK)
+end
+
+stateFor = function(instance)
     if instance.ai_chat then return instance.ai_chat end
     instance.ai_chat = { settings = loadSettings(), status = _("Ready. Nothing is sent until you tap Send.") }
     return instance.ai_chat
@@ -172,6 +323,26 @@ local function configure(instance, context, field, title, hint)
         instance.ai_chat.status = _("Saved locally.")
         context.requestRebuild("ui")
     end)
+end
+
+local function showModelPicker(instance, context)
+    local dialog
+    local rows = {}
+    for _, model in ipairs(MODEL_CATALOG) do
+        local installed = fileExists(modelPath(model))
+        rows[#rows + 1] = {
+            {
+                text = (installed and "✓  " or "↓  ") .. model.title .. "  (" .. model.size .. ")",
+                callback = function()
+                    UIManager:close(dialog)
+                    startModelDownload(instance, context, model)
+                end,
+            },
+        }
+    end
+    rows[#rows + 1] = { { text = _("Cancel"), callback = function() UIManager:close(dialog) end } }
+    dialog = ButtonDialog:new{ title = _("Choose a local GGUF model"), buttons = rows }
+    UIManager:show(dialog)
 end
 
 local function toggleProvider(instance, context)
@@ -235,7 +406,17 @@ local function buildPane(instance, context)
     local chat_y = px(68)
     local chat_h = math.max(px(120), height - px(190))
     content[#content + 1] = TextBoxWidget:new{ text = transcript, face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = chat_h, line_height = 0.3, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, chat_y } }
-    content[#content + 1] = TextWidget:new{ text = short(state.status, 160), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - px(116) } }
+    if state.download then
+        local progress = ModelProgress:new{ width = width - 2 * margin, height = px(10), progress = state.download.progress or 0 }
+        progress.overlap_offset = { margin, height - px(140) }
+        content[#content + 1] = progress
+        content[#content + 1] = TextWidget:new{
+            text = string.format(_("Downloading %s · %d%%"), state.download.model.title, state.download.progress or 0),
+            face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+            max_width = width - 2 * margin, overlap_offset = { margin, height - px(128) },
+        }
+    end
+    content[#content + 1] = TextWidget:new{ text = short(state.status, 160), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, height - px(112) } }
     local third = math.floor((width - 2 * margin - 2 * gap) / 3)
     local y = height - margin - button_h
     content[#content + 1] = Action:new{ title = _("Send"), width = third, height = button_h, primary = true, callback = function() sendMessage(instance, context) end, overlap_offset = { margin, y } }
@@ -243,10 +424,10 @@ local function buildPane(instance, context)
     content[#content + 1] = Action:new{ title = _("Settings"), width = third, height = button_h, callback = function()
         if settings.provider == "groq" then configure(instance, context, "api_key", _("Groq API key"), _("Paste the key; it is stored only on this reader")) else configure(instance, context, "endpoint", _("Local model endpoint"), DEFAULT_LOCAL_ENDPOINT) end
     end, overlap_offset = { margin + 2 * (third + gap), y } }
-    content[#content + 1] = Action:new{ title = _("Model"), width = third, height = button_h, callback = function() configure(instance, context, "model", _("Model name"), settings.provider == "groq" and DEFAULT_GROQ_MODEL or DEFAULT_LOCAL_MODEL) end, overlap_offset = { margin, y - button_h - gap } }
+    content[#content + 1] = Action:new{ title = _("Models"), width = third, height = button_h, callback = function() showModelPicker(instance, context) end, overlap_offset = { margin, y - button_h - gap } }
     content[#content + 1] = Action:new{ title = _("System prompt"), width = third, height = button_h, callback = function() configure(instance, context, "system", _("System prompt"), "You are a helpful assistant") end, overlap_offset = { margin + third + gap, y - button_h - gap } }
     content[#content + 1] = Action:new{ title = _("Clear chat"), width = third, height = button_h, callback = function() clearChat(instance, context) end, overlap_offset = { margin + 2 * (third + gap), y - button_h - gap } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.0.1", title = "AI Chat Agent", subtitle = "Groq or local model", symbol = "AI", logo = "dchat", buildPane = buildPane }
+return { id = "ai_chat", version = "1.1.0", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane }
