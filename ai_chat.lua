@@ -730,7 +730,7 @@ local function startLocalInference(instance, context)
     end
     local runtime = localRuntimePath()
     local work = modelDirectory() .. "/.smollm-chat-" .. tostring(os.time())
-    local prompt_path, output_path, log_path, exit_path = work .. ".prompt", work .. ".out", work .. ".log", work .. ".exit"
+    local prompt_path, output_path, log_path, exit_path, script_path = work .. ".prompt", work .. ".out", work .. ".log", work .. ".exit", work .. ".sh"
     local prompt = io.open(prompt_path, "wb")
     if not prompt then
         state.status = _("Could not create the local SmolLM prompt file.")
@@ -740,22 +740,34 @@ local function startLocalInference(instance, context)
     prompt:write(localPrompt(state.settings, state.settings.history))
     prompt:close()
     os.remove(output_path); os.remove(log_path); os.remove(exit_path)
-    local command = shellQuote(runtime) .. " --model " .. shellQuote(model_path)
+    local script = io.open(script_path, "wb")
+    if not script then
+        os.remove(prompt_path)
+        state.status = _("Could not create the local SmolLM launcher script.")
+        context.requestRebuild("ui")
+        return false
+    end
+    -- Do not use `( ... )` subshell syntax here. Some Kobo firmware shells
+    -- reject it when launched through Lua's io.popen.
+    script:write("#!/bin/sh\n")
+    script:write(shellQuote(runtime) .. " --model " .. shellQuote(model_path)
         .. " --file " .. shellQuote(prompt_path) .. " --predict 256 --threads 2"
         .. " --no-display-prompt --single-turn --simple-io --temp 0.3"
-        .. " >" .. shellQuote(output_path) .. " 2>" .. shellQuote(log_path)
-        .. "; code=$?; echo $code >" .. shellQuote(exit_path)
-    local launch = "( " .. command .. " ) </dev/null >/dev/null 2>&1 & echo $!"
-    local pipe = io.popen("sh -c " .. shellQuote(launch), "r")
+        .. " >" .. shellQuote(output_path) .. " 2>" .. shellQuote(log_path) .. "\n")
+    script:write("code=$?\necho $code >" .. shellQuote(exit_path) .. "\n")
+    script:close()
+    os.execute("chmod 755 " .. shellQuote(script_path) .. " >/dev/null 2>&1")
+    local launch = "sh " .. shellQuote(script_path) .. " </dev/null >/dev/null 2>&1 & echo $!"
+    local pipe = io.popen(launch, "r")
     local pid = pipe and tonumber(pipe:read("*l")) or nil
     if pipe then pipe:close() end
     if not pid then
-        os.remove(prompt_path); os.remove(output_path); os.remove(log_path); os.remove(exit_path)
+        os.remove(prompt_path); os.remove(output_path); os.remove(log_path); os.remove(exit_path); os.remove(script_path)
         state.status = _("Could not start the bundled SmolLM runtime.")
         context.requestRebuild("ui")
         return false
     end
-    state.inference = { pid = pid, prompt = prompt_path, output = output_path, log = log_path, exit = exit_path }
+    state.inference = { pid = pid, prompt = prompt_path, output = output_path, log = log_path, exit = exit_path, script = script_path }
     state.status = _("Running SmolLM directly on this Kobo…")
     context.requestRebuild("ui")
     UIManager:scheduleIn(.5, function() pumpLocalInference(instance, context) end)
@@ -780,7 +792,7 @@ pumpLocalInference = function(instance, context)
     local log_handle = io.open(inference.log, "rb")
     local log = log_handle and trim(log_handle:read("*a") or "") or ""
     if log_handle then log_handle:close() end
-    os.remove(inference.prompt); os.remove(inference.output); os.remove(inference.log); os.remove(inference.exit)
+    os.remove(inference.prompt); os.remove(inference.output); os.remove(inference.log); os.remove(inference.exit); os.remove(inference.script)
     state.inference = nil
     if code == 0 and answer ~= "" then
         state.settings.history[#state.settings.history + 1] = { role = "assistant", content = short(answer, MAX_RESPONSE) }
@@ -975,6 +987,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.5.0", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+return { id = "ai_chat", version = "1.5.1", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
     _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }
