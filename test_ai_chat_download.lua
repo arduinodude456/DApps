@@ -119,7 +119,7 @@ install("socket.url", {
 })
 
 local app = assert(loadfile("ai_chat.lua"))()
-assert(app.id == "ai_chat" and app.version == "1.5.1", "AI Chat must publish version 1.5.1")
+assert(app.id == "ai_chat" and app.version == "1.5.2", "AI Chat must publish version 1.5.2")
 
 -- Local endpoints use plain LuaSocket HTTP, and connection errors must retain
 -- the actual reason instead of collapsing into a generic message.
@@ -166,6 +166,16 @@ local context = { requestRebuild = function() end }
 local model = app._test.modelCatalog[1]
 local model_dir = test_dir .. "/appdock/ai-models"
 local target = model_dir .. "/" .. model.filename
+local runtime_dir = model_dir .. "/runtime-arm64"
+os.execute("mkdir -p " .. string.format("%q", runtime_dir))
+local runtime_marker = assert(io.open(runtime_dir .. "/.version", "wb"))
+runtime_marker:write("arm64-smollm-1.5.2\n")
+runtime_marker:close()
+for _, name in ipairs({ "llama-completion", "libllama-completion-impl.so", "libllama-common.so.0", "libllama.so.0", "libggml-base.so.0", "libggml.so.0", "libggml-cpu.so.0" }) do
+    local runtime_file = assert(io.open(runtime_dir .. "/" .. name, "wb"))
+    runtime_file:write("test-runtime")
+    runtime_file:close()
+end
 
 -- The first request redirects to a CDN; the final response must be streamed,
 -- verified as GGUF and atomically renamed into its final name.

@@ -141,8 +141,10 @@ local function sourceDirectory()
     return source:match("^(.*)/[^/]+$") or "."
 end
 
+local runtimeDirectory
+
 local function localRuntimePath()
-    return sourceDirectory() .. "/runtime/arm64/llama-completion"
+    return runtimeDirectory() .. "/llama-completion"
 end
 
 local RUNTIME_FILES = {
@@ -155,12 +157,19 @@ local RUNTIME_FILES = {
     { name = "libggml-cpu.so.0", source = "libggml-cpu.so.0.26.0", size = 1002552 },
 }
 local RUNTIME_BASE_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/9fcbc62/runtime/arm64/"
+local RUNTIME_VERSION = "arm64-smollm-1.5.2"
 
-local function runtimeDirectory()
-    return sourceDirectory() .. "/runtime/arm64"
+runtimeDirectory = function()
+    -- The installed DApp directory may be read-only. Keep the downloaded
+    -- runtime in AppDock's writable data directory instead.
+    return modelDirectory() .. "/runtime-arm64"
 end
 
 local function runtimeIsInstalled()
+    local marker = io.open(runtimeDirectory() .. "/.version", "rb")
+    local version = marker and trim(marker:read("*a") or "") or ""
+    if marker then marker:close() end
+    if version ~= RUNTIME_VERSION then return false end
     for _, file in ipairs(RUNTIME_FILES) do
         if not fileExists(runtimeDirectory() .. "/" .. file.name) then return false end
     end
@@ -494,6 +503,8 @@ pumpRuntimeDownload = function(instance, context)
     local file = download.files[download.index]
     if not file then
         state.runtime_download = nil
+        local marker = io.open(runtimeDirectory() .. "/.version", "wb")
+        if marker then marker:write(RUNTIME_VERSION .. "\n"); marker:close() end
         state.status = _("SmolLM runtime installed. Ready to run locally.")
         context.requestRebuild("ui")
         return
@@ -987,6 +998,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.5.1", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+return { id = "ai_chat", version = "1.5.2", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
     _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }

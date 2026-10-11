@@ -12,7 +12,7 @@ dreader.lua | 2.2.0 | document
 calendar.lua | 1.0.2 | calendar
 rss_reader.lua | 1.0.2 | rss
 dock_update.lua | 1.2.9 | dockupdate
-ai_chat.lua | 1.5.1 | dchat
+ai_chat.lua | 1.5.2 | dchat
 appdock_guide.lua | 1.0.0 | help
 dpdf.lua | 1.0.0 | document
 widget_generator.lua | 1.0.0 | settings
