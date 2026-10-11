@@ -35,6 +35,8 @@ local MAX_PROMPT = 4000
 local MAX_RESPONSE = 12000
 local MAX_HISTORY = 20
 local CONNECT_TIMEOUT, REQUEST_TIMEOUT = 12, 90
+local DOWNLOAD_IDLE_TIMEOUT, DOWNLOAD_MAX_TIME = 60, 7200
+local DOWNLOAD_POLL_INTERVAL, DOWNLOAD_BURST_BYTES = .2, 64 * 1024
 
 -- These are direct Hugging Face resolve URLs for small GGUF files suitable for
 -- an E-Ink reader. The files are only downloaded after the user selects one.
@@ -92,7 +94,7 @@ local function saveSettings(settings)
 end
 
 local stateFor
-local pollModelDownload
+local pumpModelDownload
 
 local function shellQuote(value)
     return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
@@ -129,6 +131,312 @@ local function modelById(id)
     end
 end
 
+local function hasGgufHeader(path)
+    local handle = path and io.open(path, "rb")
+    if not handle then return false end
+    local header = handle:read(4)
+    handle:close()
+    return header == "GGUF"
+end
+
+local function friendlyBytes(value)
+    value = tonumber(value) or 0
+    if value >= 1024 * 1024 then return string.format("%.1f MB", value / (1024 * 1024)) end
+    if value >= 1024 then return string.format("%.0f KB", value / 1024) end
+    return tostring(value) .. " B"
+end
+
+local function markDownloadActivity(download)
+    download.last_activity = os.time()
+end
+
+local function downloadIsActive(download)
+    if download.cancelled then return nil, "cancelled" end
+    local now = os.time()
+    if now - (download.started_at or now) > DOWNLOAD_MAX_TIME then return nil, "download timed out" end
+    if now - (download.last_activity or now) > DOWNLOAD_IDLE_TIMEOUT then return nil, "network timed out" end
+    return true
+end
+
+local function waitForDownloadIo(download)
+    local active, err = downloadIsActive(download)
+    if not active then return nil, err end
+    coroutine.yield()
+    return downloadIsActive(download)
+end
+
+local function asyncConnect(download, sock, host, port)
+    sock:settimeout(0)
+    while true do
+        local connected, err = sock:connect(host, port)
+        if connected or err == "already connected" then
+            markDownloadActivity(download)
+            return true
+        end
+        if err ~= "timeout" and err ~= "Operation already in progress" then return nil, "connect error: " .. tostring(err) end
+        local active, wait_err = waitForDownloadIo(download)
+        if not active then return nil, wait_err end
+    end
+end
+
+local function asyncHandshake(download, sock)
+    while true do
+        local ok, err = sock:dohandshake()
+        if ok then
+            markDownloadActivity(download)
+            return true
+        end
+        if err ~= "wantread" and err ~= "wantwrite" and err ~= "timeout" then return nil, "TLS handshake error: " .. tostring(err) end
+        local active, wait_err = waitForDownloadIo(download)
+        if not active then return nil, wait_err end
+    end
+end
+
+local function asyncSend(download, sock, data)
+    local index = 1
+    while index <= #data do
+        local sent, err, last = sock:send(data, index)
+        if sent then
+            index = sent + 1
+            markDownloadActivity(download)
+        elseif err == "timeout" or err == "wantwrite" or err == "wantread" then
+            if last then index = last + 1 end
+            local active, wait_err = waitForDownloadIo(download)
+            if not active then return nil, wait_err end
+        else
+            return nil, "send error: " .. tostring(err)
+        end
+    end
+    return true
+end
+
+local function asyncReceive(download, sock, pattern)
+    local accumulated = ""
+    while true do
+        local value, err, partial = sock:receive(pattern, accumulated)
+        if value then
+            markDownloadActivity(download)
+            return value
+        end
+        if err == "timeout" or err == "wantread" or err == "wantwrite" then
+            accumulated = partial or accumulated
+            if #accumulated > 0 then markDownloadActivity(download) end
+            local active, wait_err = waitForDownloadIo(download)
+            if not active then return nil, wait_err end
+        else
+            return nil, tostring(err), partial
+        end
+    end
+end
+
+local function closeSocket(sock)
+    if sock then pcall(function() sock:close() end) end
+end
+
+local function writeDownloadChunk(download, handle, chunk)
+    if not chunk or #chunk == 0 then return true end
+    local ok, err = handle:write(chunk)
+    if not ok then return nil, "file write error: " .. tostring(err) end
+    download.bytes = (download.bytes or 0) + #chunk
+    if (download.total or 0) > 0 then download.progress = math.floor(math.min(100, 100 * download.bytes / download.total)) end
+    download.burst_bytes = (download.burst_bytes or 0) + #chunk
+    markDownloadActivity(download)
+    if download.burst_bytes >= DOWNLOAD_BURST_BYTES then
+        download.burst_bytes = 0
+        local active, wait_err = waitForDownloadIo(download)
+        if not active then return nil, wait_err end
+    end
+    return true
+end
+
+local function streamModelUrl(download, url, redirect_count, range_start)
+    local socket = require("socket")
+    local socket_url = require("socket.url")
+    local ssl = require("ssl")
+    redirect_count = redirect_count or 0
+    if redirect_count > 5 then return nil, "too many redirects" end
+
+    local parsed = socket_url.parse(url)
+    if not parsed or not parsed.host or (parsed.scheme ~= "https" and parsed.scheme ~= "http") then return nil, "invalid download URL" end
+    if parsed.scheme ~= "https" then return nil, "model download redirect was not HTTPS" end
+    local host = parsed.host
+    local port = tonumber(parsed.port) or 443
+    local path = parsed.path or "/"
+    if parsed.query and parsed.query ~= "" then path = path .. "?" .. parsed.query end
+    local sock = socket.tcp()
+    local connected, connect_err = asyncConnect(download, sock, host, port)
+    if not connected then closeSocket(sock); return nil, connect_err end
+
+    local tls_sock, wrap_err = ssl.wrap(sock, {
+        mode = "client", protocol = "any", verify = "none",
+        options = { "all", "no_sslv2", "no_sslv3" },
+    })
+    if not tls_sock then closeSocket(sock); return nil, "TLS setup error: " .. tostring(wrap_err) end
+    sock = tls_sock
+    sock:settimeout(0)
+    if sock.sni then pcall(function() sock:sni(host) end) end
+    local handshaken, handshake_err = asyncHandshake(download, sock)
+    if not handshaken then closeSocket(sock); return nil, handshake_err end
+
+    local host_header = host
+    if port ~= 443 then host_header = host_header .. ":" .. tostring(port) end
+    local request = {
+        "GET " .. path .. " HTTP/1.1",
+        "Host: " .. host_header,
+        "User-Agent: AppDock-AIChat/1.2",
+        "Accept: application/octet-stream",
+        "Connection: close",
+    }
+    if range_start and range_start > 0 then request[#request + 1] = "Range: bytes=" .. tostring(range_start) .. "-" end
+    request[#request + 1] = ""
+    request[#request + 1] = ""
+    local sent, send_err = asyncSend(download, sock, table.concat(request, "\r\n"))
+    if not sent then closeSocket(sock); return nil, send_err end
+
+    local headers, status_line = {}, nil
+    while true do
+        local line, read_err = asyncReceive(download, sock, "*l")
+        if not line then closeSocket(sock); return nil, "header read error: " .. tostring(read_err) end
+        if line == "" then break end
+        if not status_line then
+            status_line = line
+        else
+            local key, value = line:match("^(.-):%s*(.*)")
+            if key and value then headers[key:lower()] = value end
+        end
+    end
+    local code = tonumber(status_line and status_line:match("HTTP/%d%.%d%s+(%d%d%d)"))
+    if not code then closeSocket(sock); return nil, "invalid HTTP response" end
+    if code >= 300 and code < 400 and headers.location then
+        local next_url = socket_url.absolute(url, headers.location:gsub("\r$", ""))
+        closeSocket(sock)
+        return streamModelUrl(download, next_url, redirect_count + 1, range_start)
+    end
+    if code < 200 or code > 299 then closeSocket(sock); return nil, "HTTP " .. tostring(code) end
+
+    local append, total = false, nil
+    if code == 206 then
+        local first, _, full_size = (headers["content-range"] or ""):match("^bytes%s+(%d+)%-(%d+)/(%d+)$")
+        if not first or tonumber(first) ~= (range_start or 0) then closeSocket(sock); return nil, "invalid resume response" end
+        append, total = true, tonumber(full_size)
+    else
+        total = tonumber(headers["content-length"])
+        range_start = 0
+    end
+    local handle, open_err = io.open(download.partial, append and "ab" or "wb")
+    if not handle then closeSocket(sock); return nil, "cannot save model: " .. tostring(open_err) end
+    download.bytes = append and (range_start or 0) or 0
+    download.total = total or 0
+    download.progress = download.total > 0 and math.floor(math.min(100, 100 * download.bytes / download.total)) or 0
+
+    local function fail(err)
+        handle:close()
+        closeSocket(sock)
+        return nil, err
+    end
+    local function save(chunk)
+        local ok, err = writeDownloadChunk(download, handle, chunk)
+        if not ok then return nil, err end
+        return true
+    end
+
+    local transfer = headers["transfer-encoding"]
+    if transfer and transfer:lower():find("chunked", 1, true) then
+        while true do
+            local size_line, size_err = asyncReceive(download, sock, "*l")
+            if not size_line then return fail("chunk header error: " .. tostring(size_err)) end
+            local size_hex = size_line:match("^%s*([%x]+)")
+            local size = size_hex and tonumber(size_hex, 16)
+            if not size then return fail("invalid chunked response") end
+            if size == 0 then break end
+            local chunk, chunk_err = asyncReceive(download, sock, size)
+            if not chunk then return fail("chunk read error: " .. tostring(chunk_err)) end
+            local saved, save_err = save(chunk)
+            if not saved then return fail(save_err) end
+            local _, ending_err = asyncReceive(download, sock, 2)
+            if ending_err then return fail("chunk terminator error: " .. tostring(ending_err)) end
+        end
+    elseif headers["content-length"] then
+        local remaining = tonumber(headers["content-length"]) or 0
+        while remaining > 0 do
+            local chunk, chunk_err = asyncReceive(download, sock, math.min(16384, remaining))
+            if not chunk then return fail("file read error: " .. tostring(chunk_err)) end
+            remaining = remaining - #chunk
+            local saved, save_err = save(chunk)
+            if not saved then return fail(save_err) end
+        end
+    else
+        while true do
+            local chunk, chunk_err, partial = asyncReceive(download, sock, 16384)
+            if chunk then
+                local saved, save_err = save(chunk)
+                if not saved then return fail(save_err) end
+            elseif chunk_err == "closed" then
+                if partial and #partial > 0 then
+                    local saved, save_err = save(partial)
+                    if not saved then return fail(save_err) end
+                end
+                break
+            else
+                return fail("file read error: " .. tostring(chunk_err))
+            end
+        end
+    end
+    handle:close()
+    closeSocket(sock)
+    if download.total > 0 and download.bytes ~= download.total then return nil, "incomplete model file" end
+    return true
+end
+
+local function downloadModel(download)
+    local partial_size = fileSize(download.partial)
+    if partial_size > 0 and not hasGgufHeader(download.partial) then
+        os.remove(download.partial)
+        partial_size = 0
+    end
+    return streamModelUrl(download, download.model.url, 0, partial_size)
+end
+
+local function finishModelDownload(instance, context, succeeded, err)
+    local state = stateFor(instance)
+    local download = state.download
+    if not download then return end
+    if succeeded and hasGgufHeader(download.partial) then
+        local renamed, rename_err = os.rename(download.partial, download.target)
+        if renamed then
+            if state.settings.provider == "local" then state.settings.model = download.model.filename end
+            state.status = _("Downloaded: ") .. download.model.title
+            saveSettings(state.settings)
+        else
+            state.status = _("Model download failed: could not save the file (") .. short(rename_err or "rename failed", 80) .. ")"
+        end
+    else
+        local saved = fileSize(download.partial)
+        local resume_note = saved > 0 and (" " .. friendlyBytes(saved) .. " saved for resume.") or ""
+        state.status = _("Model download failed: ") .. short(err or "invalid GGUF file", 100) .. resume_note
+    end
+    state.download = nil
+    context.requestRebuild("ui")
+end
+
+pumpModelDownload = function(instance, context)
+    local state = stateFor(instance)
+    local download = state.download
+    if not download then return end
+    if os.time() - (download.started_at or os.time()) > DOWNLOAD_MAX_TIME then download.cancelled = true end
+    local resumed, succeeded, err = coroutine.resume(download.worker)
+    if not resumed then
+        finishModelDownload(instance, context, false, "internal downloader error: " .. tostring(succeeded))
+        return
+    end
+    if coroutine.status(download.worker) == "dead" then
+        finishModelDownload(instance, context, succeeded == true, err)
+        return
+    end
+    context.requestRebuild("fast")
+    UIManager:scheduleIn(DOWNLOAD_POLL_INTERVAL, function() pumpModelDownload(instance, context) end)
+end
+
 local function startModelDownload(instance, context, model)
     local state = stateFor(instance)
     if state.download then
@@ -144,61 +452,19 @@ local function startModelDownload(instance, context, model)
         context.requestRebuild("ui")
         return
     end
-    local work = modelDirectory() .. "/." .. model.id .. ".download"
-    local log_path, exit_path, partial = work .. ".log", work .. ".exit", target .. ".part"
-    os.remove(log_path); os.remove(exit_path); os.remove(partial)
-    local command = "curl -L --fail --retry 2 --connect-timeout 15 --max-time 7200 --progress-bar"
-        .. " -o " .. shellQuote(partial) .. " " .. shellQuote(model.url)
-        .. " >" .. shellQuote(log_path) .. " 2>&1; code=$?; echo $code >" .. shellQuote(exit_path)
-    local launch = "( " .. command .. " ) </dev/null >/dev/null 2>&1 & echo $!"
-    local pipe = io.popen("sh -c " .. shellQuote(launch), "r")
-    local pid = pipe and tonumber(pipe:read("*l")) or nil
-    if pipe then pipe:close() end
-    if not pid then
-        state.status = _("The model download could not be started.")
-        context.requestRebuild("ui")
-        return
-    end
-    state.download = { model_id = model.id, model = model, pid = pid, log = log_path, exit = exit_path, partial = partial, target = target, progress = 0 }
-    state.status = _("Downloading ") .. model.title .. "…"
+    local partial = target .. ".part"
+    local now = os.time()
+    local download = {
+        model_id = model.id, model = model, partial = partial, target = target,
+        progress = 0, bytes = fileSize(partial), total = 0,
+        started_at = now, last_activity = now, burst_bytes = 0,
+    }
+    download.worker = coroutine.create(function() return downloadModel(download) end)
+    state.download = download
+    state.status = download.bytes > 0 and (_("Resuming ") .. model.title .. "…") or (_("Downloading ") .. model.title .. "…")
     saveSettings(state.settings)
     context.requestRebuild("ui")
-    UIManager:scheduleIn(.5, function() pollModelDownload(instance, context) end)
-end
-
-pollModelDownload = function(instance, context)
-    local state = stateFor(instance)
-    local download = state.download
-    if not download then return end
-    local log = io.open(download.log, "rb")
-    if log then
-        local text = log:read("*a") or ""
-        log:close()
-        local latest
-        for value in text:gmatch("([%d]+[%.]?[%d]*)%%") do latest = tonumber(value) end
-        if latest then download.progress = math.max(0, math.min(100, latest)) end
-    end
-    local exit = io.open(download.exit, "rb")
-    if not exit then
-        UIManager:scheduleIn(.5, function() pollModelDownload(instance, context) end)
-        context.requestRebuild("fast")
-        return
-    end
-    local code = tonumber(exit:read("*a") or "1") or 1
-    exit:close()
-    os.remove(download.exit)
-    if code == 0 and fileSize(download.partial) > 0 then
-        os.rename(download.partial, download.target)
-        if state.settings.provider == "local" then state.settings.model = download.model.filename end
-        state.status = _("Downloaded: ") .. download.model.title
-        saveSettings(state.settings)
-    else
-        os.remove(download.partial)
-        state.status = _("Model download failed. Check the network connection.")
-    end
-    os.remove(download.log)
-    state.download = nil
-    context.requestRebuild("ui")
+    UIManager:scheduleIn(0, function() pumpModelDownload(instance, context) end)
 end
 
 local function validEndpoint(endpoint)
@@ -433,4 +699,7 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.1.1", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane }
+return {
+    id = "ai_chat", version = "1.2.0", title = "AI Chat Agent", subtitle = "Groq, local model and GGUF downloads", symbol = "AI", logo = "dchat", buildPane = buildPane,
+    _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload },
+}
