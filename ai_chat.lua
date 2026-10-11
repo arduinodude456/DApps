@@ -150,6 +150,16 @@ local function installedModelPath(settings)
             if fileExists(path) then return path end
         end
     end
+    -- Also recover files downloaded by AppDock AI Chat 1.2/1.3, where the
+    -- local_model selection was not stored separately yet.
+    for _, model in ipairs(MODEL_CATALOG) do
+        local path = modelPath(model)
+        if fileExists(path) then
+            settings.local_model = model.filename
+            settings.model = model.filename
+            return path
+        end
+    end
     return nil
 end
 
@@ -841,6 +851,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.4.0", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+return { id = "ai_chat", version = "1.4.1", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
     _test = { modelCatalog = MODEL_CATALOG, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }
