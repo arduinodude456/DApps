@@ -1,0 +1,7 @@
+# Minecraft 3D 4.0.0
+
+Die Welt ist jetzt **96×96 Blöcke** groß und besteht aus zwölf Biomen (Ozean, Strand, Wüste, Ebene, Wald, Birkenwald, Taiga, Schneeebene, Sumpf, Dschungel, Savanne, Berge) mit eigenen Oberflächenblöcken, Bäumen je Biom, Kakteen, Getreide, Seen und Flüssen, Erdschichten sowie Erzadern nach Tiefe (Kohle, Eisen, Gold, Diamant, Redstone). **Dörfer** mit Häusern, Brunnen und bewirtschafteten Feldern entstehen auf flachen Ebenen. Der Blockkatalog umfasst über 35 Blöcke mit eigenen 8×8-Texturen und Bedrock-typischen Drops (Gras → Erde, Stein → Bruchstein, Erze → Erz).
+
+Das Inventar folgt Minecraft Bedrock: **36 Slots** (neun Hotbar-Plätze plus 27 Lagerplätze), Stapelgrenze 64, Tippen nimmt auf, legt ab, tauscht und stapelt um. Das **Handwerksmenü** verbraucht Zutaten aus dem Inventar und bietet 14 Rezepte (Bretter, Stöcke, Werkbank, Ofen, Fackeln, Ziegelsteine, Steinziegel, Glas, Leiter, Schneeblock und mehr). Der Tippmodus lässt sich zwischen **Setzen** und **Abbauen** umschalten; langes Halten führt jeweils die andere Aktion aus. Ein leer werdender Handslot wird wie in Bedrock automatisch aus einem passenden Stapel aufgefüllt.
+
+Der Farbpfad nutzt jetzt acht Druckfarben inklusive Weiß, feste Ink-Paare für neutrale, braune und dunkle Blöcke sowie hellere Texturen für Laub, Stämme und Erde, damit Blöcke nicht mehr zu schwarzen Flächen zusammenfallen. Der monochrome Pfad behält seinen kontrastreichen Schwarz-Weiß-Aufbau.
