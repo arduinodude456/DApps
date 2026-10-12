@@ -1,5 +1,5 @@
 --[[--
-Regression test for Minecraft 3D 4.1.2.
+Regression test for Minecraft 3D 4.1.3.
 
 Covers the world generator (biomes, trees, villages, ore layers), the renderer
 (mono and color paths, ray cache reuse, local refresh regions), the 36-slot
@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.1.2", "Minecraft 3D must publish the inventory, crafting and biome release")
+assert(app.id == "minecraft" and app.version == "4.1.3", "Minecraft 3D must publish the inventory, crafting and biome release")
 
 --[[--
 Palette and dithering helpers
@@ -272,11 +272,13 @@ local old_refresh_fast, live_refreshes = canvas.refreshFast, 0
 canvas.refreshFast = function() live_refreshes = live_refreshes + 1 end
 local yaw_before, pitch_before = session.yaw, session.pitch
 assert(canvas:onPanMinecraftLook("PanMinecraftLook", { pos = { x = 100, y = 100 } }), "A look pan must start tracking")
+assert(session.live_look == true, "A live pan must switch to the fast preview renderer")
 assert(canvas:onPanMinecraftLook("PanMinecraftLook", { pos = { x = 130, y = 80 } }), "A look pan must update continuously")
 assert(session.yaw > yaw_before and session.pitch > pitch_before and live_refreshes == 1,
     "Finger movement must update yaw/pitch live and refresh the canvas")
 assert(canvas:onPanReleaseMinecraftLook("PanReleaseMinecraftLook", { pos = { x = 130, y = 80 } }), "A look pan must release cleanly")
 assert(canvas._look_pan_last == nil, "Pan release must clear the tracked finger position")
+assert(session.live_look == false, "Pan release must restore the full-quality renderer")
 canvas.refreshFast = old_refresh_fast
 
 color_enabled = false
@@ -629,4 +631,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.1.2-ok")
+print("minecraft-4.1.3-ok")
