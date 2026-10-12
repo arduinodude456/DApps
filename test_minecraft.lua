@@ -1,5 +1,5 @@
 --[[--
-Regression test for Minecraft 3D 4.1.0.
+Regression test for Minecraft 3D 4.1.1.
 
 Covers the world generator (biomes, trees, villages, ore layers), the renderer
 (mono and color paths, ray cache reuse, local refresh regions), the 36-slot
@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.1.0", "Minecraft 3D must publish the inventory, crafting and biome release")
+assert(app.id == "minecraft" and app.version == "4.1.1", "Minecraft 3D must publish the inventory, crafting and biome release")
 
 --[[--
 Palette and dithering helpers
@@ -620,4 +620,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.1.0-ok")
+print("minecraft-4.1.1-ok")
