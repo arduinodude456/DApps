@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.3.8", "Minecraft 3D must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.3.9", "Minecraft 3D must publish the splash, world list and creation menus")
 local embedded_logo = test.ensureEmbeddedLogo()
 local embedded_file = assert(io.open(embedded_logo, "rb"), "The installed DApp must materialize its embedded logo")
 assert(embedded_file:read(8) == "\137PNG\13\10\26\10", "The embedded logo must be a valid PNG")
@@ -657,4 +657,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.3.8-ok")
+print("minecraft-4.3.9-ok")

@@ -1302,7 +1302,7 @@ function VoxelSession.new(seed)
     self._jumpTick = function() self:tickJump() end
     self._heldMoveTick = function() self:tickHeldMove() end
     self._mobTick = function() self:tickMobs() end
-    UIManager:scheduleIn(700, self._mobTick)
+    UIManager:scheduleIn(420, self._mobTick)
     return self
 end
 
@@ -1720,8 +1720,8 @@ function VoxelSession:tickMobs()
     local world = self.world
     if world and world.mobs then
         for index, mob in ipairs(world.mobs) do
-            local phase = (mob.phase or index) + self.mob_clock * 0.34
-            local speed = 0.075 + (mob.gait or 0) * 0.035
+            local phase = (mob.phase or index) + self.mob_clock * 0.58
+            local speed = 0.16 + (mob.gait or 0) * 0.08
             local nx = mob.x + math.cos(phase) * speed
             local nz = mob.z + math.sin(phase) * speed
             if nx > 2 and nz > 2 and nx < world.size - 2 and nz < world.size - 2 then
@@ -1739,7 +1739,7 @@ function VoxelSession:tickMobs()
         end
     end
     if self.canvas then self.canvas:refreshFast() end
-    UIManager:scheduleIn(700, self._mobTick)
+    UIManager:scheduleIn(420, self._mobTick)
 end
 
 function VoxelSession:beginMove(direction)
@@ -1936,6 +1936,27 @@ function VoxelCanvas:_fillProjectedFace(bb, points, ink)
     end
 end
 
+function VoxelCanvas:_sheepHasLineOfSight(session, mob)
+    local world = session.world
+    local ox, oz = session.player_x, session.player_z
+    local oy = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
+    local tx, tz, ty = mob.x, mob.z, mob.y + 0.62
+    local dx, dz, dy = tx - ox, tz - oz, ty - oy
+    local distance = math.sqrt(dx * dx + dz * dz + dy * dy)
+    if distance <= 0.1 then return true end
+    local steps = math.max(2, math.ceil(distance * 8))
+    -- Sample the ray before the final mob cell. A solid voxel between the
+    -- player and the sheep occludes it exactly like a Minecraft block would.
+    for index = 1, steps - 1 do
+        local t = index / steps
+        local cell_x = math.floor(ox + dx * t)
+        local cell_z = math.floor(oz + dz * t)
+        local cell_y = math.floor(oy + dy * t)
+        if blockAt(world, cell_x, cell_z, cell_y) then return false end
+    end
+    return true
+end
+
 function VoxelCanvas:_drawSheepCuboid(bb, session, origin_x, origin_y, cx, cz, y0, y1, half_x, half_z, shades)
     local function point(wx, wz, wy)
         local px, py = self:projectPoint(wx, wz, wy, session, origin_x, origin_y)
@@ -1967,7 +1988,8 @@ function VoxelCanvas:_drawSheep(bb, x, y, session)
         local dx, dz = mob.x - session.player_x, mob.z - session.player_z
         local depth = dx * forward_x + dz * forward_z
         local lateral = dx * right_x + dz * right_z
-        if depth > 0.7 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.35 then
+        if depth > 0.7 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.35
+            and self:_sheepHasLineOfSight(session, mob) then
             local projected_size = math.max(6, math.min(34, focal / depth * 0.58))
             local scale = projected_size / math.max(8, focal / depth)
             local body_x, body_z = mob.x, mob.z
@@ -3440,7 +3462,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.8",
+    version = "4.3.9",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
