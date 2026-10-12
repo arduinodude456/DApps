@@ -1913,45 +1913,75 @@ function VoxelCanvas:_stroke(bb, first, second, thickness)
     end
 end
 
+function VoxelCanvas:_fillProjectedFace(bb, points, ink)
+    local min_y, max_y = points[1][2], points[1][2]
+    for _, point in ipairs(points) do
+        min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
+    end
+    for scan_y = math.floor(min_y), math.ceil(max_y) do
+        local intersections = {}
+        for index = 1, #points do
+            local a, b = points[index], points[index % #points + 1]
+            if (a[2] <= scan_y and b[2] > scan_y) or (b[2] <= scan_y and a[2] > scan_y) then
+                local ratio = (scan_y - a[2]) / (b[2] - a[2])
+                intersections[#intersections + 1] = a[1] + (b[1] - a[1]) * ratio
+            end
+        end
+        table.sort(intersections)
+        for index = 1, #intersections - 1, 2 do
+            local left, right = math.floor(intersections[index]), math.ceil(intersections[index + 1])
+            if right >= left then bb:paintRect(left, scan_y, right - left + 1, 1, ink) end
+        end
+    end
+end
+
+function VoxelCanvas:_drawSheepCuboid(bb, session, origin_x, origin_y, cx, cz, y0, y1, half_x, half_z, shades)
+    local function point(wx, wz, wy)
+        local px, py = self:projectPoint(wx, wz, wy, session, origin_x, origin_y)
+        return { px, py }
+    end
+    local sx = session.player_x >= cx and 1 or -1
+    local sz = session.player_z >= cz and 1 or -1
+    local top = { point(cx-half_x, cz-half_z, y1), point(cx+half_x, cz-half_z, y1), point(cx+half_x, cz+half_z, y1), point(cx-half_x, cz+half_z, y1) }
+    local xface = { point(cx+sx*half_x, cz-half_z, y0), point(cx+sx*half_x, cz+half_z, y0), point(cx+sx*half_x, cz+half_z, y1), point(cx+sx*half_x, cz-half_z, y1) }
+    local zface = { point(cx-half_x, cz+sz*half_z, y0), point(cx+half_x, cz+sz*half_z, y0), point(cx+half_x, cz+sz*half_z, y1), point(cx-half_x, cz+sz*half_z, y1) }
+    self:_fillProjectedFace(bb, top, shades.top)
+    self:_fillProjectedFace(bb, xface, shades.side)
+    self:_fillProjectedFace(bb, zface, shades.front)
+    for _, face in ipairs({ top, xface, zface }) do
+        for index = 1, #face do self:_stroke(bb, face[index], face[index % #face + 1], 1) end
+    end
+end
+
 function VoxelCanvas:_drawSheep(bb, x, y, session)
     local world = session.world
     if not world or not world.mobs then return end
     local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
     local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
     local focal = (self.width / 2) / math.tan(math.rad(90) / 2)
-    local light_shade = colorRenderingEnabled() and Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE
-    local dark_shade = colorRenderingEnabled() and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
+    local shades = colorRenderingEnabled()
+        and { top = Blitbuffer.COLOR_LIGHT_GRAY, side = Blitbuffer.COLOR_DARK_GRAY, front = Blitbuffer.COLOR_WHITE }
+        or { top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_WHITE }
     for _, mob in ipairs(world.mobs) do
         local dx, dz = mob.x - session.player_x, mob.z - session.player_z
         local depth = dx * forward_x + dz * forward_z
         local lateral = dx * right_x + dz * right_z
         if depth > 0.7 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.35 then
-            local sx, sy = self:projectPoint(mob.x, mob.z, mob.y + 0.85, session, x, y)
-            local size = math.max(6, math.min(34, focal / depth * 0.58))
-            local body_w, body_h = math.max(7, math.floor(size * 0.95)), math.max(5, math.floor(size * 0.54))
-            local body_x, body_y = math.floor(sx - body_w / 2), math.floor(sy - body_h / 2)
-            local shadow = math.max(1, math.floor(size * 0.12))
-            -- Blocky wool body: outline, bright front, dark side and a top plane.
-            bb:paintRect(body_x - 1, body_y - 1, body_w + shadow + 2, body_h + shadow + 2, Blitbuffer.COLOR_BLACK)
-            bb:paintRect(body_x, body_y + shadow, body_w, body_h, Blitbuffer.COLOR_WHITE)
-            bb:paintRect(body_x + body_w - shadow, body_y + shadow, shadow, body_h, dark_shade)
-            bb:paintRect(body_x, body_y, body_w, shadow + 1, light_shade)
-            -- Head projects from the right-front corner and has a visible snout.
-            local head = math.max(4, math.floor(size * 0.40))
-            local head_x, head_y = body_x + body_w - math.floor(head * 0.25), body_y - math.floor(head * 0.34)
-            bb:paintRect(head_x - 1, head_y - 1, head + shadow + 2, head + shadow + 2, Blitbuffer.COLOR_BLACK)
-            bb:paintRect(head_x, head_y + shadow, head, head, dark_shade)
-            bb:paintRect(head_x, head_y, head, shadow + 1, light_shade)
-            bb:paintRect(head_x + math.floor(head * 0.55), head_y + math.floor(head * 0.48), 1, 1, Blitbuffer.COLOR_BLACK)
-            -- Four separate legs make the mob read as a 3D animal while walking.
-            local leg_w, leg_h = math.max(1, math.floor(size * 0.12)), math.max(3, math.floor(size * 0.34))
-            local stride = math.floor(math.sin(mob.walk_cycle or 0) * math.max(1, size * 0.08))
-            for leg = 1, 4 do
-                local lx = body_x + math.floor((leg == 1 or leg == 3) and body_w * 0.16 or body_w * 0.70)
-                local ly = body_y + shadow + body_h - 1
-                if leg == 2 or leg == 4 then ly = ly + stride end
-                bb:paintRect(lx, ly, leg_w, leg_h, Blitbuffer.COLOR_BLACK)
+            local projected_size = math.max(6, math.min(34, focal / depth * 0.58))
+            local scale = projected_size / math.max(8, focal / depth)
+            local body_x, body_z = mob.x, mob.z
+            -- Body, four legs and head are all world-space cuboids. Unlike the
+            -- old sprite, every part has a projected top and two side faces.
+            self:_drawSheepCuboid(bb, session, x, y, body_x, body_z, mob.y + 0.05, mob.y + 0.78, 0.46, 0.32, shades)
+            local leg_offsets = { {-0.30,-0.20}, {0.30,-0.20}, {-0.30,0.20}, {0.30,0.20} }
+            for index, offset in ipairs(leg_offsets) do
+                local stride = math.sin((mob.walk_cycle or 0) + (index % 2) * math.pi) * 0.055
+                self:_drawSheepCuboid(bb, session, x, y, body_x + offset[1], body_z + offset[2], mob.y - 0.02, mob.y + 0.35 + stride, 0.09, 0.09, shades)
             end
+            local to_x, to_z = session.player_x - body_x, session.player_z - body_z
+            local distance = math.max(0.01, math.sqrt(to_x * to_x + to_z * to_z))
+            local head_x, head_z = body_x + to_x / distance * 0.52, body_z + to_z / distance * 0.52
+            self:_drawSheepCuboid(bb, session, x, y, head_x, head_z, mob.y + 0.62, mob.y + 1.08, 0.22, 0.22, shades)
         end
     end
 end
@@ -3395,7 +3425,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.5",
+    version = "4.3.6",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
