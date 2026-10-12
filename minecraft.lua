@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.0.1 fixes KOReader gesture dispatch for placing, mining and hotbar selection.
+Version 4.0.2 improves face lighting so top and side surfaces read as three-dimensional.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -72,8 +72,11 @@ local COLOR_PALETTE = {
 local COLOR_PALETTE_ORDER = { "black", "red", "green", "blue", "cyan", "magenta", "yellow", "white" }
 -- Texture level 0 stays black (coal, obsidian, ore spots); the remaining levels
 -- render close to the block's real color with a slightly brighter top face, so
--- earth and wooden blocks do not collapse into black dithers on a 7-ink panel.
-local SHADE_FACTORS = { 0, 0.72, 0.92, 1.05 }
+-- earth and wooden blocks do not collapse into black dithers on the 8-ink panel.
+-- Keep the top bright and both side orientations visibly darker. The previous
+-- close factors made a wooden top and its sides use almost the same ink
+-- coverage, so the voxel read as a flat patch.
+local SHADE_FACTORS = { 0, 0.62, 0.84, 1.06 }
 local PLAYER_EYE_HEIGHT = 1.65
 local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
@@ -1868,11 +1871,10 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 local u = max(0, min(7, floor(fu * 8)))
                 local v = max(0, min(7, floor(fv * 8)))
                 local level = pattern[v * 8 + u + 1]
-                -- A top face is one step brighter and a side face one step
-                -- darker, but genuinely black texture pixels (coal, obsidian,
-                -- ore spots) stay black and a side face never collapses into
-                -- solid black: the previous shading turned every earth and wood
-                -- side face into a black rectangle.
+                -- A top face is brighter. Both vertical face orientations are
+                -- shaded (the old code only darkened one of them), while both
+                -- keep one texture step of color so wood does not turn into a
+                -- black silhouette on a color panel.
                 if color_mode then
                     -- Color panels shape the surface with its dithered color: a
                     -- top face is one step brighter, but the base texture step
@@ -1880,7 +1882,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
                     -- solid black surface.
                     if top then
                         if level > 0 then level = level + 1 end
-                    elseif hit_side == 0 and level > 1 then
+                    elseif hit_side == 0 then
+                        level = level - 1
+                    elseif hit_side == 2 then
                         level = level - 1
                     end
                 elseif hit_side == 0 and level > 1 then
@@ -2662,7 +2666,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.0.1",
+    version = "4.0.2",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
