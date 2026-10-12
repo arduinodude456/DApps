@@ -3440,7 +3440,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.7",
+    version = "4.3.8",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -3456,17 +3456,21 @@ return {
         if state.screen == "about" then return buildAboutPane(state, context, width, height) end
         local margin, gap = px(9), px(5)
         local header_h, controls_h, hotbar_h = px(43), px(31), px(30)
-        local canvas_h = math.max(px(76), height - header_h - controls_h - hotbar_h - px(33))
+        -- The D-pad and jump button get a real layout band, not an overlay on
+        -- the voxel canvas. The world can therefore never paint over them.
+        local touch_band_h = math.min(px(190), math.max(px(104), math.floor(height * 0.22)))
+        local canvas_h = math.max(px(76), height - header_h - touch_band_h - controls_h - hotbar_h - px(39))
         local canvas_w = math.max(px(40), width - 2 * margin)
         local canvas_y = header_h
-        local hotbar_y = canvas_y + canvas_h + gap
+        local touch_band_y = canvas_y + canvas_h + gap
+        local hotbar_y = touch_band_y + touch_band_h + gap
         local controls_y = hotbar_y + hotbar_h + gap
         local button_w = math.max(px(26), math.floor((canvas_w - 5 * gap) / 6))
         -- Controls are thumb targets, not toolbar buttons. Keep them large on
         -- normal screens and clamp only when a compact split pane leaves less
         -- room than the preferred Bedrock size.
-        local joystick_size = math.min(px(174), math.floor(canvas_w * 0.46), math.max(px(96), canvas_h - px(10)))
-        local jump_w, jump_h = px(124), px(84)
+        local joystick_size = math.min(px(174), math.floor(canvas_w * 0.46), math.max(px(96), touch_band_h - px(10)))
+        local jump_w, jump_h = px(124), math.min(px(84), touch_band_h - px(10))
         local world_button_w = math.max(px(8), math.min(px(38), math.floor(canvas_w * 0.22)))
         local header_gap = math.min(gap, math.floor(canvas_w * 0.04))
         local color_button_w = math.max(0, math.min(px(58), canvas_w - world_button_w - header_gap))
@@ -3515,10 +3519,10 @@ return {
         if groups.Select then pane.key_events.MinecraftForwardSelect = { { groups.Select }, event = "MinecraftForward" } end
         canvas.overlap_offset = { margin, canvas_y }
         local joystick = Joystick:new{ width = joystick_size, height = joystick_size, canvas = canvas }
-        joystick.overlap_offset = { margin + px(6), canvas_y + canvas_h - joystick_size - px(6) }
+        joystick.overlap_offset = { margin + px(6), touch_band_y + math.floor((touch_band_h - joystick_size) / 2) }
         state.joystick = joystick
         local jump = JumpControl:new{ title = _("Springen"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end }
-        jump.overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) }
+        jump.overlap_offset = { margin + canvas_w - jump_w - px(8), touch_band_y + math.floor((touch_band_h - jump_h) / 2) }
         canvas.control_dpad_region = { x = joystick.overlap_offset[1], y = joystick.overlap_offset[2], w = joystick_size, h = joystick_size }
         canvas.control_jump_region = { x = jump.overlap_offset[1], y = jump.overlap_offset[2], w = jump_w, h = jump_h }
         canvas.control_dpad_widget, canvas.control_jump_widget = joystick, jump
