@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.1.1 adds screen-space voxel contours so raised blocks remain visually separated from the terrain.
+Version 4.1.2 improves touch controls with faster live-look sensitivity, larger Bedrock targets and safe control routing.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -90,8 +90,10 @@ local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
 local MOVE_FRAMES = 4
 local MOVE_FRAME_SECONDS = 0.045
-local LOOK_YAW_PER_PIXEL = 0.006
-local LOOK_PITCH_PER_PIXEL = 0.0045
+-- Mobile Bedrock look sensitivity: a normal thumb drag should turn the view
+-- decisively, not require a full-screen swipe for a small camera movement.
+local LOOK_YAW_PER_PIXEL = 0.014
+local LOOK_PITCH_PER_PIXEL = 0.010
 local START_PLAYER_X = 48.5
 local START_PLAYER_Z = 56.5
 local START_YAW = math.pi / 2
@@ -2101,9 +2103,36 @@ function VoxelCanvas:act(action, target)
     return result ~= false
 end
 
+-- OverlapGroup dispatch order differs slightly between KOReader builds. Keep
+-- the controls safe even when the full-canvas tap range receives the event
+-- first: a control tap is routed to its action and can never place a block.
+function VoxelCanvas:_controlActionAt(screen_x, screen_y)
+    local dpad, jump = self.control_dpad_region, self.control_jump_region
+    if dpad and screen_x >= dpad.x and screen_x < dpad.x + dpad.w
+        and screen_y >= dpad.y and screen_y < dpad.y + dpad.h then
+        local cell = math.floor(dpad.w / 3)
+        local x, y = screen_x - dpad.x, screen_y - dpad.y
+        if x >= cell and x < cell * 2 and y < cell then return "forward" end
+        if x < cell and y >= cell and y < cell * 2 then return "left" end
+        if x >= cell * 2 and y >= cell and y < cell * 2 then return "right" end
+        if x >= cell and x < cell * 2 and y >= cell * 2 then return "back" end
+        return "none"
+    end
+    if jump and screen_x >= jump.x and screen_x < jump.x + jump.w
+        and screen_y >= jump.y and screen_y < jump.y + jump.h then
+        return "jump"
+    end
+    return nil
+end
+
 function VoxelCanvas:onTapMinecraftExplore(first, second)
     local gesture = second or first
     if not gesture or not gesture.pos then return true end
+    local control_action = self:_controlActionAt(gesture.pos.x, gesture.pos.y)
+    if control_action then
+        self:act(control_action)
+        return true
+    end
     local target = self:pickBlock(gesture.pos.x, gesture.pos.y)
     if target then
         -- Bedrock: a tap interacts with the touched block face. Depending on the
@@ -2131,6 +2160,7 @@ function VoxelCanvas:onHoldMinecraftAction(first, second)
     local gesture = second or first
     local pos = gesture and gesture.pos
     if not pos then return true end
+    if self:_controlActionAt(pos.x, pos.y) then return true end
     local target = self:pickBlock(pos.x, pos.y)
     if target then
         self:act("hold", target)
@@ -2141,6 +2171,10 @@ end
 function VoxelCanvas:_panLook(gesture, finish)
     local pos = gesture and (gesture.pos or gesture)
     if not pos then return false end
+    if self:_controlActionAt(pos.x, pos.y) then
+        if finish then self._look_pan_last = nil end
+        return true
+    end
     local previous = self._look_pan_last
     self._look_pan_last = { x = pos.x, y = pos.y }
     if previous and self.session:lookDelta((pos.x or 0) - (previous.x or 0), (pos.y or 0) - (previous.y or 0)) then
@@ -2800,7 +2834,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.1.1",
+    version = "4.1.2",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -2817,8 +2851,11 @@ return {
         local hotbar_y = canvas_y + canvas_h + gap
         local controls_y = hotbar_y + hotbar_h + gap
         local button_w = math.max(px(26), math.floor((canvas_w - 5 * gap) / 6))
-        local joystick_size = math.min(px(76), math.floor(canvas_w * 0.22))
-        local jump_w, jump_h = px(58), px(30)
+        -- Controls are thumb targets, not toolbar buttons. Keep them large on
+        -- normal screens and clamp only when a compact split pane leaves less
+        -- room than the preferred Bedrock size.
+        local joystick_size = math.min(px(112), math.floor(canvas_w * 0.30), math.max(px(60), canvas_h - px(10)))
+        local jump_w, jump_h = px(82), px(58)
         local world_button_w = math.max(px(8), math.min(px(38), math.floor(canvas_w * 0.22)))
         local header_gap = math.min(gap, math.floor(canvas_w * 0.04))
         local color_button_w = math.max(0, math.min(px(58), canvas_w - world_button_w - header_gap))
@@ -2867,6 +2904,10 @@ return {
         local joystick = Joystick:new{ width = joystick_size, height = joystick_size, canvas = canvas }
         joystick.overlap_offset = { margin + px(6), canvas_y + canvas_h - joystick_size - px(6) }
         state.joystick = joystick
+        local jump = JumpControl:new{ title = _("Springen"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end }
+        jump.overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) }
+        canvas.control_dpad_region = { x = joystick.overlap_offset[1], y = joystick.overlap_offset[2], w = joystick_size, h = joystick_size }
+        canvas.control_jump_region = { x = jump.overlap_offset[1], y = jump.overlap_offset[2], w = jump_w, h = jump_h }
         local mode_label = state.session:tapActionLabel()
         local hint_text = state.session.tap_action == "place"
             and _("Tippen: Block setzen · Halten: abbauen · Wischen: umsehen")
@@ -2882,7 +2923,7 @@ return {
             canvas,
             hotbar,
             joystick,
-            JumpControl:new{ title = _("Springen"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end, overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) } },
+            jump,
             inventory_panel,
             crafting_panel,
             NavButton:new{ title = _("Links"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },

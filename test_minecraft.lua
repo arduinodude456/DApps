@@ -1,5 +1,5 @@
 --[[--
-Regression test for Minecraft 3D 4.1.1.
+Regression test for Minecraft 3D 4.1.2.
 
 Covers the world generator (biomes, trees, villages, ore layers), the renderer
 (mono and color paths, ray cache reuse, local refresh regions), the 36-slot
@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.1.1", "Minecraft 3D must publish the inventory, crafting and biome release")
+assert(app.id == "minecraft" and app.version == "4.1.2", "Minecraft 3D must publish the inventory, crafting and biome release")
 
 --[[--
 Palette and dithering helpers
@@ -556,6 +556,15 @@ assert(state.joystick:onTapMinecraftJoystick("TapMinecraftJoystick", {
 }), "The D-pad must accept the real two-argument tap callback")
 assert(dpad_action == "forward", "The upper D-pad button must move forward")
 state.canvas.act = old_dpad_act
+local old_control_pick = state.canvas.pickBlock
+state.canvas.pickBlock = function() error("A control tap must not raycast for block placement") end
+local jump_region = state.canvas.control_jump_region
+assert(state.canvas:onTapMinecraftExplore("TapMinecraftExplore", {
+    pos = { x = jump_region.x + jump_region.w / 2, y = jump_region.y + jump_region.h / 2 },
+}), "A jump-button tap routed through the canvas must be handled")
+assert(state.session.jump_frame ~= nil, "A jump-button tap must jump instead of placing a block")
+state.session.jump_frame, state.session.jump_offset = nil, 0
+state.canvas.pickBlock = old_control_pick
 -- KOReader calls handlers as (event_arg, gesture). Verify the real dispatch
 -- shape for canvas interaction and hotbar selection, not only direct helpers.
 local old_pick, old_act = state.canvas.pickBlock, state.canvas.act
@@ -620,4 +629,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.1.1-ok")
+print("minecraft-4.1.2-ok")
