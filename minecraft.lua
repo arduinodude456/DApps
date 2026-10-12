@@ -754,7 +754,7 @@ local function generateSheep(world, seed)
                 end
                 if clear then
                     sites[#sites + 1] = { x = x, z = z }
-                    sheep[#sheep + 1] = { x = x + 0.5, z = z + 0.5, y = ground, kind = "sheep", wool = "white" }
+                    sheep[#sheep + 1] = { x = x + 0.5, z = z + 0.5, y = ground, kind = "sheep", wool = "white", phase = hash2(seed + 2901, x, z) * math.pi * 2, gait = hash2(seed + 2902, x, z) }
                 end
             end
         end
@@ -1292,11 +1292,14 @@ function VoxelSession.new(seed)
         tap_action = "place",
         color_enabled = true,
         view_height = nil,
+        mob_clock = 0,
     }, VoxelSession)
     self:syncDerived()
     self.view_height = self:walkHeight(player_x, player_z)
     self._motionTick = function() self:tickMotion() end
     self._jumpTick = function() self:tickJump() end
+    self._mobTick = function() self:tickMobs() end
+    UIManager:scheduleIn(700, self._mobTick)
     return self
 end
 
@@ -1688,6 +1691,33 @@ function VoxelSession:lookDelta(delta_x, delta_y)
     return true
 end
 
+function VoxelSession:tickMobs()
+    self.mob_clock = (self.mob_clock or 0) + 1
+    local world = self.world
+    if world and world.mobs then
+        for index, mob in ipairs(world.mobs) do
+            local phase = (mob.phase or index) + self.mob_clock * 0.34
+            local speed = 0.075 + (mob.gait or 0) * 0.035
+            local nx = mob.x + math.cos(phase) * speed
+            local nz = mob.z + math.sin(phase) * speed
+            if nx > 2 and nz > 2 and nx < world.size - 2 and nz < world.size - 2 then
+                local ground = self:walkHeight(nx, nz)
+                local current_ground = self:walkHeight(mob.x, mob.z)
+                if math.abs(ground - current_ground) <= 1 then
+                    mob.x, mob.z, mob.y = nx, nz, ground
+                else
+                    mob.phase = (mob.phase or 0) + math.pi * 0.7
+                end
+            else
+                mob.phase = (mob.phase or 0) + math.pi
+            end
+            mob.walk_cycle = (mob.walk_cycle or 0) + speed * 8
+        end
+    end
+    if self.canvas then self.canvas:refreshFast() end
+    UIManager:scheduleIn(700, self._mobTick)
+end
+
 function VoxelSession:beginMove(direction)
     if self.motion then return false end
     local next_x = self.player_x + math.sin(self.yaw) * WALK_DISTANCE * direction
@@ -1705,6 +1735,7 @@ function VoxelSession:beginMove(direction)
         self.last_event = _("Dieser Block ist zu hoch.")
         return false
     end
+    self.live_look = true
     self.motion = {
         from_x = self.player_x, from_z = self.player_z,
         to_x = next_x, to_z = next_z,
@@ -1732,7 +1763,9 @@ function VoxelSession:tickMotion()
     if self.canvas then self.canvas:refreshFast() end
     if motion.frame >= MOVE_FRAMES then
         self.motion = nil
+        self.live_look = false
         self.view_height = self:walkHeight(self.player_x, self.player_z)
+        if self.canvas then self.canvas:refreshFast() end
     else
         UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._motionTick)
     end
@@ -1743,6 +1776,7 @@ function VoxelSession:move(direction)
     if not self:beginMove(direction) then return false end
     local motion = self.motion
     self.motion = nil
+    self.live_look = false
     UIManager:unschedule(self._motionTick)
     self.player_x, self.player_z = motion.to_x, motion.to_z
     self.view_height = self:walkHeight(self.player_x, self.player_z)
@@ -1861,27 +1895,39 @@ function VoxelCanvas:_drawSheep(bb, x, y, session)
     local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
     local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
     local focal = (self.width / 2) / math.tan(math.rad(90) / 2)
+    local light_shade = colorRenderingEnabled() and Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE
+    local dark_shade = colorRenderingEnabled() and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
     for _, mob in ipairs(world.mobs) do
         local dx, dz = mob.x - session.player_x, mob.z - session.player_z
         local depth = dx * forward_x + dz * forward_z
         local lateral = dx * right_x + dz * right_z
         if depth > 0.7 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.35 then
             local sx, sy = self:projectPoint(mob.x, mob.z, mob.y + 0.85, session, x, y)
-            local size = math.max(4, math.min(28, focal / depth * 0.52))
-            local body_w, body_h = math.max(5, math.floor(size * 0.95)), math.max(4, math.floor(size * 0.52))
+            local size = math.max(6, math.min(34, focal / depth * 0.58))
+            local body_w, body_h = math.max(7, math.floor(size * 0.95)), math.max(5, math.floor(size * 0.54))
             local body_x, body_y = math.floor(sx - body_w / 2), math.floor(sy - body_h / 2)
-            -- A black silhouette first keeps the animal legible on both white
-            -- E-Ink and dithered colour output; the inset white body reads as wool.
-            bb:paintRect(body_x - 1, body_y - 1, body_w + 2, body_h + 2, Blitbuffer.COLOR_BLACK)
-            bb:paintRect(body_x, body_y, body_w, body_h, Blitbuffer.COLOR_WHITE)
-            local head = math.max(3, math.floor(size * 0.38))
-            local head_x, head_y = body_x + body_w - math.floor(head * 0.35), body_y - math.floor(head * 0.35)
-            bb:paintRect(head_x - 1, head_y - 1, head + 2, head + 2, Blitbuffer.COLOR_BLACK)
-            bb:paintRect(head_x, head_y, head, head, Blitbuffer.COLOR_WHITE)
-            local leg_w = math.max(1, math.floor(size * 0.12))
-            local leg_h = math.max(2, math.floor(size * 0.30))
-            bb:paintRect(body_x + math.floor(body_w * 0.18), body_y + body_h, leg_w, leg_h, Blitbuffer.COLOR_BLACK)
-            bb:paintRect(body_x + math.floor(body_w * 0.72), body_y + body_h, leg_w, leg_h, Blitbuffer.COLOR_BLACK)
+            local shadow = math.max(1, math.floor(size * 0.12))
+            -- Blocky wool body: outline, bright front, dark side and a top plane.
+            bb:paintRect(body_x - 1, body_y - 1, body_w + shadow + 2, body_h + shadow + 2, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(body_x, body_y + shadow, body_w, body_h, Blitbuffer.COLOR_WHITE)
+            bb:paintRect(body_x + body_w - shadow, body_y + shadow, shadow, body_h, dark_shade)
+            bb:paintRect(body_x, body_y, body_w, shadow + 1, light_shade)
+            -- Head projects from the right-front corner and has a visible snout.
+            local head = math.max(4, math.floor(size * 0.40))
+            local head_x, head_y = body_x + body_w - math.floor(head * 0.25), body_y - math.floor(head * 0.34)
+            bb:paintRect(head_x - 1, head_y - 1, head + shadow + 2, head + shadow + 2, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(head_x, head_y + shadow, head, head, dark_shade)
+            bb:paintRect(head_x, head_y, head, shadow + 1, light_shade)
+            bb:paintRect(head_x + math.floor(head * 0.55), head_y + math.floor(head * 0.48), 1, 1, Blitbuffer.COLOR_BLACK)
+            -- Four separate legs make the mob read as a 3D animal while walking.
+            local leg_w, leg_h = math.max(1, math.floor(size * 0.12)), math.max(3, math.floor(size * 0.34))
+            local stride = math.floor(math.sin(mob.walk_cycle or 0) * math.max(1, size * 0.08))
+            for leg = 1, 4 do
+                local lx = body_x + math.floor((leg == 1 or leg == 3) and body_w * 0.16 or body_w * 0.70)
+                local ly = body_y + shadow + body_h - 1
+                if leg == 2 or leg == 4 then ly = ly + stride end
+                bb:paintRect(lx, ly, leg_w, leg_h, Blitbuffer.COLOR_BLACK)
+            end
         end
     end
 end
@@ -2196,6 +2242,16 @@ function VoxelCanvas:refreshFast()
     if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
     self._refresh_count = (self._refresh_count or 0) + 1
     UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
+    -- The canvas is larger than the controls and would otherwise paint over
+    -- them during every movement frame. Repaint both Bedrock controls last.
+    if self.control_dpad_widget and self.control_dpad_region then
+        local r = self.control_dpad_region
+        UIManager:widgetRepaint(self.control_dpad_widget, r.x, r.y)
+    end
+    if self.control_jump_widget and self.control_jump_region then
+        local r = self.control_jump_region
+        UIManager:widgetRepaint(self.control_jump_widget, r.x, r.y)
+    end
     -- Fast waveforms are intentionally used for motion, but they accumulate
     -- ghosting on E-Ink. Every second step gets a clean UI waveform for the
     -- same local region; it is still not a fullscreen refresh.
@@ -3265,7 +3321,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.3",
+    version = "4.3.4",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -3290,8 +3346,8 @@ return {
         -- Controls are thumb targets, not toolbar buttons. Keep them large on
         -- normal screens and clamp only when a compact split pane leaves less
         -- room than the preferred Bedrock size.
-        local joystick_size = math.min(px(128), math.floor(canvas_w * 0.34), math.max(px(68), canvas_h - px(10)))
-        local jump_w, jump_h = px(94), px(66)
+        local joystick_size = math.min(px(174), math.floor(canvas_w * 0.46), math.max(px(96), canvas_h - px(10)))
+        local jump_w, jump_h = px(124), px(84)
         local world_button_w = math.max(px(8), math.min(px(38), math.floor(canvas_w * 0.22)))
         local header_gap = math.min(gap, math.floor(canvas_w * 0.04))
         local color_button_w = math.max(0, math.min(px(58), canvas_w - world_button_w - header_gap))
@@ -3319,6 +3375,7 @@ return {
         state.inventory_panel, state.crafting_panel = inventory_panel, crafting_panel
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
         function pane:onDeactivate()
+            UIManager:unschedule(state.session._mobTick)
             if state.session.motion then
                 state.session.motion = nil
                 UIManager:unschedule(state.session._motionTick)
@@ -3344,6 +3401,7 @@ return {
         jump.overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) }
         canvas.control_dpad_region = { x = joystick.overlap_offset[1], y = joystick.overlap_offset[2], w = joystick_size, h = joystick_size }
         canvas.control_jump_region = { x = jump.overlap_offset[1], y = jump.overlap_offset[2], w = jump_w, h = jump_h }
+        canvas.control_dpad_widget, canvas.control_jump_widget = joystick, jump
         local mode_label = state.session:tapActionLabel()
         local hint_text = state.session.tap_action == "place"
             and _("Tippen: Block setzen · Halten: abbauen · Wischen: umsehen")
