@@ -144,8 +144,8 @@ World generation: biomes, trees, structures, ore layers
 local session = test.VoxelSession.new(12345)
 local world = session.world
 assert(world.seed == 12345 and world.size == test.WORLD_SIZE, "The default world must use seed 12345")
-assert(test.HELD_MOVE_SECONDS > 0 and test.HELD_MOVE_SECONDS <= 0.1,
-    "Held D-pad movement must poll several times per second")
+assert(test.HELD_MOVE_SECONDS >= 0.15 and test.HELD_MOVE_SECONDS <= 0.25,
+    "Held D-pad movement must not repaint the full voxel scene at the animation-frame rate")
 local held_act_calls = 0
 local old_session_act = session.act
 local old_session_move = session.move
@@ -153,8 +153,18 @@ session.held_move_action, session.motion = "forward", nil
 session.move = function(_, action) held_act_calls = held_act_calls + 1; assert(action == "forward"); return true end
 session:tickHeldMove()
 assert(held_act_calls == 1 and scheduled[#scheduled].delay == test.HELD_MOVE_SECONDS,
-    "Held D-pad movement must schedule its next repeat in a fraction of a second")
+    "Held D-pad movement must schedule a rate-limited next step")
 session.act, session.move, session.held_move_action = old_session_act, old_session_move, nil
+local held_start_calls = 0
+local old_session_canvas = session.canvas
+session.move = function() held_start_calls = held_start_calls + 1; return true end
+session.canvas = { refreshFast = function() end }
+assert(session:startHeldMove("forward") and session:startHeldMove("forward"),
+    "Repeated starts for one held D-pad direction must remain handled")
+assert(held_start_calls == 1,
+    "Duplicate hold notifications must not synchronously repeat movement or canvas refresh")
+session:stopHeldMove()
+session.move, session.canvas = old_session_move, old_session_canvas
 local biome_names, biome_count = {}, 0
 for z = 0, world.size - 1 do
     for x = 0, world.size - 1 do
@@ -594,12 +604,24 @@ assert(state.joystick:onTapMinecraftJoystick("TapMinecraftJoystick", {
     pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
 }), "The D-pad must accept the real two-argument tap callback")
 assert(dpad_action == "forward", "The upper D-pad button must move forward")
-local hold_started
-state.joystick.canvas.session.startHeldMove = function(_, action) hold_started = action end
+local hold_started, hold_start_count
+hold_start_count = 0
+state.joystick.canvas.session.startHeldMove = function(session_for_hold, action)
+    hold_started = action
+    hold_start_count = hold_start_count + 1
+    session_for_hold.held_move_action = action
+end
 assert(state.joystick:onHoldMinecraftJoystick("HoldMinecraftJoystick", {
     pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
 }), "Holding the upper D-pad button must start repeated movement")
 assert(hold_started == "forward", "Holding the upper D-pad button must repeat forward movement")
+for _ = 1, 8 do
+    assert(state.joystick:onPanMinecraftJoystick("PanMinecraftJoystick", {
+        pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
+    }), "Repeated pan samples while holding the same D-pad direction must be handled")
+end
+assert(hold_start_count == 1,
+    "Repeated pan samples must not restart immediate movement and redraw the full scene every sample")
 local hold_stopped = false
 state.joystick.canvas.session.stopHeldMove = function() hold_stopped = true end
 assert(state.joystick:onHoldReleaseMinecraftJoystick(), "Releasing a held D-pad button must be handled")

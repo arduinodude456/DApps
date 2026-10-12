@@ -202,9 +202,10 @@ local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
 local MOVE_FRAMES = 4
 local MOVE_FRAME_SECONDS = 0.045
--- scheduleIn uses seconds. Keep the held-movement poll below one animation
--- step so a held D-pad direction starts the next step as soon as possible.
-local HELD_MOVE_SECONDS = 0.045
+-- Held movement repaints the complete voxel view, so do not let touch-pan
+-- samples turn into display refreshes. Match one repeat to the full movement
+-- animation duration instead of polling at the animation-frame rate.
+local HELD_MOVE_SECONDS = MOVE_FRAMES * MOVE_FRAME_SECONDS
 -- Mobile Bedrock look sensitivity: a normal thumb drag should turn the view
 -- decisively, not require a full-screen swipe for a small camera movement.
 local LOOK_YAW_PER_PIXEL = 0.014
@@ -1667,6 +1668,11 @@ end
 
 function VoxelSession:startHeldMove(action)
     if action ~= "forward" and action ~= "back" and action ~= "left" and action ~= "right" then return false end
+    -- KOReader can report both hold and many pan samples for one continuous
+    -- contact. The timer already owns repeats; re-starting the same direction
+    -- here would synchronously move and redraw on every sample (and can crash
+    -- slower E-Ink devices).
+    if self.held_move_action == action then return true end
     UIManager:unschedule(self._heldMoveTick)
     self.held_move_action = action
     self.motion = nil
@@ -2537,13 +2543,20 @@ end
 
 function Joystick:onHoldMinecraftJoystick(first, second)
     local action = self:_heldAction(second or first)
-    if action then self.canvas.session:startHeldMove(action) end
+    if action and self.canvas and self.canvas.session then
+        self.canvas.session:startHeldMove(action)
+    end
     return true
 end
 
 function Joystick:onPanMinecraftJoystick(first, second)
     local action = self:_heldAction(second or first)
-    if action then self.canvas.session:startHeldMove(action) end
+    local session = self.canvas and self.canvas.session
+    if action and session then
+        if session.held_move_action ~= action then session:startHeldMove(action) end
+    elseif session and session.held_move_action then
+        session:stopHeldMove()
+    end
     return true
 end
 
