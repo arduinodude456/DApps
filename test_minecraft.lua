@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.1.4", "Minecraft 3D must publish the inventory, crafting and biome release")
+assert(app.id == "minecraft" and app.version == "4.2.0", "Minecraft 3D must publish the splash, world list and creation menus")
 
 --[[--
 Palette and dithering helpers
@@ -544,6 +544,26 @@ local instance = {}
 local context = { dimen = { w = 600, h = 748 }, px = function(value) return value end, requestRebuild = function() end }
 local pane = app.buildPane(instance, context)
 local state = instance.minecraft
+assert(state and state.screen == "splash", "The app must start on the Minecraft splash screen")
+assert(findButton(pane[1], "Spielen"), "The splash screen must expose a play button")
+findButton(pane[1], "Spielen").callback()
+pane = app.buildPane(instance, context)
+assert(state.screen == "worlds", "Playing must open the saved-world list")
+state.world_store.worlds = {}
+assert(findButton(pane[1], "Neue Welt erstellen"), "The world list must expose world creation")
+findButton(pane[1], "Neue Welt erstellen").callback()
+pane = app.buildPane(instance, context)
+assert(state.screen == "create", "New world must open the creation menu")
+local seed_button = findButton(pane[1], "Seed: Zufällig")
+assert(seed_button, "The creation menu must expose the seed field")
+seed_button.callback()
+local seed_dialog = shown_widget
+assert(seed_dialog and seed_dialog.title, "The seed field must open an input dialog")
+seed_dialog.input = "777"
+seed_dialog.buttons[1][2].callback()
+pane = app.buildPane(instance, context)
+findButton(pane[1], "Erstellen").callback()
+pane = app.buildPane(instance, context)
 assert(state and state.session and state.canvas, "The pane must expose its Minecraft state")
 assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the canvas and the hotbar")
 assert(findWidget(pane[1], state.inventory_panel) and findWidget(pane[1], state.crafting_panel), "The pane must embed both overlays")
@@ -591,7 +611,7 @@ state.session:selectSlot(1)
 assert(state.hotbar:onTapMinecraftHotbar("TapMinecraftHotbar", { pos = { x = state.hotbar._origin_x + state.hotbar.width / 2, y = state.hotbar._origin_y + 5 } }),
     "The hotbar must handle KOReader's two-argument selection callback")
 assert(state.session.selected_slot == 5, "A dispatched hotbar tap must select the touched slot")
-for _, title in ipairs({ "Farbe", "Welt", "Springen", "Links", "Vor", "Zurück", "Rechts", "Inventar", "Tipp: Setzen" }) do
+for _, title in ipairs({ "Farbe", "Menü", "Springen", "Links", "Vor", "Zurück", "Rechts", "Inventar", "Tipp: Setzen" }) do
     assert(findButton(pane[1], title), "The pane must expose the " .. title .. " control")
 end
 assert(state.session:biomeName() ~= "", "The header must name the current biome")
@@ -609,20 +629,16 @@ findButton(pane[1], "Springen").callback()
 assert(state.session.jump_frame, "The jump button must start the jump animation")
 state.session.jump_frame, state.session.jump_offset = nil, 0
 
--- New world dialog: invalid text is rejected, a valid seed rebuilds the world.
-local old_seed = state.session.seed
-shown_list = {}
-findButton(pane[1], "Welt").callback()
-local dialog = shown_widget
-assert(dialog and dialog.title and dialog.buttons, "The world button must open the seed dialog")
-dialog.input = "kein Seed"
-dialog.buttons[1][2].callback()
-local info = shown_list[#shown_list]
-assert(info and info.text and info.text:find("ganze Zahl"), "An invalid seed must show a clear error message")
-dialog.input = "777"
-dialog.buttons[1][2].callback()
-assert(state.session.seed == 777 and state.session.seed ~= old_seed, "A valid seed must generate a new world")
-assert(state.session.motion == nil, "A new world must not keep a running motion")
+-- Menu returns to the saved-world list and the newly created world can be opened.
+findButton(pane[1], "Menü").callback()
+pane = app.buildPane(instance, context)
+assert(state.screen == "worlds" and #state.world_store.worlds == 1, "The created world must be saved in the world list")
+local saved_title = state.world_store.worlds[1].name .. "\nÜberleben · Normal\nSeed: 777"
+assert(findButton(pane[1], saved_title), "The world list must show the saved world card")
+findButton(pane[1], saved_title).callback()
+pane = app.buildPane(instance, context)
+assert(state.screen == "world" and state.session.seed == 777, "A saved world card must reopen its seed")
+assert(state.session.motion == nil, "Opening a saved world must not keep a running motion")
 assert(test.parseWorldSeed("") == nil and test.parseWorldSeed("abc") == false and test.parseWorldSeed("42") == 42,
     "Seed parsing must accept integers, empty input and reject text")
 
@@ -631,4 +647,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.1.4-ok")
+print("minecraft-4.2.0-ok")
