@@ -1,6 +1,6 @@
 --[[--
 Regression test for Geometry Dash level selection, approachable defaults, and
-the 1.1.0 level editor: snapped placement, atomic storage round-trip, custom
+the 1.1.1 level editor: snapped placement, atomic storage round-trip, custom
 level playback, and the editor pane contract.
 
 Run with: lua5.1 test_geometry_dash.lua
@@ -64,7 +64,7 @@ install("libs/libkoreader-lfs", {
 _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("geometry_dash.lua"))()
-assert(app.id == "geometry_dash" and app.version == "1.1.0", "Geometry Dash must publish the level editor release")
+assert(app.id == "geometry_dash" and app.version == "1.1.1", "Geometry Dash must publish the level editor release")
 local test = app._test
 local builtin = test.builtinLevelCount
 local Editor, E = test.Editor, test.Editor
