@@ -334,7 +334,7 @@ assert(session:tapAction(target), "Tapping a block face must place the selected 
 assert(test.blockAt(world, target.place_x, target.place_z, target.place_y) == placed_material, "The placed block must appear in the world")
 assert(session:countMaterial(placed_material) == before_count - 1, "Placing must consume one block")
 assert(session:tapAction(target) == false, "Placing onto an occupied spot must be refused")
-assert(session.last_event:find("belegt"), "The refusal must be reported to the player")
+assert(session.last_event:find("occupied"), "The refusal must be reported to the player")
 local drop_material = test.DROPS[placed_material]
 local drop_before = session:countMaterial(drop_material)
 assert(session:holdAction{ x = target.place_x, z = target.place_z, y = target.place_y }, "Holding must mine the targeted block again")
@@ -343,7 +343,7 @@ assert(session:countMaterial(placed_material) == before_count - 1, "The placed b
 assert(session:countMaterial(drop_material) == drop_before + 1, "Mining must add the block's dropped item (" .. drop_material .. ")")
 session:toggleTapAction()
 assert(session.tap_action == "mine", "The mode button must flip the tap action")
-assert(session:tapActionLabel():find("Abbauen"), "The button label must describe the active mode")
+assert(session:tapActionLabel():find("Mine"), "The button label must describe the active mode")
 session:toggleTapAction()
 assert(session.tap_action == "place", "The mode button must be reversible")
 
@@ -410,7 +410,7 @@ assert(test.materialAt(world, grass_x, grass_z) == "dirt", "The block below must
 assert(test.heightAt(world, grass_x, grass_z) == grass_height - 1, "Mining the top block must lower the column")
 assert(session:countMaterial("dirt") == dirt_before + 1, "The grass block must drop dirt")
 assert(session:mineBlock{ x = grass_x, z = grass_z, y = 200 } == false, "Out-of-range mining must be refused")
-assert(session.last_event:find("kein Block"), "Invalid mining must be reported")
+assert(session.last_event:find("no block"), "Invalid mining must be reported")
 
 local log_target
 for key, material in pairs(world.extra_blocks) do
@@ -432,7 +432,7 @@ session.selected_slot = 4
 assert(session:selectedMaterial() == "wood", "Slot four must hold wood")
 local feet = math.floor(session:groundHeightAtPlayer())
 assert(session:placeBlock{ x = math.floor(session.player_x), z = math.floor(session.player_z), y = feet } == false
-    and session.last_event:find("stehst"), "Blocks may not be placed inside the player")
+    and session.last_event:find("standing"), "Blocks may not be placed inside the player")
 for slot = 1, test.INVENTORY_SLOTS do
     if session.slots[slot] and session.slots[slot].material == "wood" then session.slots[slot] = nil end
 end
@@ -467,7 +467,7 @@ for index, recipe in ipairs(test.RECIPES) do
 end
 assert(obsidian_recipe, "The recipe list must contain the obsidian nod")
 assert(session:canCraft(test.RECIPES[obsidian_recipe]) == false, "Missing ingredients must block a recipe")
-assert(session:craft(obsidian_recipe) == false and session.last_event:find("fehlen"), "A blocked recipe must explain itself")
+assert(session:craft(obsidian_recipe) == false and session.last_event:find("missing"), "A blocked recipe must explain itself")
 assert(session:craft(999) == false, "Unknown recipes must be refused")
 for index = 1, #test.RECIPES do
     local recipe = test.RECIPES[index]
@@ -480,7 +480,7 @@ end
 assert(session:pageCount() >= 2 and #session:recipesForPage(1) == test.CRAFT_ROWS_PER_PAGE, "Recipes must be paged four per screen")
 assert(#session:recipesForPage(session:pageCount()) >= 1, "The last recipe page must not be empty")
 local label = session:recipeLabel(test.RECIPES[1])
-assert(label:find("Holzbretter", 1, true) and label:find("/", 1, true), "Recipe rows must show the result and the ingredient counters")
+assert(label:find("Planks", 1, true) and label:find("/", 1, true), "Recipe rows must show the result and the ingredient counters")
 
 --[[--
 Overlay screens: hit testing, paging, and local refresh
@@ -555,16 +555,16 @@ local context = { dimen = { w = 600, h = 748 }, px = function(value) return valu
 local pane = app.buildPane(instance, context)
 local state = instance.minecraft
 assert(state and state.screen == "splash", "The app must start on the Minecraft splash screen")
-assert(findButton(pane[1], "Spielen"), "The splash screen must expose a play button")
-findButton(pane[1], "Spielen").callback()
+assert(findButton(pane[1], "Play"), "The splash screen must expose a play button")
+findButton(pane[1], "Play").callback()
 pane = app.buildPane(instance, context)
 assert(state.screen == "worlds", "Playing must open the saved-world list")
 state.world_store.worlds = {}
-assert(findButton(pane[1], "Neue Welt erstellen"), "The world list must expose world creation")
-findButton(pane[1], "Neue Welt erstellen").callback()
+assert(findButton(pane[1], "Create New World"), "The world list must expose world creation")
+findButton(pane[1], "Create New World").callback()
 pane = app.buildPane(instance, context)
 assert(state.screen == "create", "New world must open the creation menu")
-local seed_button = findButton(pane[1], "Seed: Zufällig")
+local seed_button = findButton(pane[1], "Seed: Random")
 assert(seed_button, "The creation menu must expose the seed field")
 seed_button.callback()
 local seed_dialog = shown_widget
@@ -572,7 +572,7 @@ assert(seed_dialog and seed_dialog.title, "The seed field must open an input dia
 seed_dialog.input = "777"
 seed_dialog.buttons[1][2].callback()
 pane = app.buildPane(instance, context)
-findButton(pane[1], "Erstellen").callback()
+findButton(pane[1], "Create").callback()
 pane = app.buildPane(instance, context)
 assert(state and state.session and state.canvas, "The pane must expose its Minecraft state")
 assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the canvas and the hotbar")
@@ -587,6 +587,16 @@ assert(state.joystick:onTapMinecraftJoystick("TapMinecraftJoystick", {
     pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
 }), "The D-pad must accept the real two-argument tap callback")
 assert(dpad_action == "forward", "The upper D-pad button must move forward")
+local hold_started
+state.joystick.canvas.session.startHeldMove = function(_, action) hold_started = action end
+assert(state.joystick:onHoldMinecraftJoystick("HoldMinecraftJoystick", {
+    pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
+}), "Holding the upper D-pad button must start repeated movement")
+assert(hold_started == "forward", "Holding the upper D-pad button must repeat forward movement")
+local hold_stopped = false
+state.joystick.canvas.session.stopHeldMove = function() hold_stopped = true end
+assert(state.joystick:onHoldReleaseMinecraftJoystick(), "Releasing a held D-pad button must be handled")
+assert(hold_stopped, "Releasing a held D-pad button must stop repeated movement")
 state.canvas.act = old_dpad_act
 local old_control_pick = state.canvas.pickBlock
 state.canvas.pickBlock = function() error("A control tap must not raycast for block placement") end
@@ -621,29 +631,29 @@ state.session:selectSlot(1)
 assert(state.hotbar:onTapMinecraftHotbar("TapMinecraftHotbar", { pos = { x = state.hotbar._origin_x + state.hotbar.width / 2, y = state.hotbar._origin_y + 5 } }),
     "The hotbar must handle KOReader's two-argument selection callback")
 assert(state.session.selected_slot == 5, "A dispatched hotbar tap must select the touched slot")
-for _, title in ipairs({ "Farbe", "Menü", "Springen", "Links", "Vor", "Zurück", "Rechts", "Inventar", "Tipp: Setzen" }) do
+for _, title in ipairs({ "Color", "Menu", "Jump", "Left", "Forward", "Back", "Right", "Inventory", "Tap: Place" }) do
     assert(findButton(pane[1], title), "The pane must expose the " .. title .. " control")
 end
 assert(state.session:biomeName() ~= "", "The header must name the current biome")
-findButton(pane[1], "Inventar").callback()
+findButton(pane[1], "Inventory").callback()
 assert(state.session.inventory_open, "The inventory button must open the inventory")
 assert(state.inventory_panel:onTapMinecraftInventory{ pos = { x = state.inventory_panel._origin_x + state.inventory_panel.width - 6, y = state.inventory_panel._origin_y + 6 } },
     "The pane inventory must close on request")
-local mode_button = findButton(pane[1], "Tipp: Setzen")
+local mode_button = findButton(pane[1], "Tap: Place")
 mode_button.callback()
 assert(state.session.tap_action == "mine", "The mode button must switch to mining")
-findButton(pane[1], "Vor").callback()
+findButton(pane[1], "Forward").callback()
 assert(state.session.motion, "The forward button must start a motion")
 state.session.motion = nil
-findButton(pane[1], "Springen").callback()
+findButton(pane[1], "Jump").callback()
 assert(state.session.jump_frame, "The jump button must start the jump animation")
 state.session.jump_frame, state.session.jump_offset = nil, 0
 
 -- Menu returns to the saved-world list and the newly created world can be opened.
-findButton(pane[1], "Menü").callback()
+findButton(pane[1], "Menu").callback()
 pane = app.buildPane(instance, context)
 assert(state.screen == "worlds" and #state.world_store.worlds == 1, "The created world must be saved in the world list")
-local saved_title = state.world_store.worlds[1].name .. "\nÜberleben · Normal\nSeed: 777"
+local saved_title = state.world_store.worlds[1].name .. "\nSurvival · Normal\nSeed: 777"
 assert(findButton(pane[1], saved_title), "The world list must show the saved world card")
 findButton(pane[1], saved_title).callback()
 pane = app.buildPane(instance, context)
@@ -655,6 +665,6 @@ assert(test.parseWorldSeed("") == nil and test.parseWorldSeed("abc") == false an
 -- The pane must also fit a compact split layout.
 local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = function(value) return value end, requestRebuild = function() end })
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
-assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
+assert(findButton(compact[1], "Inventory") and findButton(compact[1], "Color"), "The compact pane must keep its controls")
 
 print("minecraft-4.3.9-ok")

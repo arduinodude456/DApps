@@ -279,44 +279,44 @@ end
 -- a target RGB color for ordered dithering, an 8x8 procedural texture and -- for
 -- natural blocks -- the item that drops when the block is mined.
 local MATERIALS = {
-    grass = { label = _("Grasblock"), color = "green", rgb = { 106, 170, 64 }, pattern = "grass", drop = "dirt" },
-    dirt = { label = _("Erde"), color = "red", rgb = { 150, 113, 79 }, pattern = "dirt" },
-    farmland = { label = _("Ackerboden"), color = "red", rgb = { 128, 94, 58 }, pattern = "farm" },
-    stone = { label = _("Stein"), color = "blue", rgb = { 142, 142, 142 }, pattern = "stone", drop = "cobblestone" },
-    cobblestone = { label = _("Bruchstein"), color = "blue", rgb = { 128, 128, 131 }, pattern = "cobble" },
-    gravel = { label = _("Kies"), color = "blue", rgb = { 152, 143, 140 }, pattern = "gravel" },
+    grass = { label = _("Grass Block"), color = "green", rgb = { 106, 170, 64 }, pattern = "grass", drop = "dirt" },
+    dirt = { label = _("Dirt"), color = "red", rgb = { 150, 113, 79 }, pattern = "dirt" },
+    farmland = { label = _("Farmland"), color = "red", rgb = { 128, 94, 58 }, pattern = "farm" },
+    stone = { label = _("Stone"), color = "blue", rgb = { 142, 142, 142 }, pattern = "stone", drop = "cobblestone" },
+    cobblestone = { label = _("Cobblestone"), color = "blue", rgb = { 128, 128, 131 }, pattern = "cobble" },
+    gravel = { label = _("Gravel"), color = "blue", rgb = { 152, 143, 140 }, pattern = "gravel" },
     sand = { label = _("Sand"), color = "yellow", rgb = { 219, 207, 163 }, pattern = "sand" },
-    sandstone = { label = _("Sandstein"), color = "yellow", rgb = { 216, 203, 155 }, pattern = "sandstone" },
-    clay = { label = _("Ton"), color = "cyan", rgb = { 160, 166, 179 }, pattern = "clay" },
-    bricks = { label = _("Ziegelsteine"), color = "red", rgb = { 168, 108, 90 }, pattern = "brick" },
-    snow = { label = _("Schneeblock"), color = "cyan", rgb = { 240, 250, 250 }, pattern = "snow" },
-    ice = { label = _("Eis"), color = "cyan", rgb = { 145, 183, 235 }, pattern = "ice" },
-    water = { label = _("Wasser"), color = "blue", rgb = { 63, 118, 228 }, pattern = "water", liquid = true },
+    sandstone = { label = _("Sandstone"), color = "yellow", rgb = { 216, 203, 155 }, pattern = "sandstone" },
+    clay = { label = _("Clay"), color = "cyan", rgb = { 160, 166, 179 }, pattern = "clay" },
+    bricks = { label = _("Bricks"), color = "red", rgb = { 168, 108, 90 }, pattern = "brick" },
+    snow = { label = _("Snow Block"), color = "cyan", rgb = { 240, 250, 250 }, pattern = "snow" },
+    ice = { label = _("Ice"), color = "cyan", rgb = { 145, 183, 235 }, pattern = "ice" },
+    water = { label = _("Water"), color = "blue", rgb = { 63, 118, 228 }, pattern = "water", liquid = true },
     lava = { label = _("Lava"), color = "red", rgb = { 207, 92, 20 }, pattern = "lava", liquid = true },
-    bedrock = { label = _("Grundgestein"), color = "black", rgb = { 85, 85, 85 }, pattern = "bedrock" },
+    bedrock = { label = _("Bedrock"), color = "black", rgb = { 85, 85, 85 }, pattern = "bedrock" },
     obsidian = { label = _("Obsidian"), color = "black", rgb = { 26, 22, 36 }, pattern = "obsidian" },
-    coal = { label = _("Steinkohle"), color = "black", rgb = { 42, 42, 42 }, pattern = "ore_coal" },
-    iron = { label = _("Eisenerz"), color = "cyan", rgb = { 154, 155, 140 }, pattern = "ore_iron" },
-    gold = { label = _("Golderz"), color = "yellow", rgb = { 214, 157, 38 }, pattern = "ore_gold" },
-    diamond = { label = _("Diamanterz"), color = "cyan", rgb = { 92, 219, 213 }, pattern = "ore_diamond" },
-    redstone = { label = _("Redstone-Erz"), color = "red", rgb = { 175, 32, 32 }, pattern = "ore_redstone" },
-    wood = { label = _("Eichenstamm"), color = "red", rgb = { 172, 120, 62 }, pattern = "log" },
-    wood_birch = { label = _("Birkenstamm"), color = "yellow", rgb = { 216, 211, 190 }, pattern = "log" },
-    wood_spruce = { label = _("Fichtenstamm"), color = "red", rgb = { 120, 86, 48 }, pattern = "log" },
-    wood_jungle = { label = _("Tropenholz"), color = "red", rgb = { 112, 80, 44 }, pattern = "log" },
-    wood_acacia = { label = _("Akazienstamm"), color = "red", rgb = { 176, 106, 60 }, pattern = "log" },
-    leaves = { label = _("Eichenlaub"), color = "green", rgb = { 58, 150, 60 }, pattern = "leaves", drop = "leaves" },
-    leaves_birch = { label = _("Birkenlaub"), color = "green", rgb = { 106, 172, 69 }, pattern = "leaves" },
-    leaves_spruce = { label = _("Fichtennadeln"), color = "cyan", rgb = { 54, 124, 80 }, pattern = "leaves" },
-    leaves_jungle = { label = _("Tropenlaub"), color = "green", rgb = { 45, 178, 44 }, pattern = "leaves" },
-    leaves_acacia = { label = _("Akazienlaub"), color = "green", rgb = { 115, 163, 61 }, pattern = "leaves" },
-    planks = { label = _("Holzbretter"), color = "red", rgb = { 176, 143, 90 }, pattern = "planks" },
-    glass = { label = _("Glas"), color = "cyan", rgb = { 218, 241, 243 }, pattern = "glass" },
-    crafting_table = { label = _("Werkbank"), color = "red", rgb = { 142, 106, 62 }, pattern = "craft_table" },
-    furnace = { label = _("Ofen"), color = "blue", rgb = { 118, 118, 118 }, pattern = "furnace" },
-    cactus = { label = _("Kaktus"), color = "green", rgb = { 74, 140, 62 }, pattern = "cactus" },
-    dead_bush = { label = _("Trockenbusch"), color = "yellow", rgb = { 148, 109, 58 }, pattern = "dead_bush" },
-    wheat = { label = _("Weizen"), color = "yellow", rgb = { 208, 190, 90 }, pattern = "wheat" },
+    coal = { label = _("Coal"), color = "black", rgb = { 42, 42, 42 }, pattern = "ore_coal" },
+    iron = { label = _("Iron Ore"), color = "cyan", rgb = { 154, 155, 140 }, pattern = "ore_iron" },
+    gold = { label = _("Gold Ore"), color = "yellow", rgb = { 214, 157, 38 }, pattern = "ore_gold" },
+    diamond = { label = _("Diamond Ore"), color = "cyan", rgb = { 92, 219, 213 }, pattern = "ore_diamond" },
+    redstone = { label = _("Redstone Ore"), color = "red", rgb = { 175, 32, 32 }, pattern = "ore_redstone" },
+    wood = { label = _("Oak Log"), color = "red", rgb = { 172, 120, 62 }, pattern = "log" },
+    wood_birch = { label = _("Birch Log"), color = "yellow", rgb = { 216, 211, 190 }, pattern = "log" },
+    wood_spruce = { label = _("Spruce Log"), color = "red", rgb = { 120, 86, 48 }, pattern = "log" },
+    wood_jungle = { label = _("Jungle Log"), color = "red", rgb = { 112, 80, 44 }, pattern = "log" },
+    wood_acacia = { label = _("Acacia Log"), color = "red", rgb = { 176, 106, 60 }, pattern = "log" },
+    leaves = { label = _("Oak Leaves"), color = "green", rgb = { 58, 150, 60 }, pattern = "leaves", drop = "leaves" },
+    leaves_birch = { label = _("Birch Leaves"), color = "green", rgb = { 106, 172, 69 }, pattern = "leaves" },
+    leaves_spruce = { label = _("Spruce Leaves"), color = "cyan", rgb = { 54, 124, 80 }, pattern = "leaves" },
+    leaves_jungle = { label = _("Jungle Leaves"), color = "green", rgb = { 45, 178, 44 }, pattern = "leaves" },
+    leaves_acacia = { label = _("Acacia Leaves"), color = "green", rgb = { 115, 163, 61 }, pattern = "leaves" },
+    planks = { label = _("Planks"), color = "red", rgb = { 176, 143, 90 }, pattern = "planks" },
+    glass = { label = _("Glass"), color = "cyan", rgb = { 218, 241, 243 }, pattern = "glass" },
+    crafting_table = { label = _("Crafting Table"), color = "red", rgb = { 142, 106, 62 }, pattern = "craft_table" },
+    furnace = { label = _("Furnace"), color = "blue", rgb = { 118, 118, 118 }, pattern = "furnace" },
+    cactus = { label = _("Cactus"), color = "green", rgb = { 74, 140, 62 }, pattern = "cactus" },
+    dead_bush = { label = _("Dead Bush"), color = "yellow", rgb = { 148, 109, 58 }, pattern = "dead_bush" },
+    wheat = { label = _("Wheat"), color = "yellow", rgb = { 208, 190, 90 }, pattern = "wheat" },
 }
 
 -- Display and crafting order: natural blocks, ores, wood, foliage, crafted blocks.
@@ -561,10 +561,9 @@ local function noise2(seed, x, z, scale_value)
     return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz
 end
 
--- Nicht jede Minecraft-Struktur ist eine Säule. Diese Sparse-Map hält Blöcke
--- über dem Terrain (Bäume, Häuser, Pflanzen), damit Stämme, Blattkronen und
--- Gebäude wirklich aus einzelnen Voxeln bestehen und die Bodenhöhe nicht
--- künstlich mitwächst.
+-- Not every Minecraft structure is a column. This sparse map stores blocks
+-- above the terrain (trees, houses, plants), so trunks, leaf canopies and
+-- buildings are made from individual voxels without inflating ground height.
 local function extraBlockKey(x, z, level)
     return x .. ":" .. z .. ":" .. level
 end
@@ -589,19 +588,19 @@ end
 -- Twelve Minecraft-like biomes. Each one carries its own surface and subsurface
 -- blocks plus the tree or plant type that grows there.
 local BIOMES = {
-    ocean = { surface = "water", subsurface = "gravel", label = _("Ozean") },
-    river = { surface = "water", subsurface = "sand", label = _("Fluss") },
-    beach = { surface = "sand", subsurface = "sandstone", label = _("Strand") },
-    plains = { surface = "grass", subsurface = "dirt", tree = "oak", tree_chance = 0.020, spacing = 7, label = _("Ebene") },
-    forest = { surface = "grass", subsurface = "dirt", tree = "oak", tree_chance = 0.170, spacing = 5, label = _("Wald") },
-    birch_forest = { surface = "grass", subsurface = "dirt", tree = "birch", tree_chance = 0.150, spacing = 5, label = _("Birkenwald") },
+    ocean = { surface = "water", subsurface = "gravel", label = _("Ocean") },
+    river = { surface = "water", subsurface = "sand", label = _("River") },
+    beach = { surface = "sand", subsurface = "sandstone", label = _("Beach") },
+    plains = { surface = "grass", subsurface = "dirt", tree = "oak", tree_chance = 0.020, spacing = 7, label = _("Plains") },
+    forest = { surface = "grass", subsurface = "dirt", tree = "oak", tree_chance = 0.170, spacing = 5, label = _("Forest") },
+    birch_forest = { surface = "grass", subsurface = "dirt", tree = "birch", tree_chance = 0.150, spacing = 5, label = _("Birch Forest") },
     taiga = { surface = "grass", subsurface = "dirt", tree = "spruce", tree_chance = 0.140, spacing = 5, label = _("Taiga") },
-    snowy_plains = { surface = "snow", subsurface = "dirt", tree = "spruce", tree_chance = 0.030, spacing = 9, label = _("Schneefeld") },
-    desert = { surface = "sand", subsurface = "sandstone", plant = "cactus", plant_chance = 0.022, spacing = 6, label = _("Wüste") },
-    savanna = { surface = "grass", subsurface = "dirt", tree = "acacia", tree_chance = 0.055, spacing = 7, plant = "dead_bush", label = _("Savanne") },
-    jungle = { surface = "grass", subsurface = "dirt", tree = "jungle", tree_chance = 0.230, spacing = 5, label = _("Dschungel") },
-    mountains = { surface = "stone", subsurface = "stone", tree = "spruce", tree_chance = 0.030, spacing = 9, label = _("Berge") },
-    swamp = { surface = "grass", subsurface = "clay", tree = "swamp_oak", tree_chance = 0.075, spacing = 6, label = _("Sumpf") },
+    snowy_plains = { surface = "snow", subsurface = "dirt", tree = "spruce", tree_chance = 0.030, spacing = 9, label = _("Snowy Plains") },
+    desert = { surface = "sand", subsurface = "sandstone", plant = "cactus", plant_chance = 0.022, spacing = 6, label = _("Desert") },
+    savanna = { surface = "grass", subsurface = "dirt", tree = "acacia", tree_chance = 0.055, spacing = 7, plant = "dead_bush", label = _("Savanna") },
+    jungle = { surface = "grass", subsurface = "dirt", tree = "jungle", tree_chance = 0.230, spacing = 5, label = _("Jungle") },
+    mountains = { surface = "stone", subsurface = "stone", tree = "spruce", tree_chance = 0.030, spacing = 9, label = _("Mountains") },
+    swamp = { surface = "grass", subsurface = "clay", tree = "swamp_oak", tree_chance = 0.075, spacing = 6, label = _("Swamp") },
 }
 local BIOME_ORDER = { "ocean", "river", "beach", "plains", "forest", "birch_forest", "taiga", "snowy_plains", "desert", "savanna", "jungle", "mountains", "swamp" }
 
@@ -1280,7 +1279,7 @@ function VoxelSession.new(seed)
         yaw = yaw,
         pitch = 0,
         steps = 0,
-        last_event = _("Bereit — erkunde die Blockwelt."),
+        last_event = _("Ready — explore the block world."),
         canvas = nil,
         motion = nil,
         jump_offset = 0,
@@ -1395,13 +1394,13 @@ function VoxelSession:pickSlot(slot)
         if not item then
             self.slots[slot], self.held = self.held, nil
             self:syncDerived()
-            self.last_event = _("Stapel abgelegt.")
+            self.last_event = _("Stack placed.")
             return "placed"
         end
         if item.material == self.held.material then
             local room = STACK_LIMIT - item.count
             if room <= 0 then
-                self.last_event = _("Dieser Stapel ist voll.")
+                self.last_event = _("This stack is full.")
                 return "full"
             end
             local moved = math.min(room, self.held.count)
@@ -1409,22 +1408,22 @@ function VoxelSession:pickSlot(slot)
             self.held.count = self.held.count - moved
             if self.held.count <= 0 then self.held = nil end
             self:syncDerived()
-            self.last_event = _("Stapel zusammengeführt.")
+            self.last_event = _("Stacks merged.")
             return "merged"
         end
         self.slots[slot], self.held = self.held, item
         self:syncDerived()
-        self.last_event = _("Stapel getauscht.")
+        self.last_event = _("Stacks swapped.")
         return "swapped"
     end
     if item then
         self.held = item
         self.slots[slot] = nil
         self:syncDerived()
-        self.last_event = _("Aufgenommen: ") .. materialLabel(item.material)
+        self.last_event = _("Picked up: ") .. materialLabel(item.material)
         return "picked"
     end
-    self.last_event = _("Leerer Platz.")
+    self.last_event = _("Empty slot.")
     return "empty"
 end
 
@@ -1445,7 +1444,7 @@ function VoxelSession:selectSlot(slot)
     if slot < 1 or slot > HOTBAR_SLOTS then return false end
     self.selected_slot = slot
     local item = self.slots[slot]
-    self.last_event = item and (materialLabel(item.material) .. " ×" .. item.count) or _("Dieser Hotbar-Platz ist leer.")
+    self.last_event = item and (materialLabel(item.material) .. " ×" .. item.count) or _("This hotbar slot is empty.")
     return true
 end
 
@@ -1458,10 +1457,10 @@ function VoxelSession:toggleInventory()
     self.inventory_open = not self.inventory_open
     if self.inventory_open then
         self.crafting_open = false
-        self.last_event = _("Inventar geöffnet.")
+        self.last_event = _("Inventory opened.")
     else
         self:returnHeld()
-        self.last_event = _("Inventar geschlossen.")
+        self.last_event = _("Inventory closed.")
     end
     return self.inventory_open
 end
@@ -1470,7 +1469,7 @@ function VoxelSession:openCrafting()
     self:returnHeld()
     self.inventory_open, self.crafting_open = false, true
     self.craft_page = 1
-    self.last_event = _("Werkbank geöffnet.")
+    self.last_event = _("Crafting table opened.")
     return true
 end
 
@@ -1509,13 +1508,13 @@ function VoxelSession:craft(index)
     local recipe = RECIPES[index]
     if not recipe then return false end
     if not self:canCraft(recipe) then
-        self.last_event = _("Für dieses Rezept fehlen Zutaten.")
+        self.last_event = _("This recipe is missing ingredients.")
         return false
     end
     for _, ingredient in ipairs(recipe.ingredients) do self:takeMaterial(ingredient[1], ingredient[2]) end
     local leftover = self:addItem(recipe.result[1], recipe.result[2])
     self.last_event = leftover > 0
-        and _("Das Ergebnis passt nicht mehr ins Inventar.")
+        and _("The result no longer fits in the inventory.")
         or (materialLabel(recipe.result[1]) .. " ×" .. recipe.result[2] .. " " .. _("hergestellt."))
     return true
 end
@@ -1561,21 +1560,21 @@ function VoxelSession:newWorld(seed)
     self.motion, self.jump_frame, self.jump_offset = nil, nil, 0
     self.steps = 0
     self.view_height = self:walkHeight(self.player_x, self.player_z)
-    self.last_event = _("Neue Welt erzeugt. Seed: ") .. tostring(self.seed)
+    self.last_event = _("New world created. Seed: ") .. tostring(self.seed)
     return true
 end
 
 function VoxelSession:mineBlock(target)
-    if type(target) ~= "table" then self.last_event = _("Hier ist kein Block."); return false end
+    if type(target) ~= "table" then self.last_event = _("There is no block here."); return false end
     local x, z, y = target.x, target.z, target.y
     if type(x) ~= "number" or type(z) ~= "number" or type(y) ~= "number"
         or x < 0 or z < 0 or x >= self.world.size or z >= self.world.size
         or y < 0 or y >= MAX_COLUMN_HEIGHT then
-        self.last_event = _("Hier ist kein Block.")
+        self.last_event = _("There is no block here.")
         return false
     end
     local material = blockAt(self.world, x, z, y)
-    if not material then self.last_event = _("Hier ist kein Block."); return false end
+    if not material then self.last_event = _("There is no block here."); return false end
     local key = extraBlockKey(x, z, y)
     if self.world.extra_blocks[key] then
         self.world.extra_blocks[key] = nil
@@ -1595,13 +1594,13 @@ function VoxelSession:mineBlock(target)
     rebuildBlockColumn(self.world, x, z)
     local drop = DROPS[material] or material
     local leftover = self:addItem(drop, 1)
-    self.last_event = leftover > 0 and _("Das Inventar ist voll.") or (_("Abgebaut: ") .. materialLabel(drop))
+    self.last_event = leftover > 0 and _("The inventory is full.") or (_("Mined: ") .. materialLabel(drop))
     self.view_height = self:walkHeight(self.player_x, self.player_z)
     return true
 end
 
 function VoxelSession:placeBlock(target)
-    if type(target) ~= "table" then self.last_event = _("Kein Ziel ausgewählt."); return false end
+    if type(target) ~= "table" then self.last_event = _("No target selected."); return false end
     -- Bedrock places against the touched face: the caller passes the tagged
     -- block and we fill the free cell in front of its normal. Plain x/y/z
     -- targets are accepted as well (that cell is then the destination).
@@ -1609,21 +1608,21 @@ function VoxelSession:placeBlock(target)
     if type(x) ~= "number" or type(z) ~= "number" or type(y) ~= "number"
         or x < 1 or z < 1 or x >= self.world.size - 1 or z >= self.world.size - 1
         or y < 0 or y >= MAX_COLUMN_HEIGHT then
-        self.last_event = _("Hier kann kein Block platziert werden.")
+        self.last_event = _("A block cannot be placed here.")
         return false
     end
     local item = self.slots[self.selected_slot]
     if not item or item.count <= 0 then
-        self.last_event = _("In diesem Hotbar-Platz liegt kein Block.")
+        self.last_event = _("There is no block in this hotbar slot.")
         return false
     end
     local material = item.material
-    if blockAt(self.world, x, z, y) then self.last_event = _("Der Platz ist bereits belegt."); return false end
+    if blockAt(self.world, x, z, y) then self.last_event = _("This space is already occupied."); return false end
     -- Never trap the player inside a placed block, just like Bedrock.
     local cell_x, cell_z = math.floor(self.player_x), math.floor(self.player_z)
     local feet = math.floor(self:groundHeightAtPlayer())
     if x == cell_x and z == cell_z and (y == feet or y == feet + 1) then
-        self.last_event = _("Hier stehst du selbst.")
+        self.last_event = _("You are standing here.")
         return false
     end
     self.world.extra_blocks = self.world.extra_blocks or {}
@@ -1645,14 +1644,14 @@ function VoxelSession:placeBlock(target)
         end
     end
     self:syncDerived()
-    self.last_event = _("Gesetzt: ") .. materialLabel(material)
+    self.last_event = _("Placed: ") .. materialLabel(material)
     return true
 end
 
 function VoxelSession:jump()
     if self.jump_frame then return false end
     self.jump_frame = 0
-    self.last_event = _("Sprung!")
+    self.last_event = _("Jump!")
     UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._jumpTick)
     return true
 end
@@ -1693,13 +1692,13 @@ end
 
 function VoxelSession:turn(direction)
     self.yaw = wrapAngle(self.yaw + direction * TURN_ANGLE)
-    self.last_event = direction < 0 and _("Nach links gedreht.") or _("Nach rechts gedreht.")
+    self.last_event = direction < 0 and _("Turned left.") or _("Turned right.")
     return true
 end
 
 function VoxelSession:lookVertical(direction)
     self.pitch = math.max(-1.35, math.min(1.35, self.pitch + direction * 0.14))
-    self.last_event = direction > 0 and _("Nach oben gesehen.") or _("Nach unten gesehen.")
+    self.last_event = direction > 0 and _("Looking up.") or _("Looking down.")
     return true
 end
 
@@ -1711,7 +1710,7 @@ function VoxelSession:lookDelta(delta_x, delta_y)
     if delta_x == 0 and delta_y == 0 then return false end
     self.yaw = wrapAngle(self.yaw + delta_x * LOOK_YAW_PER_PIXEL)
     self.pitch = math.max(-1.35, math.min(1.35, self.pitch - delta_y * LOOK_PITCH_PER_PIXEL))
-    self.last_event = _("Umschauen")
+    self.last_event = _("Look around")
     return true
 end
 
@@ -1749,14 +1748,14 @@ function VoxelSession:beginMove(direction)
     -- Keep the camera away from the outside edge. It prevents rays crossing the
     -- world boundary from becoming a noisy, empty horizon.
     if next_x < 1 or next_z < 1 or next_x >= self.world.size - 1 or next_z >= self.world.size - 1 then
-        self.last_event = _("Weltgrenze erreicht.")
+        self.last_event = _("World boundary reached.")
         return false
     end
     local from_height = self:groundHeightAtPlayer()
     local to_height = self:walkHeight(next_x, next_z)
     local step = to_height - from_height
     if step > 2 then
-        self.last_event = _("Dieser Block ist zu hoch.")
+        self.last_event = _("This block is too high.")
         return false
     end
     self.live_look = true
@@ -1767,7 +1766,7 @@ function VoxelSession:beginMove(direction)
         frame = 0,
     }
     self.steps = self.steps + 1
-    self.last_event = direction > 0 and _("Vorwärts.") or _("Rückwärts.")
+    self.last_event = direction > 0 and _("Forward.") or _("Backward.")
     -- Bedrock's default auto-jump climbs a two-block wall without a jump button.
     if step >= 2 then self:jump() end
     UIManager:unschedule(self._motionTick)
@@ -1810,16 +1809,16 @@ end
 function VoxelSession:toggleTapAction()
     if self.tap_action == "place" then
         self.tap_action = "mine"
-        self.last_event = _("Tippen baut ab, Halten setzt Blöcke.")
+        self.last_event = _("Tap to mine, hold to place blocks.")
     else
         self.tap_action = "place"
-        self.last_event = _("Tippen setzt Blöcke, Halten baut ab.")
+        self.last_event = _("Tap to place blocks, hold to mine.")
     end
     return true
 end
 
 function VoxelSession:tapActionLabel()
-    return self.tap_action == "place" and _("Tipp: Setzen") or _("Tipp: Abbauen")
+    return self.tap_action == "place" and _("Tap: Place") or _("Tap: Mine")
 end
 
 function VoxelSession:tapAction(target)
@@ -1837,11 +1836,11 @@ function VoxelSession:toggleColor()
     -- standard setting is the sole switch; false means use monochrome.
     if not colorRenderingEnabled() then
         self.color_enabled = false
-        self.last_event = _("KOReader-Farbrendering ist ausgeschaltet oder nicht verfügbar.")
+        self.last_event = _("KOReader color rendering is disabled or unavailable.")
         return false
     end
     self.color_enabled = not self.color_enabled
-    self.last_event = self.color_enabled and _("Farbrendering aktiviert.") or _("Monochromes Rendering aktiviert.")
+    self.last_event = self.color_enabled and _("Color rendering enabled.") or _("Monochrome rendering enabled.")
     return true
 end
 
@@ -2571,6 +2570,7 @@ function Joystick:init()
     self.ges_events = {
         TapMinecraftJoystick = { GestureRange:new{ ges = "tap", range = self.dimen } },
         HoldMinecraftJoystick = { GestureRange:new{ ges = "hold", range = self.dimen } },
+        HoldReleaseMinecraftJoystick = { GestureRange:new{ ges = "hold_release", range = self.dimen } },
         PanMinecraftJoystick = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } },
         PanReleaseMinecraftJoystick = { GestureRange:new{ ges = "pan_release", range = self.dimen } },
         SwipeMinecraftJoystick = { GestureRange:new{ ges = "swipe", range = self.dimen } },
@@ -2650,6 +2650,11 @@ function Joystick:onPanMinecraftJoystick(first, second)
 end
 
 function Joystick:onPanReleaseMinecraftJoystick()
+    if self.canvas and self.canvas.session then self.canvas.session:stopHeldMove() end
+    return true
+end
+
+function Joystick:onHoldReleaseMinecraftJoystick()
     if self.canvas and self.canvas.session then self.canvas.session:stopHeldMove() end
     return true
 end
@@ -2845,7 +2850,7 @@ function InventoryPanel:paintTo(bb, x, y)
     bb:paintRect(x, y, 2, self.height, Blitbuffer.COLOR_BLACK)
     bb:paintRect(x + self.width - 2, y, 2, self.height, Blitbuffer.COLOR_BLACK)
     local title = TextWidget:new{
-        text = _("INVENTAR") .. "  ·  " .. tostring(session.used_slots) .. "/" .. tostring(INVENTORY_SLOTS),
+        text = _("INVENTORY") .. "  ·  " .. tostring(session.used_slots) .. "/" .. tostring(INVENTORY_SLOTS),
         face = Font:getFace("cfont", math.max(scale(8), scale(10))),
         fgcolor = Blitbuffer.COLOR_BLACK,
         bold = true,
@@ -2859,14 +2864,14 @@ function InventoryPanel:paintTo(bb, x, y)
     bb:paintRect(x + craft_x, y + scale(3), button_w, button_h, Blitbuffer.COLOR_LIGHT_GRAY)
     bb:paintRect(x + close_x, y + scale(3), button_w, button_h, Blitbuffer.COLOR_BLACK)
     local craft_label = TextWidget:new{
-        text = _("Handwerk"),
+        text = _("Craft"),
         face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
         fgcolor = Blitbuffer.COLOR_BLACK,
         max_width = button_w - scale(4),
     }
     craft_label:paintTo(bb, x + craft_x + scale(3), y + scale(6))
     local close_label = TextWidget:new{
-        text = _("Fertig"),
+        text = _("Done"),
         face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
         fgcolor = Blitbuffer.COLOR_WHITE,
         max_width = button_w - scale(4),
@@ -2916,9 +2921,9 @@ function InventoryPanel:paintTo(bb, x, y)
     end
     local status
     if session.held then
-        status = _("In der Hand: ") .. materialLabel(session.held.material) .. " ×" .. session.held.count .. " — " .. _("Platz antippen zum Ablegen")
+        status = _("In hand: ") .. materialLabel(session.held.material) .. " ×" .. session.held.count .. " — " .. _("Tap a slot to place it")
     else
-        status = _("Stapel antippen, um ihn aufzunehmen; oben die Hotbar wählen")
+        status = _("Tap a stack to pick it up; select the hotbar above")
     end
     local footer = TextWidget:new{
         text = status,
@@ -3010,7 +3015,7 @@ function CraftingPanel:paintTo(bb, x, y)
     bb:paintRect(x, y, 2, self.height, Blitbuffer.COLOR_BLACK)
     bb:paintRect(x + self.width - 2, y, 2, self.height, Blitbuffer.COLOR_BLACK)
     local title = TextWidget:new{
-        text = _("WERKBANK") .. "  ·  " .. tostring(session.craft_page) .. "/" .. tostring(session:pageCount()),
+        text = _("CRAFTING") .. "  ·  " .. tostring(session.craft_page) .. "/" .. tostring(session:pageCount()),
         face = Font:getFace("cfont", math.max(scale(8), scale(10))),
         fgcolor = Blitbuffer.COLOR_BLACK,
         bold = true,
@@ -3021,7 +3026,7 @@ function CraftingPanel:paintTo(bb, x, y)
     local close_x = self.width - scale(4) - button_w
     bb:paintRect(x + close_x, y + scale(3), button_w, header_h - scale(6), Blitbuffer.COLOR_BLACK)
     local close_label = TextWidget:new{
-        text = _("Zurück"),
+        text = _("Back"),
         face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
         fgcolor = Blitbuffer.COLOR_WHITE,
         max_width = button_w - scale(4),
@@ -3035,7 +3040,7 @@ function CraftingPanel:paintTo(bb, x, y)
         if entry then
             local craftable = session:canCraft(entry.recipe)
             local label = TextWidget:new{
-                text = session:recipeLabel(entry.recipe) .. (craftable and "" or ("  ·  " .. _("Zutaten fehlen"))),
+                text = session:recipeLabel(entry.recipe) .. (craftable and "" or ("  ·  " .. _("Ingredients missing"))),
                 face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
                 fgcolor = Blitbuffer.COLOR_BLACK,
                 bold = craftable,
@@ -3048,14 +3053,14 @@ function CraftingPanel:paintTo(bb, x, y)
     bb:paintRect(x + scale(4), footer_y + scale(2), math.floor(self.width / 2) - scale(6), footer_h - scale(4), Blitbuffer.COLOR_LIGHT_GRAY)
     bb:paintRect(x + math.floor(self.width / 2) + scale(2), footer_y + scale(2), math.floor(self.width / 2) - scale(6), footer_h - scale(4), Blitbuffer.COLOR_LIGHT_GRAY)
     local prev = TextWidget:new{
-        text = _("◀ Seite"),
+        text = _("◀ Page"),
         face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
         fgcolor = Blitbuffer.COLOR_BLACK,
         max_width = self.width / 2 - scale(8),
     }
     prev:paintTo(bb, x + scale(8), footer_y + scale(4))
     local next_label = TextWidget:new{
-        text = _("Seite ▶"),
+        text = _("Page ▶"),
         face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
         fgcolor = Blitbuffer.COLOR_BLACK,
         max_width = self.width / 2 - scale(8),
@@ -3143,7 +3148,7 @@ end
 -- upward arrow is more recognizable on both color and monochrome E-Ink than a
 -- text-only navigation button.
 local JumpControl = InputContainer:extend{
-    title = "Springen",
+    title = "Jump",
     width = nil,
     height = nil,
     callback = nil,
@@ -3194,7 +3199,7 @@ local function stateFor(instance)
         session = VoxelSession.new(),
         world_store = WorldStore.load(),
         screen = "splash",
-        create = { name = "Meine Welt", seed = "", mode = "Überleben", difficulty = "Normal", cheats = false },
+        create = { name = "My World", seed = "", mode = "Survival", difficulty = "Normal", cheats = false },
     }
     instance.minecraft = state
     return state
@@ -3256,8 +3261,8 @@ function WorldStore.load()
                 id = tostring(world.id or #data.worlds + 1),
                 name = tostring(world.name):sub(1, 40),
                 seed = parseWorldSeed(world.seed) or normalizeSeed(0),
-                mode = world.mode == "Kreativ" and "Kreativ" or "Überleben",
-                difficulty = ({ Friedlich = true, Einfach = true, Normal = true, Schwer = true })[world.difficulty] and world.difficulty or "Normal",
+                mode = world.mode == "Creative" and "Creative" or "Survival",
+                difficulty = ({ Peaceful = true, Easy = true, Normal = true, Hard = true })[world.difficulty] and world.difficulty or "Normal",
                 cheats = world.cheats == true,
                 created = tostring(world.created or os.date("%d.%m.%y")),
             }
@@ -3283,16 +3288,16 @@ end
 local function promptNewWorld(state, context)
     local dialog
     dialog = InputDialog:new{
-        title = _("Neue Welt erzeugen"),
+        title = _("Create New World"),
         input = tostring(state.session.seed),
-        input_hint = _("Seed als Ganzzahl; leer = neuer Zufalls-Seed"),
+        input_hint = _("Integer seed; empty = random seed"),
         buttons = {
             {
                 { text = _("Abbrechen"), callback = function() UIManager:close(dialog) end },
-                { text = _("Erstellen"), is_enter_default = true, callback = function()
+                { text = _("Create"), is_enter_default = true, callback = function()
                     local seed = parseWorldSeed(dialog:getInputText())
                     if seed == false then
-                        UIManager:show(InfoMessage:new{ text = _("Bitte gib eine ganze Zahl zwischen -2147483647 und 2147483646 ein.") })
+                        UIManager:show(InfoMessage:new{ text = _("Please enter an integer between -2147483647 and 2147483646.") })
                         return
                     end
                     UIManager:close(dialog)
@@ -3344,10 +3349,10 @@ end
 local function buildSplashPane(state, context, width, height)
     local button_w, button_h = math.min(math.floor(width * 0.62), 330), math.max(38, math.floor(height * 0.075))
     local x, y, gap = math.floor((width - button_w) / 2), math.floor(height * 0.40), math.max(7, math.floor(height * 0.018))
-    return menuPane(state, context, width, height, _("Willkommen"), _("Eine kleine Welt. Deine Regeln."), {
-        menuButton(_("Spielen"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
-        menuButton(_("Einstellungen"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
-        menuButton(_("Über das Spiel"), button_w, button_h, x, y + 2 * (button_h + gap), function() rebuildScreen(state, context, "about") end),
+    return menuPane(state, context, width, height, _("Welcome"), _("A small world. Your rules."), {
+        menuButton(_("Play"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
+        menuButton(_("Settings"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
+        menuButton(_("About the Game"), button_w, button_h, x, y + 2 * (button_h + gap), function() rebuildScreen(state, context, "about") end),
     })
 end
 
@@ -3361,12 +3366,12 @@ local function buildWorldsPane(state, context, width, height)
     local gap = math.max(6, math.floor(width * 0.015))
     local card_w, card_h = math.floor((width - 3 * gap) / 2), math.max(62, math.floor(height * 0.14))
     local items = {
-        menuButton(_("Neue Welt erstellen"), math.min(260, width - 2 * gap), 38, width - math.min(260, width - 2 * gap) - gap, math.max(10, math.floor(height * 0.30)), function() rebuildScreen(state, context, "create") end, true),
-        menuButton(_("Zurück"), math.min(130, width / 3), 32, gap, height - 42, function() rebuildScreen(state, context, "splash") end),
+        menuButton(_("Create New World"), math.min(260, width - 2 * gap), 38, width - math.min(260, width - 2 * gap) - gap, math.max(10, math.floor(height * 0.30)), function() rebuildScreen(state, context, "create") end, true),
+        menuButton(_("Back"), math.min(130, width / 3), 32, gap, height - 42, function() rebuildScreen(state, context, "splash") end),
     }
     local worlds = state.world_store.worlds
     if #worlds == 0 then
-        items[#items + 1] = TextWidget:new{ text = _("Noch keine gespeicherten Welten."), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * gap, overlap_offset = { gap, math.floor(height * 0.47) } }
+        items[#items + 1] = TextWidget:new{ text = _("No saved worlds yet."), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * gap, overlap_offset = { gap, math.floor(height * 0.47) } }
     else
         for index, world in ipairs(worlds) do
             local column, row = (index - 1) % 2, math.floor((index - 1) / 2)
@@ -3375,7 +3380,7 @@ local function buildWorldsPane(state, context, width, height)
             items[#items + 1] = menuButton(label, card_w, card_h, x, y, function() openSavedWorld(state, context, world) end, false)
         end
     end
-    return menuPane(state, context, width, height, _("Deine Welten"), _("Wähle eine Welt oder erstelle eine neue."), items)
+    return menuPane(state, context, width, height, _("Your Worlds"), _("Choose a world or create a new one."), items)
 end
 
 local function promptWorldField(state, context, field, title, hint)
@@ -3387,7 +3392,7 @@ local function promptWorldField(state, context, field, title, hint)
         buttons = {
             {
                 { text = _("Abbrechen"), callback = function() UIManager:close(dialog) end },
-                { text = _("Übernehmen"), is_enter_default = true, callback = function()
+                { text = _("Apply"), is_enter_default = true, callback = function()
                     local value = trim(dialog:getInputText())
                     if value ~= "" then state.create[field] = value end
                     UIManager:close(dialog)
@@ -3403,13 +3408,13 @@ end
 local function createWorld(state, context)
     local seed = parseWorldSeed(state.create.seed)
     if state.create.seed ~= "" and seed == false then
-        UIManager:show(InfoMessage:new{ text = _("Der Seed muss eine gültige Ganzzahl sein.") })
+        UIManager:show(InfoMessage:new{ text = _("The seed must be a valid integer.") })
         return
     end
     seed = seed or nextWorldSeed(state.session.seed)
     local world = {
         id = tostring(#state.world_store.worlds + 1) .. "-" .. tostring(seed),
-        name = trim(state.create.name) ~= "" and trim(state.create.name):sub(1, 40) or _("Meine Welt"),
+        name = trim(state.create.name) ~= "" and trim(state.create.name):sub(1, 40) or _("My World"),
         seed = seed,
         mode = state.create.mode,
         difficulty = state.create.difficulty,
@@ -3427,36 +3432,36 @@ local function buildCreatePane(state, context, width, height)
     local button_w = math.min(420, width - 2 * left)
     local y = math.floor(height * 0.32)
     local items = {
-        menuButton(_("Name: ") .. state.create.name, button_w, row_h, left, y, function() promptWorldField(state, context, "name", _("Name der Welt"), _("z. B. Meine Welt")) end),
-        menuButton(_("Seed: ") .. (state.create.seed ~= "" and state.create.seed or _("Zufällig")), button_w, row_h, left, y + row_h + gap, function() promptWorldField(state, context, "seed", _("Welt-Seed"), _("Leer = zufälliger Seed")) end),
-        menuButton(_("Spielmodus: ") .. state.create.mode, button_w, row_h, left, y + 2 * (row_h + gap), function() state.create.mode = state.create.mode == "Überleben" and "Kreativ" or "Überleben"; rebuildScreen(state, context, "create") end),
-        menuButton(_("Schwierigkeit: ") .. state.create.difficulty, button_w, row_h, left, y + 3 * (row_h + gap), function()
-            local order = { "Friedlich", "Einfach", "Normal", "Schwer" }
+        menuButton(_("Name: ") .. state.create.name, button_w, row_h, left, y, function() promptWorldField(state, context, "name", _("World Name"), _("e.g. My World")) end),
+        menuButton(_("Seed: ") .. (state.create.seed ~= "" and state.create.seed or _("Random")), button_w, row_h, left, y + row_h + gap, function() promptWorldField(state, context, "seed", _("World Seed"), _("Empty = random seed")) end),
+        menuButton(_("Game Mode: ") .. state.create.mode, button_w, row_h, left, y + 2 * (row_h + gap), function() state.create.mode = state.create.mode == "Survival" and "Creative" or "Survival"; rebuildScreen(state, context, "create") end),
+        menuButton(_("Difficulty: ") .. state.create.difficulty, button_w, row_h, left, y + 3 * (row_h + gap), function()
+            local order = { "Peaceful", "Easy", "Normal", "Hard" }
             for i, value in ipairs(order) do if value == state.create.difficulty then state.create.difficulty = order[i % #order + 1]; break end end
             rebuildScreen(state, context, "create")
         end),
-        menuButton(_("Cheats: ") .. (state.create.cheats and _("An") or _("Aus")), button_w, row_h, left, y + 4 * (row_h + gap), function() state.create.cheats = not state.create.cheats; rebuildScreen(state, context, "create") end),
-        menuButton(_("Erstellen"), math.floor(button_w * 0.58), row_h, left, height - row_h - 12, function() createWorld(state, context) end, true),
-        menuButton(_("Zurück"), math.floor(button_w * 0.38), row_h, left + math.floor(button_w * 0.62), height - row_h - 12, function() rebuildScreen(state, context, "worlds") end),
+        menuButton(_("Cheats: ") .. (state.create.cheats and _("On") or _("Off")), button_w, row_h, left, y + 4 * (row_h + gap), function() state.create.cheats = not state.create.cheats; rebuildScreen(state, context, "create") end),
+        menuButton(_("Create"), math.floor(button_w * 0.58), row_h, left, height - row_h - 12, function() createWorld(state, context) end, true),
+        menuButton(_("Back"), math.floor(button_w * 0.38), row_h, left + math.floor(button_w * 0.62), height - row_h - 12, function() rebuildScreen(state, context, "worlds") end),
     }
-    return menuPane(state, context, width, height, _("Neue Welt erstellen"), _("Lege Name, Seed und Spielregeln fest."), items)
+    return menuPane(state, context, width, height, _("Create New World"), _("Set the name, seed, and game rules."), items)
 end
 
 local function buildSettingsPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x, y = math.floor((width - button_w) / 2), math.floor(height * 0.38)
-    return menuPane(state, context, width, height, _("Einstellungen"), _("Anzeige und Spielverhalten"), {
-        menuButton(_("Farbe: ") .. (state.session.color_enabled and _("An") or _("Aus")), button_w, button_h, x, y, function() state.session:toggleColor(); rebuildScreen(state, context, "settings") end),
-        menuButton(_("Zurück"), button_w, button_h, x, y + button_h + 10, function() rebuildScreen(state, context, "splash") end),
+    return menuPane(state, context, width, height, _("Settings"), _("Display and gameplay"), {
+        menuButton(_("Color: ") .. (state.session.color_enabled and _("On") or _("Off")), button_w, button_h, x, y, function() state.session:toggleColor(); rebuildScreen(state, context, "settings") end),
+        menuButton(_("Back"), button_w, button_h, x, y + button_h + 10, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
-    return menuPane(state, context, width, height, _("Über das Spiel"), _("Offline-Voxel-Sandbox für AppDock"), {
-        TextWidget:new{ text = _("Biomes · Dörfer · Inventar · Crafting\n\nMinecraft 3D 4.1.4"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
-        menuButton(_("Zurück"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
+    return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
+        TextWidget:new{ text = _("Biomes · Villages · Inventory · Crafting\n\nMinecraft 3D 4.1.4"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
@@ -3464,7 +3469,7 @@ return {
     id = "minecraft",
     version = "4.3.9",
     title = "Minecraft 3D",
-    subtitle = "Biome, Dörfer, Inventar & Crafting",
+    subtitle = "Biomes, Villages, Inventory & Crafting",
     symbol = "M",
     logo = "minecraft",
     buildPane = function(instance, context)
@@ -3543,23 +3548,23 @@ return {
         local joystick = Joystick:new{ width = joystick_size, height = joystick_size, canvas = canvas }
         joystick.overlap_offset = { margin + px(6), touch_band_y + math.floor((touch_band_h - joystick_size) / 2) }
         state.joystick = joystick
-        local jump = JumpControl:new{ title = _("Springen"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end }
+        local jump = JumpControl:new{ title = _("Jump"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end }
         jump.overlap_offset = { margin + canvas_w - jump_w - px(8), touch_band_y + math.floor((touch_band_h - jump_h) / 2) }
         canvas.control_dpad_region = { x = joystick.overlap_offset[1], y = joystick.overlap_offset[2], w = joystick_size, h = joystick_size }
         canvas.control_jump_region = { x = jump.overlap_offset[1], y = jump.overlap_offset[2], w = jump_w, h = jump_h }
         canvas.control_dpad_widget, canvas.control_jump_widget = joystick, jump
         local mode_label = state.session:tapActionLabel()
         local hint_text = state.session.tap_action == "place"
-            and _("Tippen: Block setzen · Halten: abbauen · Wischen: umsehen")
-            or _("Tippen: abbauen · Halten: Block setzen · Wischen: umsehen")
+            and _("Tap: place block · Hold: mine · Swipe: look around")
+            or _("Tap: mine · Hold: place block · Swipe: look around")
         pane[1] = OverlapGroup:new{
             dimen = pane.dimen,
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", heading_size), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = heading_w, overlap_offset = { margin, px(6) } },
             TextWidget:new{ text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName(), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w, overlap_offset = { margin, px(29) } },
-            NavButton:new{ title = _("Farbe"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
-            NavButton:new{ title = _("Menü"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
+            NavButton:new{ title = _("Color"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
+            NavButton:new{ title = _("Menu"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
             hotbar,
             inventory_panel,
@@ -3569,11 +3574,11 @@ return {
             -- D-pad afterwards prevents them from visually covering it.
             joystick,
             jump,
-            NavButton:new{ title = _("Links"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
-            NavButton:new{ title = _("Vor"), width = button_w, height = controls_h, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
-            NavButton:new{ title = _("Zurück"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
-            NavButton:new{ title = _("Rechts"), width = button_w, height = controls_h, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
-            NavButton:new{ title = _("Inventar"), width = button_w, height = controls_h, callback = function()
+            NavButton:new{ title = _("Left"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
+            NavButton:new{ title = _("Forward"), width = button_w, height = controls_h, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
+            NavButton:new{ title = _("Back"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
+            NavButton:new{ title = _("Right"), width = button_w, height = controls_h, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
+            NavButton:new{ title = _("Inventory"), width = button_w, height = controls_h, callback = function()
                 canvas:act("inventory")
                 inventory_panel:refresh()
             end, overlap_offset = { margin + (button_w + gap) * 4, controls_y } },
