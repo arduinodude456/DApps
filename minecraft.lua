@@ -202,6 +202,10 @@ local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
 local MOVE_FRAMES = 4
 local MOVE_FRAME_SECONDS = 0.045
+-- Sheep and their local canvas are redrawn at about 11 FPS. scheduleIn uses
+-- seconds, not milliseconds; using 420 here made the old sheep timer wait
+-- seven minutes between updates, so they appeared completely static.
+local MOB_FRAME_SECONDS = 0.09
 -- Mobile Bedrock look sensitivity: a normal thumb drag should turn the view
 -- decisively, not require a full-screen swipe for a small camera movement.
 local LOOK_YAW_PER_PIXEL = 0.014
@@ -755,7 +759,18 @@ local function generateSheep(world, seed)
                 end
                 if clear then
                     sites[#sites + 1] = { x = x, z = z }
-                    sheep[#sheep + 1] = { x = x + 0.5, z = z + 0.5, y = ground, kind = "sheep", wool = "white", phase = hash2(seed + 2901, x, z) * math.pi * 2, gait = hash2(seed + 2902, x, z) }
+                    local wool_tone = biome == "birch_forest" and "white"
+                        or biome == "forest" and "warm_gray"
+                        or "cream"
+                    sheep[#sheep + 1] = {
+                        x = x + 0.5, z = z + 0.5, y = ground,
+                        kind = "sheep", wool = "white", wool_tone = wool_tone,
+                        phase = hash2(seed + 2901, x, z) * math.pi * 2,
+                        gait = hash2(seed + 2902, x, z),
+                        heading = hash2(seed + 2903, x, z) * math.pi * 2,
+                        wander_phase = hash2(seed + 2904, x, z) * math.pi * 2,
+                        grazing = hash2(seed + 2905, x, z) > 0.42,
+                    }
                 end
             end
         end
@@ -1301,7 +1316,7 @@ function VoxelSession.new(seed)
     self._jumpTick = function() self:tickJump() end
     self._heldMoveTick = function() self:tickHeldMove() end
     self._mobTick = function() self:tickMobs() end
-    UIManager:scheduleIn(420, self._mobTick)
+    UIManager:scheduleIn(MOB_FRAME_SECONDS, self._mobTick)
     return self
 end
 
@@ -1719,26 +1734,34 @@ function VoxelSession:tickMobs()
     local world = self.world
     if world and world.mobs then
         for index, mob in ipairs(world.mobs) do
-            local phase = (mob.phase or index) + self.mob_clock * 0.58
-            local speed = 0.16 + (mob.gait or 0) * 0.08
-            local nx = mob.x + math.cos(phase) * speed
-            local nz = mob.z + math.sin(phase) * speed
+            local phase = (mob.wander_phase or index) + self.mob_clock * 0.075
+            local turn = math.sin(phase) * 0.055 + math.sin(phase * 0.37) * 0.025
+            mob.heading = wrapAngle((mob.heading or phase) + turn)
+            local speed = mob.grazing and 0.018 or (0.045 + (mob.gait or 0) * 0.035)
+            local nx = mob.x + math.sin(mob.heading) * speed
+            local nz = mob.z + math.cos(mob.heading) * speed
             if nx > 2 and nz > 2 and nx < world.size - 2 and nz < world.size - 2 then
                 local ground = self:walkHeight(nx, nz)
                 local current_ground = self:walkHeight(mob.x, mob.z)
-                if math.abs(ground - current_ground) <= 1 then
+                local column_material = materialAt(world, math.floor(nx), math.floor(nz))
+                local can_graze = column_material == "grass" or column_material == "snow"
+                if math.abs(ground - current_ground) <= 1 and can_graze then
                     mob.x, mob.z, mob.y = nx, nz, ground
                 else
-                    mob.phase = (mob.phase or 0) + math.pi * 0.7
+                    mob.heading = wrapAngle(mob.heading + math.pi * (0.45 + (mob.gait or 0) * 0.25))
                 end
             else
-                mob.phase = (mob.phase or 0) + math.pi
+                mob.heading = wrapAngle(mob.heading + math.pi * 0.65)
             end
-            mob.walk_cycle = (mob.walk_cycle or 0) + speed * 8
+            mob.walk_cycle = (mob.walk_cycle or 0) + speed * 32
+            mob.head_bob = math.sin((mob.walk_cycle or 0) * 0.65) * (mob.grazing and 0.035 or 0.018)
+            if self.mob_clock % 18 == 0 then
+                mob.grazing = not mob.grazing
+            end
         end
     end
     if self.canvas then self.canvas:refreshFast() end
-    UIManager:scheduleIn(420, self._mobTick)
+    UIManager:scheduleIn(MOB_FRAME_SECONDS, self._mobTick)
 end
 
 function VoxelSession:beginMove(direction)
@@ -1956,6 +1979,37 @@ function VoxelCanvas:_sheepHasLineOfSight(session, mob)
     return true
 end
 
+local function sheepShades(mob)
+    -- Keep the palette readable on E-Ink while giving each habitat a slightly
+    -- different natural coat: birch groves stay bright, forests are warmer and
+    -- open plains use a soft cream tone.
+    if not colorRenderingEnabled() then
+        return {
+            top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_BLACK,
+            front = Blitbuffer.COLOR_WHITE,
+            face = { top = Blitbuffer.COLOR_BLACK, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_BLACK },
+        }
+    end
+    if mob.wool_tone == "warm_gray" then
+        return {
+            top = Blitbuffer.COLOR_LIGHT_GRAY, side = Blitbuffer.COLOR_DARK_GRAY,
+            front = Blitbuffer.COLOR_LIGHT_GRAY,
+            face = { top = Blitbuffer.COLOR_DARK_GRAY, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_DARK_GRAY },
+        }
+    elseif mob.wool_tone == "cream" then
+        return {
+            top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_LIGHT_GRAY,
+            front = Blitbuffer.COLOR_WHITE,
+            face = { top = Blitbuffer.COLOR_DARK_GRAY, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_DARK_GRAY },
+        }
+    end
+    return {
+        top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_LIGHT_GRAY,
+        front = Blitbuffer.COLOR_WHITE,
+        face = { top = Blitbuffer.COLOR_DARK_GRAY, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_DARK_GRAY },
+    }
+end
+
 function VoxelCanvas:_drawSheepCuboid(bb, session, origin_x, origin_y, cx, cz, y0, y1, half_x, half_z, shades)
     local function point(wx, wz, wy)
         local px, py = self:projectPoint(wx, wz, wy, session, origin_x, origin_y)
@@ -1980,9 +2034,6 @@ function VoxelCanvas:_drawSheep(bb, x, y, session)
     local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
     local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
     local focal = (self.width / 2) / math.tan(math.rad(90) / 2)
-    local shades = colorRenderingEnabled()
-        and { top = Blitbuffer.COLOR_LIGHT_GRAY, side = Blitbuffer.COLOR_DARK_GRAY, front = Blitbuffer.COLOR_WHITE }
-        or { top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_WHITE }
     for _, mob in ipairs(world.mobs) do
         local dx, dz = mob.x - session.player_x, mob.z - session.player_z
         local depth = dx * forward_x + dz * forward_z
@@ -1992,18 +2043,33 @@ function VoxelCanvas:_drawSheep(bb, x, y, session)
             local projected_size = math.max(6, math.min(34, focal / depth * 0.58))
             local scale = projected_size / math.max(8, focal / depth)
             local body_x, body_z = mob.x, mob.z
-            -- Body, four legs and head are all world-space cuboids. Unlike the
-            -- old sprite, every part has a projected top and two side faces.
+            local shades = sheepShades(mob)
+            -- Body, four legs and head are all world-space cuboids. The extra
+            -- silhouette pieces make the sheep read as an animal instead of a
+            -- floating box, even on a coarse E-Ink render grid.
             self:_drawSheepCuboid(bb, session, x, y, body_x, body_z, mob.y + 0.05, mob.y + 0.78, 0.46, 0.32, shades)
             local leg_offsets = { {-0.30,-0.20}, {0.30,-0.20}, {-0.30,0.20}, {0.30,0.20} }
             for index, offset in ipairs(leg_offsets) do
-                local stride = math.sin((mob.walk_cycle or 0) + (index % 2) * math.pi) * 0.055
-                self:_drawSheepCuboid(bb, session, x, y, body_x + offset[1], body_z + offset[2], mob.y - 0.02, mob.y + 0.35 + stride, 0.09, 0.09, shades)
+                local stride = math.sin((mob.walk_cycle or 0) + (index % 2) * math.pi) * 0.06
+                self:_drawSheepCuboid(bb, session, x, y, body_x + offset[1], body_z + offset[2], mob.y - 0.02, mob.y + 0.35 + stride, 0.08, 0.08, shades.face)
             end
             local to_x, to_z = session.player_x - body_x, session.player_z - body_z
             local distance = math.max(0.01, math.sqrt(to_x * to_x + to_z * to_z))
-            local head_x, head_z = body_x + to_x / distance * 0.52, body_z + to_z / distance * 0.52
-            self:_drawSheepCuboid(bb, session, x, y, head_x, head_z, mob.y + 0.62, mob.y + 1.08, 0.22, 0.22, shades)
+            local look_x, look_z = to_x / distance, to_z / distance
+            local head_x, head_z = body_x + look_x * 0.52, body_z + look_z * 0.52
+            local bob = mob.head_bob or 0
+            self:_drawSheepCuboid(bb, session, x, y, head_x, head_z, mob.y + 0.60 + bob, mob.y + 1.04 + bob, 0.22, 0.22, shades.face)
+            local side_x, side_z = -look_z, look_x
+            for _, side in ipairs({ -1, 1 }) do
+                self:_drawSheepCuboid(bb, session, x, y,
+                    head_x + side_x * side * 0.19, head_z + side_z * side * 0.19,
+                    mob.y + 0.89 + bob, mob.y + 1.12 + bob, 0.055, 0.055, shades.face)
+            end
+            -- A small tail opposite the head completes the silhouette and
+            -- gives the sheep a clear facing direction while it wanders.
+            self:_drawSheepCuboid(bb, session, x, y,
+                body_x - look_x * 0.45, body_z - look_z * 0.45,
+                mob.y + 0.48, mob.y + 0.72, 0.10, 0.10, shades)
         end
     end
 end
@@ -3467,7 +3533,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.9",
+    version = "4.4.0",
     title = "Minecraft 3D",
     subtitle = "Biomes, Villages, Inventory & Crafting",
     symbol = "M",
@@ -3650,6 +3716,7 @@ return {
         TURN_ANGLE = TURN_ANGLE,
         MOVE_FRAMES = MOVE_FRAMES,
         MOVE_FRAME_SECONDS = MOVE_FRAME_SECONDS,
+        MOB_FRAME_SECONDS = MOB_FRAME_SECONDS,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,
         STACK_LIMIT = STACK_LIMIT,
