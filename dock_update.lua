@@ -282,6 +282,15 @@ local function isPng(content)
     return type(content) == "string" and content:sub(1, 8) == "\137PNG\r\n\26\n"
 end
 
+local function isSuggestionDatabase(content)
+    return type(content) == "string"
+        and (content:match("^# AppDock offline bilingual suggestion database")
+            or content:match("^# AppDock offline suggestion database"))
+        and content:match("\n# language<TAB>frequency<TAB>word")
+        and content:match("\nde\t[%d%.]+\t[^\r\n]+")
+        and content:match("\nen\t[%d%.]+\t[^\r\n]+")
+end
+
 local function activePlugin(context)
     local appdock = context and context.manager and context.manager.appdock
     local path = appdock and appdock.path
@@ -311,10 +320,7 @@ local function stageRelease(release, entries, target)
         if is_asset then
             if not isPng(source) then removeTree(stage); return nil, _("Downloaded PNG asset has an invalid signature: ") .. entry.path end
         elseif is_data then
-            if not source:match("^# AppDock offline bilingual suggestion database")
-                or not source:match("\n# language<TAB>frequency<TAB>word")
-                or not source:match("\nde\t[%d%.]+\t[^\r\n]+")
-                or not source:match("\nen\t[%d%.]+\t[^\r\n]+") then
+            if not isSuggestionDatabase(source) then
                 removeTree(stage); return nil, _("Downloaded suggestion database has an invalid format: ") .. entry.path
             end
         else
@@ -341,7 +347,7 @@ local function stageRelease(release, entries, target)
             local file = io.open(stage .. "/" .. entry.path, "rb")
             local content = file and file:read("*a") or nil
             if file then file:close() end
-            if not content or not content:match("^# AppDock offline bilingual suggestion database") then
+            if not isSuggestionDatabase(content) then
                 removeTree(stage)
                 return nil, _("Staged suggestion database validation failed: ") .. entry.path
             end
@@ -598,7 +604,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.3.0",
+    version = "1.3.1",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

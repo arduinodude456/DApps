@@ -84,7 +84,7 @@ packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 205633) .. "\n"
 assert(#packaged_sources["appdock_dapps.lua"] == 205636, "The AppDock 7.9.21 host fixture must match its published byte size")
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-7.9.21' }\n"
 packaged_sources["_meta.lua"] = "return { version = '7.9.21' }\n"
-packaged_sources["appdock_suggestions.db"] = "# AppDock offline bilingual suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
+packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
 local feed = [[<feed><entry>
@@ -155,7 +155,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.3.0" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.3.1" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded AppDock package")
@@ -213,7 +213,7 @@ end
 local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
 assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")
 local new_database = assert(io.open(active .. "/appdock_suggestions.db", "rb")):read("*a")
-assert(new_database:find("# AppDock offline bilingual suggestion database", 1, true) and new_database:find("de\t7.4", 1, true) and new_database:find("en\t7.4", 1, true), "DockUpdate must atomically install the suggestion database")
+assert(new_database:find("# AppDock offline suggestion database", 1, true) and new_database:find("de\t7.4", 1, true) and new_database:find("en\t7.4", 1, true), "DockUpdate must atomically install the current keyboard suggestion database")
 local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
