@@ -1,496 +1,576 @@
 --[[--
-Minecraft 3D DApp test.
+Regression test for Minecraft 3D 4.0.0.
+
+Covers the world generator (biomes, trees, villages, ore layers), the renderer
+(mono and color paths, ray cache reuse, local refresh regions), the 36-slot
+Bedrock-style inventory, crafting, block mining/placing with drops, the
+tap/hold interaction model, and the AppDock pane layout.
 
 Run with: lua5.1 test_minecraft.lua
-
-The color mock follows the working square.koplugin API: parse CSS hex with
-Blitbuffer.colorFromString and paint RGB spans through paintRectRGB32.
 ]]--
-local function class(base)
-    base = base or {}
-    base.__index = base
-    function base:extend(child)
-        child = child or {}
-        child.__index = child
-        setmetatable(child, { __index = self })
-        return child
-    end
-    function base:new(args)
-        local value = setmetatable(args or {}, self)
+local function class()
+    local C = {}
+    function C:new(value)
+        value = value or {}
+        setmetatable(value, { __index = C })
         if value.init then value:init() end
         return value
     end
-    return base
+    function C:extend(proto)
+        local E = class()
+        setmetatable(E, { __index = C })
+        for key, value in pairs(proto or {}) do E[key] = value end
+        return E
+    end
+    return C
 end
-local Widget = class({})
-local InputContainer = Widget:extend({})
-local dirty_calls, repaint_calls = {}, 0
-local shown_widget
+local function install(name, value) package.preload[name] = function() return value end end
+
+local color_enabled, rect_calls, rgb_calls = false, 0, 0
+local painted = {}
+local function resetPixels()
+    painted, rect_calls, rgb_calls = {}, 0, 0
+end
+local function newBuffer()
+    local bb = {}
+    function bb:paintRect(x, y, w, h, ink)
+        rect_calls = rect_calls + 1
+        painted[#painted + 1] = { kind = "mono", x = x, y = y, w = w, h = h, ink = ink }
+    end
+    function bb:paintRectRGB32(x, y, w, h, color)
+        rgb_calls = rgb_calls + 1
+        painted[#painted + 1] = { kind = "rgb", x = x, y = y, w = w, h = h, color = color }
+    end
+    return bb
+end
+local function paintedSum(kind)
+    local total = 0
+    for _, rect in ipairs(painted) do
+        if rect.kind == kind then total = total + rect.w * rect.h end
+    end
+    return total
+end
+local function paintedColors()
+    local set = {}
+    for _, rect in ipairs(painted) do
+        if rect.kind == "rgb" then set[rect.color] = true end
+    end
+    return set
+end
+
+local Widget, Input = class(), class()
+install("ffi/blitbuffer", {
+    COLOR_WHITE = "white", COLOR_BLACK = "black", COLOR_DARK_GRAY = "darkgray", COLOR_LIGHT_GRAY = "lightgray",
+    colorFromString = function(hex) return hex end,
+})
+install("device", {
+    screen = { scaleBySize = function(_, value) return value end, isColorEnabled = function() return color_enabled end },
+    input = { group = {} },
+})
+install("ui/font", { getFace = function() return {} end })
+install("ui/geometry", { new = function(_, value) return value end })
+install("ui/gesturerange", { new = function(_, value) return value end })
+install("ui/widget/horizontalspan", Widget)
+install("ui/widget/textwidget", Widget)
+install("ui/widget/container/centercontainer", Widget)
+install("ui/widget/container/framecontainer", Widget)
+install("ui/widget/container/inputcontainer", Input)
+install("ui/widget/overlapgroup", Widget)
+install("ui/widget/container/widgetcontainer", Widget)
+install("gettext", function(value) return value end)
+
+local shown_widget, shown_list, dirty_calls, repaint_calls = nil, {}, {}, 0
+local scheduled = {}
 local InputDialog = Widget:extend({})
 function InputDialog:getInputText() return self.input or "" end
 function InputDialog:onShowKeyboard() self.keyboard_shown = true end
 local InfoMessage = Widget:extend({})
-
--- Mutable device state, so one run can cover a color panel, a color panel with
--- KOReader's "Color rendering" switched off, and a grayscale panel.
-local MOCK = {
-    color_rendering = true,
-    color_screen = true,
-    buffer_is_rgb = true,
-}
-
--- ctype-like constructor: callable, but type() is "table" (a real LuaJIT ctype
--- reports "cdata"). Either way it is *not* a Lua function.
-local function ctypeLikeRGB32()
-    return setmetatable({}, {
-        __call = function(_, r, g, b, a) return { r = r, g = g, b = b, a = a, rgb32 = true } end,
-    })
-end
-MOCK.rgb32_ctor = ctypeLikeRGB32()
-local ffi_ok, ffi = pcall(require, "ffi")
-if ffi_ok then
-    ffi.cdef[[typedef struct { uint8_t r; uint8_t g; uint8_t b; uint8_t alpha; uint8_t rgb32; } MinecraftTestRGB32;]]
-    ffi.metatype("MinecraftTestRGB32", {
-        __index = {
-            getColorRGB32 = function(self) return self end,
-            getR = function(self) return self.r end,
-            getG = function(self) return self.g end,
-            getB = function(self) return self.b end,
-            getAlpha = function(self) return self.alpha end,
-        },
-        __eq = function(self, color)
-            local c = color:getColorRGB32()
-            return self.r == c:getR() and self.g == c:getG() and self.b == c:getB() and self.alpha == c:getAlpha()
-        end,
-        __tostring = function(self)
-            if self.rgb32 == 1 then return string.format("rgb(%d,%d,%d)", self.r, self.g, self.b) end
-            if self.r == 0 and self.g == 0 and self.b == 0 then return "black" end
-            if self.r == 255 and self.g == 255 and self.b == 255 then return "white" end
-            return string.format("gray(%d)", self.r)
-        end,
-    })
-    MOCK.rgb32_ctor = ffi.typeof("MinecraftTestRGB32")
-end
-
-local function isRGBInk(ink)
-    return (type(ink) == "cdata" and ink.rgb32 == 1) or (type(ink) == "table" and ink.rgb32 == true)
-end
-
-local function colorConstant(name, r, g, b)
-    if ffi_ok then return MOCK.rgb32_ctor(r, g, b, 0xFF, 0) end
-    return name
-end
-local COLOR_WHITE = colorConstant("white", 255, 255, 255)
-local COLOR_BLACK = colorConstant("black", 0, 0, 0)
-local COLOR_LIGHT_GRAY = colorConstant("light", 192, 192, 192)
-local COLOR_DARK_GRAY = colorConstant("dark", 64, 64, 64)
-
-package.preload["ffi/blitbuffer"] = function()
-    return {
-        COLOR_WHITE = COLOR_WHITE,
-        COLOR_BLACK = COLOR_BLACK,
-        COLOR_LIGHT_GRAY = COLOR_LIGHT_GRAY,
-        COLOR_DARK_GRAY = COLOR_DARK_GRAY,
-        ColorRGB32 = MOCK.rgb32_ctor,
-        colorFromString = function(hex)
-            local r, g, b = hex:match("^#(%x%x)(%x%x)(%x%x)$")
-            assert(r and g and b, "colorFromString expects a six-digit RGB hex string")
-            return MOCK.rgb32_ctor(tonumber(r, 16), tonumber(g, 16), tonumber(b, 16), 0xFF, 1)
-        end,
-    }
-end
-package.preload["device"] = function()
-    return {
-        screen = {
-            scaleBySize = function(_, value) return value end,
-            isColorEnabled = function() return MOCK.color_rendering end,
-            isColorScreen = function() return MOCK.color_screen end,
-            bb = { isRGB = function() return MOCK.buffer_is_rgb end },
-        },
-        input = { group = {} },
-    }
-end
-package.preload["gettext"] = function() return function(value) return value end end
-package.preload["ui/font"] = function() return { getFace = function(_, name, size) return { name = name, size = size } end } end
-package.preload["ui/geometry"] = function() return { new = function(_, value) return value end } end
-package.preload["ui/gesturerange"] = function() return { new = function(_, value) return value end } end
-for _, module in ipairs({
-    "ui/widget/container/centercontainer",
-    "ui/widget/container/framecontainer",
-    "ui/widget/container/inputcontainer",
-    "ui/widget/horizontalspan",
-    "ui/widget/overlapgroup",
-    "ui/widget/textwidget",
-}) do
-    package.preload[module] = function() return InputContainer end
-end
-package.preload["ui/widget/inputdialog"] = function() return InputDialog end
-package.preload["ui/widget/infomessage"] = function() return InfoMessage end
-package.preload["ui/uimanager"] = function()
-    return {
-        scheduleIn = function() end,
-        unschedule = function() end,
-        widgetRepaint = function() repaint_calls = repaint_calls + 1 end,
-        setDirty = function(_, _, waveform, region)
-            dirty_calls[#dirty_calls + 1] = { waveform = waveform, region = region }
-        end,
-        forceRePaint = function() end,
-        yieldToEPDC = function() end,
-        show = function(_, widget) shown_widget = widget end,
-        close = function(_, widget) if shown_widget == widget then shown_widget = nil end end,
-    }
-end
-
-local app = dofile("minecraft.lua")
-local test = app._test
-assert(app.id == "minecraft" and app.version == "3.3.0" and app.logo == "minecraft", "Minecraft metadata must be stable")
-assert(test.WORLD_SIZE == 80 and test.MAX_VIEW_DISTANCE == 24 and test.RENDER_SCALE == 1, "Render constants must provide the full-resolution long view")
-assert(test.RENDER_COLS == 600 and test.RENDER_ROWS == 600 and test.RENDER_SAMPLE == 5, "Renderer must sample 5x5 output pixels per ray inside a 600x600 budget")
-assert(test.COLOR_RENDER_SAMPLE == 3, "Color mode must use a faster ray grid while keeping texture dithering readable")
-assert(test.MOVE_FRAMES == 4 and test.MOVE_FRAME_SECONDS < 0.05, "Movement must be animated at a fast-refresh cadence")
-
--- Color mode follows only KOReader's public screen setting; there is no separate
--- constructor or hardware capability probe inside the DApp.
-assert(type(MOCK.rgb32_ctor) ~= "function", "Test double must model KOReader's non-function ColorRGB32")
-local palette_count = 0
-for _ in pairs(test.COLOR_PALETTE) do palette_count = palette_count + 1 end
-assert(palette_count == 7, "Color mode must expose exactly seven palette colors")
-local grass_rgb, water_rgb = test.colorForMaterial("grass"), test.colorForMaterial("water")
-assert(isRGBInk(grass_rgb) and grass_rgb.r == 45 and grass_rgb.g == 170 and grass_rgb.b == 70, "Grass must use the RGB green palette color")
-assert(isRGBInk(water_rgb) and water_rgb.r == 55 and water_rgb.g == 105 and water_rgb.b == 220, "Water must use the RGB blue palette color")
-assert(test.paletteColor("green") == grass_rgb, "Palette colors must be cached so color spans can be merged")
-local brown_mix = test.paletteMixForRGB(137, 90, 59)
-assert(brown_mix.first ~= brown_mix.second and brown_mix.second_pixels > 0 and brown_mix.second_pixels < 16, "A brown target color must be approximated by dithering two of the seven fast inks")
-assert(test.COLOR_PALETTE[brown_mix.first] and test.COLOR_PALETTE[brown_mix.second], "Dithered output must stay within the seven supported fast-refresh inks")
-local dirt_texture_mix = test.paletteMixForMaterial("dirt", 1)
-local brighter_dirt_texture_mix = test.paletteMixForMaterial("dirt", 2)
-assert(brighter_dirt_texture_mix.second_pixels > dirt_texture_mix.second_pixels, "Different existing texture levels must produce different perceived color shades")
-
-local standard_cols, standard_rows = test.renderGridFor(210, 126)
-assert(standard_cols == 42 and standard_rows == 25, "A 210x126 pane must map to a 42x25 ray grid of 5x5 pixel cells")
-local color_cols, color_rows = test.renderGridFor(210, 126, test.COLOR_RENDER_SAMPLE)
-assert(color_cols == 70 and color_rows == 42, "Color mode must use 3x3 output pixels per ray")
-local compact_cols, compact_rows = test.renderGridFor(39, 61)
-assert(compact_cols == 7 and compact_rows == 12, "Compact panes must not oversample their assigned canvas")
-
-local world = test.buildWorld()
-assert(world.size == 80 and #world.heights == 80 and #world.heights[1] == 80, "World must be a complete deterministic block grid")
-assert(world.materials and world.materials[1][1], "World must contain block materials")
-assert(world.block_planes and test.blockAt(world, 0, 0, world.heights[1][1] - 1) == world.materials[1][1], "Cached voxel planes must preserve the visible surface block")
-local function assertFlatBlockCacheMatches(world_to_check)
-    assert(world_to_check.block_flat, "Worlds must build a contiguous renderer voxel cache")
-    local size = world_to_check.size
-    local stride, padding = world_to_check.block_flat_stride, world_to_check.block_flat_padding
-    local plane_size = stride * stride
-    assert(stride == size + padding * 2 and padding > 0, "Renderer cache must have a padded air border")
-    for level = 0, test.MAX_COLUMN_HEIGHT - 1 do
-        local plane = world_to_check.block_planes[level + 1]
-        for z = 0, size - 1 do
-            for x = 0, size - 1 do
-                local index = z * size + x + 1
-                local flat_index = level * plane_size + (z + padding) * stride + x + padding + 1
-                local material = plane[index]
-                assert(world_to_check.block_flat[flat_index] == (material or false), "Flat renderer cache must match the string material plane")
-            end
-        end
-    end
-    assert(world_to_check.block_flat[1] == false, "Padded world border must be empty")
-end
-assertFlatBlockCacheMatches(world)
-assert(test.heightAt(world, -1, 0) == 0 and test.heightAt(world, 0, -1) == 0, "Outside terrain must be empty")
-assert(test.heightAt(world, 11, 5) >= 1 and world.biomes[6][12], "Seeded biome world must remain walkable")
-assert(test.parseWorldSeed(" 6789 ") == 6789 and test.parseWorldSeed("") == nil and test.parseWorldSeed("seed") == false, "Seed input must accept integers, leave blank for random, and reject invalid text")
-local spawn_x, spawn_z, spawn_yaw, spawn_tree = test.findSpawn(world)
-local spawn_material = world.materials[math.floor(spawn_z) + 1][math.floor(spawn_x) + 1]
-assert(spawn_material ~= "wood" and spawn_material ~= "leaves", "The default spawn must not start inside a tree canopy")
-assert(spawn_tree, "The default seed should select a tree to face")
-local tree_dx, tree_dz = spawn_tree.x - spawn_x, spawn_tree.z - spawn_z
-local tree_distance = math.sqrt(tree_dx * tree_dx + tree_dz * tree_dz)
-assert(tree_distance >= 6 and tree_distance <= 20, "The default spawn should have a nearby visible trunk")
-assert(test.hasClearTreeView(world, spawn_x, spawn_z, world.heights[math.floor(spawn_z) + 1][math.floor(spawn_x) + 1], spawn_tree, tree_distance), "The selected spawn-to-tree view must not be blocked by terrain")
-local facing_dot = (tree_dx * math.sin(spawn_yaw) + tree_dz * math.cos(spawn_yaw)) / tree_distance
-assert(facing_dot > 0.99, "The default spawn should face its visible tree")
-local alternate_world = test.buildWorld(6789)
-local alt_x, alt_z, alt_yaw, alt_tree = test.findSpawn(alternate_world)
-assert(alt_tree, "The alternate seed should also select a visible tree")
-local alt_dx, alt_dz = alt_tree.x - alt_x, alt_tree.z - alt_z
-local alt_distance = math.sqrt(alt_dx * alt_dx + alt_dz * alt_dz)
-assert(test.hasClearTreeView(alternate_world, alt_x, alt_z, alternate_world.heights[math.floor(alt_z) + 1][math.floor(alt_x) + 1], alt_tree, alt_distance)
-    and (alt_dx * math.sin(alt_yaw) + alt_dz * math.cos(alt_yaw)) / alt_distance > 0.99, "Alternate seeds must also spawn facing an unobstructed tree")
-local max_height = 0
-local plains_tree_cells = 0
-for z = 1, world.size do
-    for x = 1, world.size do
-        max_height = math.max(max_height, world.heights[z][x])
-    end
-end
-for key, material in pairs(world.extra_blocks) do
-    if material == "wood" or material == "leaves" then plains_tree_cells = plains_tree_cells + 1 end
-end
-assert(max_height <= test.MAX_COLUMN_HEIGHT, "Tree generation must not cascade into unbounded columns")
-assert(plains_tree_cells > 0, "Seeded plains must retain their low-probability trees")
-assert(plains_tree_cells > 10, "Trees must be made from freestanding blocks above the terrain")
-local top_u, top_v = test.textureCoordinates("top", 3.25, 5.5, 9.75, 1)
-local x_side_u, x_side_v = test.textureCoordinates("side", 3.25, 5.5, 9.75, 0)
-local z_side_u, z_side_v = test.textureCoordinates("side", 3.25, 5.5, 9.75, 2)
-assert(top_u == 0.25 and top_v == 0.75, "Top texture coordinates must use world X/Z")
-assert(x_side_u == 0.75 and x_side_v == 0.5 and z_side_u == 0.25 and z_side_v == 0.5, "Side textures must use the horizontal axis tangent to the hit face")
-
-local session = test.VoxelSession.new()
-local original_x, original_z, original_yaw = session.player_x, session.player_z, session.yaw
-assert(session:move(1), "Player must walk forward on the starting terrace")
-assert(math.abs(session.player_x - (original_x + math.sin(original_yaw) * test.WALK_DISTANCE)) < 0.001 and math.abs(session.player_z - (original_z + math.cos(original_yaw) * test.WALK_DISTANCE)) < 0.001, "Forward movement must follow the camera heading")
-assert(session:turn(1) and session.yaw > original_yaw, "Turning right must change the camera heading")
-local place_session = test.VoxelSession.new()
-place_session.player_x, place_session.player_z, place_session.yaw = 40.5, 40.5, 0
-place_session.world.heights[43][41] = test.MAX_COLUMN_HEIGHT
-place_session.world.materials[43][41] = "stone"
-assert(not place_session:place() and place_session.world.heights[43][41] == test.MAX_COLUMN_HEIGHT, "Placing on a maximum-height column must not lower it")
-local edit_session = test.VoxelSession.new(12345)
-edit_session.player_x, edit_session.player_z, edit_session.yaw = 40.5, 40.5, 0
-edit_session.world.heights[43][41], edit_session.world.materials[43][41] = 3, "grass"
-test.rebuildWorldBlocks(edit_session.world)
-assertFlatBlockCacheMatches(edit_session.world)
-assert(edit_session:mine() and test.blockAt(edit_session.world, 40, 42, 1) == "grass" and test.blockAt(edit_session.world, 40, 42, 2) == nil, "Mining must update the cached top and remove the old voxel")
-assertFlatBlockCacheMatches(edit_session.world)
-edit_session:selectSlot(4)
-assert(edit_session:place() and test.blockAt(edit_session.world, 40, 42, 2) == "wood", "Placing must update the cached voxel plane")
-assertFlatBlockCacheMatches(edit_session.world)
-
-local function flatSession()
-    local flat = test.VoxelSession.new()
-    flat.world.extra_blocks = {}
-    for z = 1, flat.world.size do
-        for x = 1, flat.world.size do
-            flat.world.heights[z][x] = 1
-            flat.world.materials[z][x] = "grass"
-        end
-    end
-    test.rebuildWorldBlocks(flat.world)
-    flat.player_x, flat.player_z, flat.yaw, flat.pitch = 40.5, 40.5, 0, 0
-    return flat
-end
-
-local target_session = flatSession()
-target_session.player_x, target_session.player_z, target_session.yaw = 40.5, 40.5, 0
-target_session.world.heights[43][41], target_session.world.materials[43][41] = 5, "stone"
-test.rebuildWorldBlocks(target_session.world)
-local target_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = target_session }
-local clicked = target_canvas:pickBlock(105, 63)
-assert(clicked and clicked.x == 40 and clicked.z == 42 and clicked.y == 2, "A center-screen tap must ray-pick the visible voxel in the camera crosshair")
-assert(clicked.place_x == 40 and clicked.place_z == 41 and clicked.place_y == 2, "The hit face must identify the adjacent voxel for placement")
-local mined_material = test.blockAt(target_session.world, clicked.x, clicked.z, clicked.y)
-local mined_before = target_session.inventory[mined_material] or 0
-assert(target_session:mineBlock(clicked) and test.blockAt(target_session.world, clicked.x, clicked.z, clicked.y) == nil, "Mining the picked voxel must remove exactly that block")
-assert(target_session.inventory[mined_material] == mined_before + 1, "Mining must add the exact voxel material to inventory")
-target_session:selectSlot(1)
-assert(target_session:placeBlock({ x = clicked.place_x, z = clicked.place_z, y = clicked.place_y })
-    and test.blockAt(target_session.world, clicked.place_x, clicked.place_z, clicked.place_y) == "grass", "Placing must put the selected inventory block beside the clicked face")
-assert((target_session.inventory.grass or 0) == 11, "Placing must reduce the selected material count")
-
---[[--
-Phase 1: a color panel with KOReader's "Color rendering" switched on. This is
-the configuration that stayed silently monochrome before the fix.
-]]--
-MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = true, true, true
-assert(test.colorRenderingEnabled(), "A color panel with KOReader color rendering on must offer color")
-local color_session = flatSession()
-color_session.color_enabled = true
-local color_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }
-local color_spans, rgb_spans, generic_rgb_spans, green_spans = 0, 0, 0, 0
-local palette_inks_seen = {}
-local function recordColorSpan(_, left, top, width, height, ink)
-    color_spans = color_spans + 1
-    if isRGBInk(ink) then
-        generic_rgb_spans = generic_rgb_spans + 1
-    end
-    assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
-    assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
-end
-local function recordRGB32Span(_, left, top, width, height, ink)
-    color_spans = color_spans + 1
-    if isRGBInk(ink) then
-        rgb_spans = rgb_spans + 1
-        palette_inks_seen[ink.r .. "," .. ink.g .. "," .. ink.b] = true
-        if ink.r == 45 and ink.g == 170 and ink.b == 70 then green_spans = green_spans + 1 end
-    end
-    assert(width >= 1 and height >= 1, "Color spans must have a positive physical size")
-    assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
-end
--- Square uses this exact path: colorFromString(hex) + paintRectRGB32.
-color_canvas:paintTo({ paintRect = recordColorSpan, paintRectRGB32 = recordRGB32Span }, 17, 29)
-assert(color_spans > 10, "Color rendering must still paint the projected block scene")
-assert(rgb_spans > 0, "Color rendering must paint RGB material colors on a color buffer")
-assert(generic_rgb_spans == 0, "RGB material colors must not go through generic paintRect")
-assert(green_spans > 0, "Grass texture must retain the RGB green palette ink among its dithered shades")
-assert(palette_inks_seen["220,45,45"] and palette_inks_seen["45,170,70"], "Grass target RGB must be visibly approximated by dithering red and green fast inks")
-
--- The existing grass texture should now contain both palette-green and dither
--- pixels, rather than replacing every texture with one uniform material color.
-local color_pixels = {}
-for row = 0, 125 do
-    color_pixels[row + 1] = {}
-    for col = 0, 209 do color_pixels[row + 1][col + 1] = "white" end
-end
-local function recordColorPixels(_, left, top, width, height, ink)
-    local pixel_value = isRGBInk(ink) and ink.r == 0 and ink.g == 0 and ink.b == 0 and "black" or (isRGBInk(ink) and "color" or tostring(ink))
-    for row = math.max(0, top), math.min(125, top + height - 1) do
-        for col = math.max(0, left), math.min(209, left + width - 1) do
-            color_pixels[row + 1][col + 1] = pixel_value
-        end
-    end
-end
-test.VoxelCanvas:new{ width = 210, height = 126, session = color_session }:paintTo({ paintRect = recordColorPixels, paintRectRGB32 = recordColorPixels }, 0, 0)
-local function countPixels(value, first_row, last_row)
-    local count = 0
-    for row = first_row, last_row do
-        for col = 0, 209 do if color_pixels[row + 1][col + 1] == value then count = count + 1 end end
-    end
-    return count
-end
-assert(countPixels("color", 42, 125) > 8000, "Color ground must cover the lower view instead of collapsing into one edge row")
-assert(countPixels("black", 42, 125) > 100, "Color mode must dither existing texture shades with fast black ink")
-assert(countPixels("color", 0, 41) > 100, "The color sky must fill the view above the horizon")
-
-
---[[--
-Phase 2: monochrome E-Ink. The dithered black/white renderer must stay intact
-and the color button must not claim a color mode that the panel cannot show.
-]]--
-MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = false, false, false
-assert(not test.colorRenderingEnabled(), "A grayscale panel must use monochrome rendering")
-assert(tostring(test.colorForMaterial("grass")) == "black", "With KOReader color rendering off, the palette must fall back to black")
-local mono_session = flatSession()
-assert(mono_session.color_enabled, "Color mode stays requested by default; only rendering falls back")
-assert(not mono_session:act("color"), "A color toggle on a grayscale panel must report false")
-assert(mono_session.last_event:find("KOReader-Farbrendering", 1, true), "A grayscale panel must stay monochrome without a color capability probe")
-assert(not mono_session.color_enabled, "A refused color toggle must not report color as active")
-local mono_pixels = {}
-for row = 0, 125 do
-    mono_pixels[row + 1] = {}
-    for col = 0, 209 do mono_pixels[row + 1][col + 1] = "white" end
-end
-local mono_canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = mono_session }
-mono_canvas:paintTo({ paintRect = function(_, left, top, width, height, ink)
-    assert(not isRGBInk(ink), "A grayscale panel must never receive RGB ink")
-    for row = math.max(0, top), math.min(125, top + height - 1) do
-        for col = math.max(0, left), math.min(209, left + width - 1) do
-            mono_pixels[row + 1][col + 1] = tostring(ink)
-        end
-    end
-end }, 0, 0)
-local function monochromePixels(value, first_row, last_row)
-    local count = 0
-    for row = first_row, last_row do
-        for col = 0, 209 do if mono_pixels[row + 1][col + 1] == value then count = count + 1 end end
-    end
-    return count
-end
-assert(monochromePixels("black", 42, 83) > 300 and monochromePixels("black", 84, 125) > 800, "Flat ground must project across the lower view instead of collapsing into one edge row")
-assert(monochromePixels("black", 0, 41) == 0, "A level view must not dither sky ink above the horizon")
-
---[[--
-Phase 3: a color panel whose KOReader "Color rendering" setting is off. The
-renderer must follow the same public screen setting as Draw and say why.
-]]--
-MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = false, true, false
-local disabled_session = flatSession()
-assert(not test.colorRenderingEnabled(), "KOReader's disabled color-rendering setting must disable color")
-assert(not disabled_session:act("color"), "A refused color toggle must report false")
-assert(disabled_session.last_event:find("KOReader", 1, true), "The hint must name KOReader's Color rendering setting")
-assert(not disabled_session.color_enabled, "Color must stay off while KOReader's setting is off")
-
---[[--
-Back to a working color panel: the interactive color action must toggle and the
-canvas must report RGB ink again.
-]]--
-MOCK.color_rendering, MOCK.color_screen, MOCK.buffer_is_rgb = true, true, true
-local toggle_session = flatSession()
-toggle_session.color_enabled = false
-assert(toggle_session:act("color") and toggle_session.color_enabled, "Color action must enable color rendering")
-assert(toggle_session.last_event == "Farbrendering aktiviert.", "Enabling color must be reported")
-assert(toggle_session:act("color") and not toggle_session.color_enabled, "Color action must switch back to monochrome")
-assert(toggle_session.last_event == "Monochromes Rendering aktiviert.", "Disabling color must be reported")
-assert(toggle_session:act("color") and toggle_session.color_enabled, "Color action must be repeatable")
-
-local motion_session = flatSession()
-assert(motion_session:act("left") and motion_session:act("back"), "Session actions must support navigation controls")
-assert(motion_session.motion and motion_session.motion.frame == 0, "Interactive movement must begin as an animated step")
-motion_session:tickMotion()
-assert(motion_session.motion and motion_session.motion.frame == 1, "Animated movement must advance one fast-refresh frame at a time")
-assert(motion_session:act("jump") and motion_session.jump_frame == 0, "Jump action must start a jump animation")
-motion_session:tickJump()
-assert(motion_session.jump_frame == 1 and motion_session.jump_offset > 0, "Jump animation must change camera height")
-
-local canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = motion_session }
-local swipe_yaw = motion_session.yaw
-assert(canvas:onSwipeMinecraftLook(nil, { direction = "east" }), "Horizontal swipes must turn the camera")
-assert(motion_session.yaw ~= swipe_yaw, "Swipe look must change yaw")
-local original_pitch = motion_session.pitch
-assert(canvas:onSwipeMinecraftLook(nil, { direction = "north" }), "Vertical swipes must look up")
-assert(motion_session.pitch > original_pitch, "Swipe look must change pitch")
-dirty_calls, repaint_calls = {}, 0
-canvas._refresh_count = 0
-local paint_calls = 0
-local function recordMotionPaint(_, left, top, width, height)
-    paint_calls = paint_calls + 1
-    assert(width >= 1 and height >= 1, "Renderer spans must have a positive physical size")
-    assert(left >= 17 and top >= 29 and left + width <= 227 and top + height <= 155, "Renderer must remain within the assigned canvas")
-end
-canvas:paintTo({ paintRect = recordMotionPaint, paintRectRGB32 = recordMotionPaint }, 17, 29)
-assert(paint_calls > 30, "Voxel renderer must draw a substantial projected block scene")
-canvas._origin_x, canvas._origin_y = 17, 29
-assert(canvas:refreshFast(), "The game canvas must support a direct fast refresh")
-assert(repaint_calls == 1 and #dirty_calls == 1, "Fast refresh must repaint exactly the arena")
-assert(dirty_calls[1].waveform == "fast", "Arena redraw must request KOReader's fast waveform")
-assert(dirty_calls[1].region.x == 17 and dirty_calls[1].region.y == 29 and dirty_calls[1].region.w == 210 and dirty_calls[1].region.h == 126, "Fast refresh region must match the canvas only")
-
-local pane_instance, rebuild_count = {}, 0
-local pane_context = {
-    dimen = { w = 600, h = 420 },
-    px = function(value) return value end,
-    requestRebuild = function() rebuild_count = rebuild_count + 1 end,
-}
-local pane = app.buildPane(pane_instance, pane_context)
-assert(pane and pane.dimen.w == 600 and pane.dimen.h == 420, "Minecraft must build inside its assigned AppDock pane")
-local world_button, hotbar, canvas, inventory_button
-for _, widget in ipairs(pane[1]) do
-    if widget.title == "Welt" then world_button = widget end
-    if widget.title == "Inventar" then inventory_button = widget end
-    if widget.ges_events and widget.ges_events.TapMinecraftHotbar then hotbar = widget end
-    if type(widget.pickBlock) == "function" then canvas = widget end
-end
-assert(world_button and world_button.width > 0, "The pane must expose a world/seed control")
-assert(hotbar and canvas and hotbar.overlap_offset[2] >= canvas.overlap_offset[2] + canvas.height
-    and inventory_button and inventory_button.overlap_offset[2] > hotbar.overlap_offset[2], "The material-count hotbar must sit below the game canvas and above the controls")
-world_button.callback()
-local seed_dialog = shown_widget
-assert(seed_dialog and seed_dialog.title == "Neue Welt erzeugen" and seed_dialog.keyboard_shown, "World creation must prompt for a seed with the keyboard ready")
-seed_dialog.input = "6789"
-seed_dialog.buttons[1][2].callback()
-assert(pane_instance.minecraft.session.seed == 6789 and pane_instance.minecraft.session.world.seed == 6789, "Creating a world with an entered seed must reproduce that seed")
-assert(rebuild_count == 1 and shown_widget == nil, "Creating a seeded world must close the dialog and rebuild the pane")
-local repeated_world = test.buildWorld(6789)
-assert(repeated_world.heights[20][20] == pane_instance.minecraft.session.world.heights[20][20]
-    and repeated_world.materials[30][30] == pane_instance.minecraft.session.world.materials[30][30], "The same seed must reproduce the same terrain")
-world_button.callback()
-local invalid_dialog = shown_widget
-invalid_dialog.input = "not-a-number"
-invalid_dialog.buttons[1][2].callback()
-assert(pane_instance.minecraft.session.seed == 6789 and rebuild_count == 1 and shown_widget.text:find("ganze Zahl", 1, true), "Invalid seed input must explain the error without replacing the world")
-world_button.callback()
-seed_dialog = shown_widget
-seed_dialog.input = ""
-seed_dialog.buttons[1][2].callback()
-assert(pane_instance.minecraft.session.seed ~= 6789 and rebuild_count == 2, "An empty seed must create a distinct random-seed world")
-local split_pane = app.buildPane(pane_instance, {
-    dimen = { w = 600, h = 350 },
-    px = function(value) return value end,
-    requestRebuild = pane_context.requestRebuild,
+install("ui/widget/inputdialog", InputDialog)
+install("ui/widget/infomessage", InfoMessage)
+install("ui/uimanager", {
+    scheduleIn = function(_, delay, callback) scheduled[#scheduled + 1] = { delay = delay, callback = callback } end,
+    unschedule = function() end,
+    widgetRepaint = function() repaint_calls = repaint_calls + 1 end,
+    setDirty = function(_, widget, waveform, region) dirty_calls[#dirty_calls + 1] = { widget = widget, waveform = waveform, region = region } end,
+    forceRePaint = function() end,
+    yieldToEPDC = function() end,
+    show = function(_, widget) shown_widget = widget; shown_list[#shown_list + 1] = widget end,
+    close = function(_, widget) if shown_widget == widget then shown_widget = nil end end,
 })
-assert(split_pane and split_pane.dimen.w == 600 and split_pane.dimen.h == 350, "Minecraft must also fit a compact split pane")
+_G.unpack = table.unpack or unpack
 
-local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(session.inventory and session.hotbar and session:selectedMaterial(), "Minecraft must provide inventory and hotbar state")
-assert(catalog:find("minecraft.lua | 3.3.0 | minecraft", 1, true), "Minecraft must be published in the DApp catalog")
-print("Minecraft 3D DApp test: OK")
+local app = assert(loadfile("minecraft.lua"))()
+local test = app._test
+assert(app.id == "minecraft" and app.version == "4.0.0", "Minecraft 3D must publish the inventory, crafting and biome release")
+
+--[[--
+Palette and dithering helpers
+]]--
+assert(test.paletteColor("red") == "#dc2d2d", "Palette colors must be parsed from the shared RGB table")
+local mix = test.paletteMixForRGB(106, 170, 64)
+assert(mix and mix.first and mix.second and mix.second_pixels >= 0 and mix.second_pixels <= 16, "Dither mixes must expose two inks and a coverage")
+local again = test.paletteMixForRGB(106, 170, 64)
+assert(again.first == mix.first and again.second == mix.second, "Equal colors must reuse the cached mix")
+local level_mix = test.paletteMixForMaterial("grass", 2)
+assert(level_mix and level_mix.first, "Material shading must resolve to a palette mix")
+local grid_cols, grid_rows = test.renderGridFor(210, 126)
+assert(grid_cols == 42 and grid_rows == 25, "The default render grid must sample 5x5 output pixels")
+local color_cols, color_rows = test.renderGridFor(210, 126, test.COLOR_RENDER_SAMPLE)
+assert(color_cols == 70 and color_rows == 42, "The color render grid must use the finer 3x3 sampling")
+local u, v = test.textureCoordinates("top", 4.25, 3.5, 7.75, 1)
+assert(math.abs(u - 0.25) < 0.001 and math.abs(v - 0.75) < 0.001, "Top faces must map to block-local texture coordinates")
+assert(test.colorForMaterial("grass") == "black", "Without KOReader color mode the renderer must stay monochrome")
+color_enabled = true
+assert(test.colorForMaterial("grass") == "#2daa46", "With color mode enabled the grass ink must be the green palette entry")
+color_enabled = false
+assert(#test.MATERIAL_ORDER >= 35, "The block catalogue must offer at least 35 blocks")
+for _, material in ipairs(test.MATERIAL_ORDER) do
+    assert(test.MATERIALS[material], "Every ordered block must exist in the catalogue: " .. material)
+    assert(test.PATTERN_VALUES[material] and #test.PATTERN_VALUES[material] == 64, "Every block needs a 64-pixel texture: " .. material)
+    for _, level in ipairs(test.PATTERN_VALUES[material]) do
+        assert(level >= 0 and level <= 3, "Texture levels must stay inside the four supported shades")
+    end
+    assert(test.DROPS[material], "Every block must define what it drops")
+end
+assert(test.DROPS.grass == "dirt" and test.DROPS.stone == "cobblestone" and test.DROPS.coal == "coal", "Natural blocks must drop their Minecraft-like items")
+
+--[[--
+World generation: biomes, trees, structures, ore layers
+]]--
+local session = test.VoxelSession.new(12345)
+local world = session.world
+assert(world.seed == 12345 and world.size == test.WORLD_SIZE, "The default world must use seed 12345")
+local biome_names, biome_count = {}, 0
+for z = 0, world.size - 1 do
+    for x = 0, world.size - 1 do
+        local biome = test.biomeAt(world, x, z)
+        if not biome_names[biome] then biome_names[biome] = true; biome_count = biome_count + 1 end
+        assert(test.BIOMES[biome], "Every world column must carry a known biome: " .. tostring(biome))
+        local height = test.heightAt(world, x, z)
+        assert(height >= 1 and height <= test.MAX_TERRAIN_HEIGHT, "Terrain heights must stay inside the generated band")
+        assert(test.blockAt(world, x, z, height - 1), "The surface block must exist at the terrain cap")
+        local above = test.blockAt(world, x, z, height)
+        assert(above == nil or world.extra_blocks[test.extraBlockKey(x, z, height)] == above,
+            "Above the terrain cap only structure blocks (trees, houses, plants) may sit")
+        assert(test.blockAt(world, x, z, 0) == "bedrock", "Bedrock must line the world floor")
+    end
+end
+assert(biome_count >= 5, "A seed must produce several biomes, got " .. biome_count)
+local tree_blocks, plank_blocks, glass_blocks, wheat_blocks, cactus_blocks = 0, 0, 0, 0, 0
+for _, material in pairs(world.extra_blocks) do
+    if material == "wood" or material == "wood_birch" or material == "wood_spruce"
+        or material == "wood_jungle" or material == "wood_acacia"
+        or material == "leaves" or material == "leaves_birch" or material == "leaves_spruce"
+        or material == "leaves_jungle" or material == "leaves_acacia" then
+        tree_blocks = tree_blocks + 1
+    end
+    if material == "planks" then plank_blocks = plank_blocks + 1 end
+    if material == "glass" then glass_blocks = glass_blocks + 1 end
+    if material == "wheat" then wheat_blocks = wheat_blocks + 1 end
+    if material == "cactus" then cactus_blocks = cactus_blocks + 1 end
+end
+assert(tree_blocks > 200, "Trees must be made of individual log and leaf blocks, got " .. tree_blocks)
+assert(cactus_blocks + wheat_blocks > 0, "Plants must be placed as real blocks")
+
+local ore_found = {}
+for x = 20, 60, 7 do
+    for z = 20, 60, 7 do
+        for level = 0, 8 do
+            local material = test.rawBlockAt(world, x, z, level)
+            if material then ore_found[material] = (ore_found[material] or 0) + 1 end
+        end
+    end
+end
+assert((ore_found.coal or 0) > 0 and (ore_found.iron or 0) > 0, "Coal and iron veins must exist below the surface")
+assert((ore_found.diamond or 0) > 0 or (ore_found.gold or 0) > 0, "Deep layers must hold precious ores")
+
+local water_columns, sand_columns = 0, 0
+for z = 0, world.size - 1 do
+    for x = 0, world.size - 1 do
+        local surface = test.materialAt(world, x, z)
+        if surface == "water" then water_columns = water_columns + 1 end
+        if surface == "sand" then sand_columns = sand_columns + 1 end
+    end
+end
+assert(water_columns > 20, "Oceans, rivers and lakes must contain water columns, got " .. water_columns)
+assert(sand_columns > 20, "Beaches and deserts must contain sand columns, got " .. sand_columns)
+
+-- At least one tested seed must place a village with houses, a well and a farm.
+local village_seed
+for _, seed in ipairs({ 12345, 7, 4242, 2026, 99 }) do
+    local candidate = test.VoxelSession.new(seed)
+    local planks, glass, wheat, well = 0, 0, 0, false
+    for _, material in pairs(candidate.world.extra_blocks) do
+        if material == "planks" then planks = planks + 1 end
+        if material == "glass" then glass = glass + 1 end
+        if material == "wheat" then wheat = wheat + 1 end
+    end
+    local site = test.findVillageSite(candidate.world, seed)
+    if site then
+        local ground = test.heightAt(candidate.world, site.x, site.z)
+        well = test.blockAt(candidate.world, site.x, site.z, ground - 1) == "water"
+            and test.blockAt(candidate.world, site.x + 1, site.z, ground - 1) == "cobblestone"
+    end
+    local built = candidate.world.village
+    local well_ok = false
+    if built then
+        local ground = test.heightAt(candidate.world, built.x, built.z)
+        well_ok = test.blockAt(candidate.world, built.x, built.z, ground - 1) == "water"
+            and test.blockAt(candidate.world, built.x + 1, built.z, ground - 1) == "cobblestone"
+            and test.blockAt(candidate.world, built.x + 2, built.z + 2, ground + 2) ~= nil
+    end
+    if planks > 0 and glass > 0 and wheat > 0 and well_ok then
+        village_seed = seed
+        break
+    end
+end
+assert(village_seed, "At least one seed must contain a village with houses, a well and a wheat farm")
+
+--[[--
+Spawn selection and the initial view
+]]--
+local spawn_x, spawn_z, yaw, spawn_tree = test.findSpawn(world)
+session.player_x, session.player_z, session.yaw = spawn_x, spawn_z, yaw
+assert(spawn_tree, "The default seed must place the player in front of a visible tree")
+local spawn_distance = math.sqrt((spawn_tree.x - spawn_x) ^ 2 + (spawn_tree.z - spawn_z) ^ 2)
+assert(spawn_distance >= 6 and spawn_distance <= 20, "The spawn tree must stay inside the intended distance band")
+assert(test.hasClearTreeView(world, spawn_x, spawn_z, test.heightAt(world, math.floor(spawn_x), math.floor(spawn_z)), spawn_tree, spawn_distance), "The spawn view of the tree must be unobstructed")
+
+--[[--
+Renderer: color and monochrome paths, ray cache, refresh regions
+]]--
+local canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = session }
+session.canvas = canvas
+color_enabled = true
+session.color_enabled = true
+local buffer = newBuffer()
+canvas:paintTo(buffer, 0, 0)
+assert(rgb_calls > 0 and rect_calls > 0, "The color renderer must paint material spans and the crosshair")
+assert(paintedSum("rgb") >= 210 * 126, "The color renderer must cover the whole canvas")
+local colors = paintedColors()
+assert(colors["#3e8bd3"], "The color scene must paint a sky gradient")
+assert(colors["#77bee5"], "The color scene must paint the upper sky band")
+assert(colors["#608650"] and colors["#345830"], "The color scene must paint the dithered distant ground around the horizon")
+session.pitch = 0.45
+canvas:paintTo(buffer, 0, 0)
+assert(paintedColors()["#bcdde8"], "Looking up must reveal the pale horizon band")
+session.pitch = 0
+local mix_ink = test.paletteColor(level_mix.first)
+assert(colors[mix_ink], "Block colors must be dithered from the palette inks")
+canvas:paintTo(buffer, 0, 0)
+local cache = canvas._ray_cache
+assert(cache and cache.x and #cache.x == cache.cols * cache.rows, "The renderer must build a reusable ray cache")
+canvas:paintTo(buffer, 0, 0)
+assert(canvas._ray_cache == cache, "Repainting with the same view must reuse the ray cache")
+session:turn(1)
+canvas:paintTo(buffer, 0, 0)
+assert(canvas._ray_cache ~= cache, "Turning must rebuild the view-ray cache")
+
+color_enabled = false
+session.color_enabled = false
+resetPixels()
+canvas:paintTo(buffer, 0, 0)
+assert(rgb_calls == 0, "The monochrome renderer must never use RGB paints")
+assert(paintedSum("mono") >= 210 * 126, "The monochrome renderer must cover the whole canvas")
+for _, rect in ipairs(painted) do
+    assert(rect.ink == "black" or rect.ink == "white", "The monochrome renderer must stay black and white")
+end
+
+-- Movement animates four local fast refreshes and never a full-pane refresh.
+dirty_calls, repaint_calls, scheduled = {}, 0, {}
+assert(session:act("forward"), "Walking forward must start a motion")
+assert(#scheduled == 1, "Motion must schedule its next frame")
+for frame = 1, test.MOVE_FRAMES do
+    local callback = scheduled[#scheduled].callback
+    scheduled = {}
+    callback()
+end
+assert(session.motion == nil, "The motion must finish after its frames")
+assert(repaint_calls >= test.MOVE_FRAMES, "Motion must repaint the canvas locally")
+for index, call in ipairs(dirty_calls) do
+    if not (call.region and call.region.w == 210 and call.region.h == 126) then
+        print("DEBUG dirty", index, call.waveform, tostring(call.region and call.region.w), tostring(call.region and call.region.h), tostring(call.region and call.region.x), tostring(call.region and call.region.y))
+    end
+    assert(call.region and call.region.w == 210 and call.region.h == 126, "Refresh regions must stay bound to the canvas")
+end
+
+--[[--
+Bedrock-style interaction: the target face, tap versus hold
+]]--
+session.pitch = -0.75
+local target = canvas:pickBlock(105, 63)
+assert(target, "Looking down at the ground must resolve a target block")
+assert(target.place_x == target.x and target.place_z == target.z and target.place_y == target.y + 1,
+    "A floor hit must offer the block face above the surface")
+assert(test.blockAt(world, target.place_x, target.place_z, target.place_y) == nil, "The place position must be free")
+
+assert(session.tap_action == "place", "Bedrock's default tap action is placing blocks")
+local placed_material = session:selectedMaterial()
+local before_count = session:countMaterial(placed_material)
+assert(session:tapAction(target), "Tapping a block face must place the selected block")
+assert(test.blockAt(world, target.place_x, target.place_z, target.place_y) == placed_material, "The placed block must appear in the world")
+assert(session:countMaterial(placed_material) == before_count - 1, "Placing must consume one block")
+assert(session:tapAction(target) == false, "Placing onto an occupied spot must be refused")
+assert(session.last_event:find("belegt"), "The refusal must be reported to the player")
+local drop_material = test.DROPS[placed_material]
+local drop_before = session:countMaterial(drop_material)
+assert(session:holdAction{ x = target.place_x, z = target.place_z, y = target.place_y }, "Holding must mine the targeted block again")
+assert(test.blockAt(world, target.place_x, target.place_z, target.place_y) == nil, "The held action must remove the block")
+assert(session:countMaterial(placed_material) == before_count - 1, "The placed block was spent when it was placed")
+assert(session:countMaterial(drop_material) == drop_before + 1, "Mining must add the block's dropped item (" .. drop_material .. ")")
+session:toggleTapAction()
+assert(session.tap_action == "mine", "The mode button must flip the tap action")
+assert(session:tapActionLabel():find("Abbauen"), "The button label must describe the active mode")
+session:toggleTapAction()
+assert(session.tap_action == "place", "The mode button must be reversible")
+
+--[[--
+Inventory: stack limits, cursor stack, hotbar, drops
+]]--
+assert(session.slots[1].material == "grass" and session.slots[1].count > 0, "The starting kit must fill the hotbar")
+assert(session.selected_slot == 1 and session:selectedMaterial() == "grass", "The first hotbar slot must be active")
+assert(session.hotbar[1] == "grass" and session.inventory.grass == session:countMaterial("grass"), "Derived hotbar and counters must mirror the slots")
+local used_slots = 0
+for slot = 1, test.INVENTORY_SLOTS do if session.slots[slot] then used_slots = used_slots + 1 end end
+assert(session.used_slots == used_slots and used_slots >= #test.STARTING_KIT, "The used-slot counter must match the occupied slots")
+assert(session:addItem("gold", 100) == 0, "Stacks must be split across slots when they exceed the stack limit")
+assert(session:countMaterial("gold") == 100, "All added items must be counted")
+assert(session:addItem("gold", 1) == 0 and session:countMaterial("gold") == 101, "Fitting items must top up the existing stacks")
+assert(session:addItem("gold", 27) == 0 and session:countMaterial("gold") == 128, "Partial stacks must fill up to the stack limit")
+local injected = {}
+for slot = 1, test.INVENTORY_SLOTS do
+    if not session.slots[slot] then
+        session.slots[slot] = { material = "dirt", count = test.STACK_LIMIT }
+        injected[#injected + 1] = slot
+    end
+end
+assert(session:addItem("gold", 5) == 5, "A completely full inventory must report the leftover")
+for _, slot in ipairs(injected) do session.slots[slot] = nil end
+session:syncDerived()
+assert(session:takeMaterial("gold", 128), "Taking 128 gold must succeed")
+assert(session:countMaterial("gold") == 0 and session:takeMaterial("gold", 1) == false, "Empty materials must not be taken")
+
+assert(session:pickSlot(1) == "picked" and session.held.material == "grass" and session.slots[1] == nil, "Picking up must move the stack into the cursor")
+assert(session.hotbar[1] == nil, "The hotbar must show an empty slot while its stack is held")
+assert(session:pickSlot(10) == "swapped" and session.held.material == "leaves", "Storing onto a different stack must swap them")
+assert(session.slots[10].material == "grass", "The swapped stack must land in the storage slot")
+assert(session:pickSlot(10) == "swapped" and session.held.material == "grass", "Swapping back must restore the original order")
+assert(session:pickSlot(1) == "placed" and session.slots[1].material == "grass", "Storing into an empty slot must place the stack there")
+assert(session.held == nil, "The cursor must be empty after storing")
+assert(session:pickSlot(36) == "empty", "Tapping an empty slot with an empty cursor must do nothing")
+
+local sand_total = session:countMaterial("sand")
+session.slots[20] = { material = "sand", count = 60 }
+session.held = { material = "sand", count = 10 }
+assert(session:pickSlot(21) == "placed" and session.slots[21].count == 10, "A held stack must be placeable into an empty slot")
+session.held = { material = "sand", count = 10 }
+assert(session:pickSlot(20) == "merged" and session.slots[20].count == 64 and session.held.count == 6,
+    "Merging must fill the stack up to the limit and keep the rest in hand")
+assert(session:returnHeld(), "Closing a screen must return the held stack")
+assert(session:countMaterial("sand") == sand_total + 80 and session.held == nil, "Returned stacks must not lose items")
+session:selectSlot(3)
+assert(session.selected_slot == 3 and session:selectedMaterial() == "stone", "Selecting a hotbar slot must change the active block")
+
+-- Mining a grass block exposes the block below and drops dirt.
+local grass_x, grass_z
+for z = 0, world.size - 1 do
+    for x = 0, world.size - 1 do
+        if test.materialAt(world, x, z) == "grass" then grass_x, grass_z = x, z; break end
+    end
+    if grass_x then break end
+end
+local grass_height = test.heightAt(world, grass_x, grass_z)
+local dirt_before = session:countMaterial("dirt")
+assert(session:mineBlock{ x = grass_x, z = grass_z, y = grass_height - 1 }, "Mining a grass block must succeed")
+assert(test.blockAt(world, grass_x, grass_z, grass_height - 1) == nil, "The mined block must be gone")
+assert(test.materialAt(world, grass_x, grass_z) == "dirt", "The block below must become the new surface")
+assert(test.heightAt(world, grass_x, grass_z) == grass_height - 1, "Mining the top block must lower the column")
+assert(session:countMaterial("dirt") == dirt_before + 1, "The grass block must drop dirt")
+assert(session:mineBlock{ x = grass_x, z = grass_z, y = 200 } == false, "Out-of-range mining must be refused")
+assert(session.last_event:find("kein Block"), "Invalid mining must be reported")
+
+local log_target
+for key, material in pairs(world.extra_blocks) do
+    if material == "wood" then
+        local x, z, level = key:match("^(%-?%d+):(%-?%d+):(%-?%d+)$")
+        log_target = { x = tonumber(x), z = tonumber(z), y = tonumber(level) }
+        break
+    end
+end
+assert(log_target, "The world must contain tree trunks")
+local wood_before = session:countMaterial("wood")
+assert(session:mineBlock(log_target), "Trunk blocks must be mineable")
+assert(test.blockAt(world, log_target.x, log_target.z, log_target.y) == nil, "Mined trunk blocks must vanish")
+assert(session:countMaterial("wood") == wood_before + 1, "Trunks must drop wood")
+
+-- Placing refuses to trap the player and refills the emptied hand slot.
+session:closeOverlays()
+session.selected_slot = 4
+assert(session:selectedMaterial() == "wood", "Slot four must hold wood")
+local feet = math.floor(session:groundHeightAtPlayer())
+assert(session:placeBlock{ x = math.floor(session.player_x), z = math.floor(session.player_z), y = feet } == false
+    and session.last_event:find("stehst"), "Blocks may not be placed inside the player")
+for slot = 1, test.INVENTORY_SLOTS do
+    if session.slots[slot] and session.slots[slot].material == "wood" then session.slots[slot] = nil end
+end
+session.slots[4] = { material = "wood", count = 1 }
+session.slots[30] = { material = "wood", count = 9 }
+session:syncDerived()
+local headroom = session:walkHeight(session.player_x, session.player_z)
+local free_x, free_z, attempt = math.floor(session.player_x) + 2, math.floor(session.player_z) + 2, 0
+while test.blockAt(world, free_x, free_z, headroom) and attempt < 20 do free_x = free_x + 1; attempt = attempt + 1 end
+assert(session:placeBlock{ x = free_x, z = free_z, y = headroom }, "Placing on a free face must succeed")
+assert(session.slots[4] and session.slots[4].count == 9 and session.slots[30] == nil,
+    "Bedrock refills the emptied hand slot from the next matching stack")
+session.slots[4] = nil
+session:syncDerived()
+assert(session:placeBlock{ x = free_x, z = free_z, y = headroom + 1 } == false, "An empty hand must refuse placing")
+
+--[[--
+Crafting: recipes consume ingredients and respect availability
+]]--
+assert(session:addItem("wood", 8) == 0, "Wood must be available for the crafting checks")
+local wood_before_craft = session:countMaterial("wood")
+local planks_before = session:countMaterial("planks")
+local planks_recipe = test.RECIPES[1]
+assert(planks_recipe.result[1] == "planks" and planks_recipe.ingredients[1][1] == "wood", "The first recipe must turn logs into planks")
+assert(session:canCraft(planks_recipe), "Available ingredients must satisfy the recipe")
+assert(session:craft(1), "Crafting planks must succeed")
+assert(session:countMaterial("wood") == wood_before_craft - 1, "Crafting must consume the ingredients")
+assert(session:countMaterial("planks") == planks_before + 4, "Crafting must add the result to the inventory")
+local obsidian_recipe
+for index, recipe in ipairs(test.RECIPES) do
+    if recipe.result[1] == "obsidian" then obsidian_recipe = index end
+end
+assert(obsidian_recipe, "The recipe list must contain the obsidian nod")
+assert(session:canCraft(test.RECIPES[obsidian_recipe]) == false, "Missing ingredients must block a recipe")
+assert(session:craft(obsidian_recipe) == false and session.last_event:find("fehlen"), "A blocked recipe must explain itself")
+assert(session:craft(999) == false, "Unknown recipes must be refused")
+for index = 1, #test.RECIPES do
+    local recipe = test.RECIPES[index]
+    assert(recipe.result and test.MATERIALS[recipe.result[1]], "Every recipe result must be a real block")
+    assert(#recipe.ingredients >= 1, "Every recipe needs at least one ingredient")
+    for _, ingredient in ipairs(recipe.ingredients) do
+        assert(test.MATERIALS[ingredient[1]] and ingredient[2] > 0, "Every ingredient must be a real block with a positive amount")
+    end
+end
+assert(session:pageCount() >= 2 and #session:recipesForPage(1) == test.CRAFT_ROWS_PER_PAGE, "Recipes must be paged four per screen")
+assert(#session:recipesForPage(session:pageCount()) >= 1, "The last recipe page must not be empty")
+local label = session:recipeLabel(test.RECIPES[1])
+assert(label:find("Holzbretter", 1, true) and label:find("/", 1, true), "Recipe rows must show the result and the ingredient counters")
+
+--[[--
+Overlay screens: hit testing, paging, and local refresh
+]]--
+local inventory_panel = test.InventoryPanel:new{ width = 210, height = 126, session = session }
+local crafting_panel = test.CraftingPanel:new{ width = 210, height = 126, session = session }
+inventory_panel.crafting_panel = crafting_panel
+crafting_panel.inventory_panel = inventory_panel
+inventory_panel._origin_x, inventory_panel._origin_y = 5, 7
+crafting_panel._origin_x, crafting_panel._origin_y = 5, 7
+session:closeOverlays()
+session:selectSlot(1)
+assert(inventory_panel:hitTest(3, 3).kind == "header", "The inventory header must not be a slot")
+assert(inventory_panel:hitTest(inventory_panel.width - 6, 6).kind == "button", "The close button must sit in the header corner")
+local panel_button_w = math.max(30, math.floor((inventory_panel.width - 12) / 3))
+local craft_button_x = inventory_panel.width - 8 - panel_button_w * 2
+assert(inventory_panel:hitTest(craft_button_x + 2, 6).id == "craft", "The crafting button must sit next to the close button")
+local slot_hit = inventory_panel:hitTest(4 + inventory_panel:slotWidth() * 8 + 2, inventory_panel:headerHeight() + 3)
+assert(slot_hit.kind == "slot" and slot_hit.slot == 9 and slot_hit.row == 1, "The first row must map to hotbar slots 1-9")
+local last_hit = inventory_panel:hitTest(4 + 2, inventory_panel:headerHeight() + inventory_panel:slotHeight() * 3 + 3)
+assert(last_hit.slot == 28, "The last row must map to storage slots 28-36")
+assert(inventory_panel:hitTest(4, inventory_panel.height - 4).kind == "footer", "The held-stack hint must own the footer")
+
+session:act("inventory")
+assert(session.inventory_open, "The inventory command must open the overlay")
+dirty_calls, repaint_calls = {}, 0
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + 4 + 2, y = 7 + inventory_panel:headerHeight() + 3 } },
+    "Tapping a slot must be handled")
+assert(session.held and session.held.material == "grass", "Tapping the first slot must pick the stack up")
+assert(repaint_calls >= 1 and dirty_calls[#dirty_calls].waveform == "ui", "Overlays must refresh their own region with a ui waveform")
+assert(dirty_calls[#dirty_calls].region.w == 210 and dirty_calls[#dirty_calls].region.h == 126, "The overlay region must match the covered canvas")
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + inventory_panel.width - 6, y = 7 + 6 } }, "Tapping close must be handled")
+assert(session.inventory_open == false and session.held == nil, "Closing the inventory must return the held stack")
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 6, y = 6 } } == false, "A closed overlay must ignore taps")
+
+session:act("crafting")
+assert(session.crafting_open and session.craft_page == 1, "The crafting screen must open on the first page")
+local recipe_hit = crafting_panel:hitTest(10, crafting_panel:headerHeight() + 3)
+assert(recipe_hit.kind == "recipe" and recipe_hit.index == 1, "The first recipe row must map to the first recipe")
+local footer_y = crafting_panel.height - crafting_panel:footerHeight() + 3
+assert(crafting_panel:hitTest(10, footer_y).id == "prev" and crafting_panel:hitTest(crafting_panel.width - 10, footer_y).id == "next",
+    "The footer must page through the recipes")
+assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + crafting_panel.width - 10, y = 7 + footer_y } }, "Paging forward must be handled")
+assert(session.craft_page == 2, "Paging forward must advance the page")
+assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + 10, y = 7 + footer_y } }, "Paging back must be handled")
+assert(session.craft_page == 1, "Paging back must return to the first page")
+local planks_before_panel = session:countMaterial("planks")
+assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + 10, y = 7 + crafting_panel:headerHeight() + 3 } }, "Tapping a recipe must craft it")
+assert(session:countMaterial("planks") >= planks_before_panel, "A crafted recipe must add its result")
+assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + crafting_panel.width - 6, y = 7 + 6 } }, "Closing the crafting screen must be handled")
+assert(session.crafting_open == false, "The crafting screen must close")
+
+--[[--
+AppDock pane contract
+]]--
+local function findButton(root, title)
+    for _, widget in ipairs(root) do
+        if widget.title == title then return widget end
+    end
+    return nil
+end
+local function findWidget(root, target)
+    for _, widget in ipairs(root) do
+        if widget == target then return true end
+    end
+    return false
+end
+local instance = {}
+local context = { dimen = { w = 600, h = 748 }, px = function(value) return value end, requestRebuild = function() end }
+local pane = app.buildPane(instance, context)
+local state = instance.minecraft
+assert(state and state.session and state.canvas, "The pane must expose its Minecraft state")
+assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the canvas and the hotbar")
+assert(findWidget(pane[1], state.inventory_panel) and findWidget(pane[1], state.crafting_panel), "The pane must embed both overlays")
+assert(findWidget(pane[1], state.event_line), "The pane must embed the action line")
+for _, title in ipairs({ "Farbe", "Welt", "Springen", "Links", "Vor", "Zurück", "Rechts", "Inventar", "Tipp: Setzen" }) do
+    assert(findButton(pane[1], title), "The pane must expose the " .. title .. " control")
+end
+assert(state.session:biomeName() ~= "", "The header must name the current biome")
+findButton(pane[1], "Inventar").callback()
+assert(state.session.inventory_open, "The inventory button must open the inventory")
+assert(state.inventory_panel:onTapMinecraftInventory{ pos = { x = state.inventory_panel._origin_x + state.inventory_panel.width - 6, y = state.inventory_panel._origin_y + 6 } },
+    "The pane inventory must close on request")
+local mode_button = findButton(pane[1], "Tipp: Setzen")
+mode_button.callback()
+assert(state.session.tap_action == "mine", "The mode button must switch to mining")
+findButton(pane[1], "Vor").callback()
+assert(state.session.motion, "The forward button must start a motion")
+state.session.motion = nil
+findButton(pane[1], "Springen").callback()
+assert(state.session.jump_frame, "The jump button must start the jump animation")
+state.session.jump_frame, state.session.jump_offset = nil, 0
+
+-- New world dialog: invalid text is rejected, a valid seed rebuilds the world.
+local old_seed = state.session.seed
+shown_list = {}
+findButton(pane[1], "Welt").callback()
+local dialog = shown_widget
+assert(dialog and dialog.title and dialog.buttons, "The world button must open the seed dialog")
+dialog.input = "kein Seed"
+dialog.buttons[1][2].callback()
+local info = shown_list[#shown_list]
+assert(info and info.text and info.text:find("ganze Zahl"), "An invalid seed must show a clear error message")
+dialog.input = "777"
+dialog.buttons[1][2].callback()
+assert(state.session.seed == 777 and state.session.seed ~= old_seed, "A valid seed must generate a new world")
+assert(state.session.motion == nil, "A new world must not keep a running motion")
+assert(test.parseWorldSeed("") == nil and test.parseWorldSeed("abc") == false and test.parseWorldSeed("42") == 42,
+    "Seed parsing must accept integers, empty input and reject text")
+
+-- The pane must also fit a compact split layout.
+local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = function(value) return value end, requestRebuild = function() end })
+assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
+assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
+
+print("minecraft-4.0.0-ok")
