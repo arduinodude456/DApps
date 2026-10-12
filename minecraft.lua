@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.3.0 adds the official logo splash, sharper pan preview, Bedrock-style inventory, protected touch controls and sheep mobs.
+Version 4.3.1 uses sampling 4 for live pan and a high-contrast E-Ink logo fallback.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -41,6 +41,7 @@ local ok_image_widget, ImageWidget = pcall(require, "ui/widget/imagewidget")
 local source_path = debug.getinfo(1, "S").source or ""
 local APP_DIR = source_path:sub(1, 1) == "@" and source_path:sub(2):match("(.+)/[^/]+$") or "."
 local MINECRAFT_LOGO = APP_DIR .. "/assets/minecraft_logo.png"
+local MINECRAFT_LOGO_EINK = APP_DIR .. "/assets/minecraft_logo_eink.png"
 
 local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
 if not ok_lfs then ok_lfs, lfs = pcall(require, "lfs") end
@@ -67,7 +68,7 @@ local RENDER_SAMPLE = 5
 local COLOR_RENDER_SAMPLE = 3
 -- During a finger drag the view is a preview. The release frame switches back
 -- to COLOR_RENDER_SAMPLE, while this coarser grid keeps camera feedback fluid.
-local LIVE_RENDER_SAMPLE = 8
+local LIVE_RENDER_SAMPLE = 4
 -- Same 8x8 ordered Bayer matrix used by AppDock YouTube's indexed-color
 -- pipeline. We normalize it to the 0..15 coverage range at the hot render
 -- site, keeping color transitions stable while avoiding per-pixel RGB math.
@@ -3020,8 +3021,14 @@ local function menuPane(state, context, width, height, title, subtitle, items)
     local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session }
     local logo = nil
     if ok_image_widget and ImageWidget then
+        local logo_file = MINECRAFT_LOGO_EINK
+        local logo_candidates = { logo_file, MINECRAFT_LOGO, "assets/minecraft_logo_eink.png", "assets/minecraft_logo.png" }
+        for _, candidate in ipairs(logo_candidates) do
+            local file = io.open(candidate, "rb")
+            if file then file:close(); logo_file = candidate; break end
+        end
         local ok, widget = pcall(function()
-            return ImageWidget:new{ file = MINECRAFT_LOGO, width = math.min(width - 30, 470), height = math.max(42, math.floor(height * 0.13)), scale_factor = 0, overlap_offset = { 15, math.max(8, math.floor(height * 0.045)) } }
+            return ImageWidget:new{ file = logo_file, width = math.min(width - 30, 470), height = math.max(42, math.floor(height * 0.13)), scale_factor = 0, overlap_offset = { 15, math.max(8, math.floor(height * 0.045)) } }
         end)
         if ok then logo = widget end
     end
@@ -3161,7 +3168,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.0",
+    version = "4.3.1",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
