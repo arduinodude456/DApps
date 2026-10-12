@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.4.1", "Minecraft 3D must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.4.2", "Minecraft 3D must publish the splash, world list and creation menus")
 local embedded_logo = test.ensureEmbeddedLogo()
 local embedded_file = assert(io.open(embedded_logo, "rb"), "The installed DApp must materialize its embedded logo")
 assert(embedded_file:read(8) == "\137PNG\13\10\26\10", "The embedded logo must be a valid PNG")
@@ -148,12 +148,13 @@ assert(test.HELD_MOVE_SECONDS > 0 and test.HELD_MOVE_SECONDS <= 0.1,
     "Held D-pad movement must poll several times per second")
 local held_act_calls = 0
 local old_session_act = session.act
+local old_session_move = session.move
 session.held_move_action, session.motion = "forward", nil
-session.act = function(_, action) held_act_calls = held_act_calls + 1; assert(action == "forward") end
+session.move = function(_, action) held_act_calls = held_act_calls + 1; assert(action == "forward"); return true end
 session:tickHeldMove()
 assert(held_act_calls == 1 and scheduled[#scheduled].delay == test.HELD_MOVE_SECONDS,
     "Held D-pad movement must schedule its next repeat in a fraction of a second")
-session.act, session.held_move_action = old_session_act, nil
+session.act, session.move, session.held_move_action = old_session_act, old_session_move, nil
 local biome_names, biome_count = {}, 0
 for z = 0, world.size - 1 do
     for x = 0, world.size - 1 do
@@ -673,4 +674,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventory") and findButton(compact[1], "Color"), "The compact pane must keep its controls")
 
-print("minecraft-4.4.1-ok")
+print("minecraft-4.4.2-ok")

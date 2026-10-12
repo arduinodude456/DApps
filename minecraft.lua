@@ -1645,18 +1645,33 @@ function VoxelSession:tickJump()
     end
 end
 
+local function performHeldStep(session, action)
+    local changed
+    -- Finish each held forward/back step synchronously. This avoids a second
+    -- repeat callback arriving while the animated motion is still in flight.
+    if action == "forward" or action == "back" then
+        changed = session:move(action)
+    else
+        changed = session:act(action)
+    end
+    if changed and session.canvas then session.canvas:refreshFast() end
+    return changed
+end
+
 function VoxelSession:tickHeldMove()
     local action = self.held_move_action
     if not action then return end
-    if not self.motion then self:act(action) end
+    performHeldStep(self, action)
     UIManager:scheduleIn(HELD_MOVE_SECONDS, self._heldMoveTick)
 end
 
 function VoxelSession:startHeldMove(action)
     if action ~= "forward" and action ~= "back" and action ~= "left" and action ~= "right" then return false end
-    self.held_move_action = action
-    if not self.motion then self:act(action) end
     UIManager:unschedule(self._heldMoveTick)
+    self.held_move_action = action
+    self.motion = nil
+    UIManager:unschedule(self._motionTick)
+    performHeldStep(self, action)
     UIManager:scheduleIn(HELD_MOVE_SECONDS, self._heldMoveTick)
     return true
 end
@@ -1664,6 +1679,14 @@ end
 function VoxelSession:stopHeldMove()
     self.held_move_action = nil
     UIManager:unschedule(self._heldMoveTick)
+    -- A release must never leave a partially animated step armed for the next
+    -- press. The next press starts from the current completed position.
+    if self.motion then
+        self.motion = nil
+        self.live_look = false
+        UIManager:unschedule(self._motionTick)
+        self.view_height = self:walkHeight(self.player_x, self.player_z)
+    end
 end
 
 function VoxelSession:turn(direction)
@@ -3342,7 +3365,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.4.1",
+    version = "4.4.2",
     title = "Minecraft 3D",
     subtitle = "Biomes, Villages, Inventory & Crafting",
     symbol = "M",
