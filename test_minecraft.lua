@@ -1,5 +1,5 @@
 --[[--
-Regression test for Minecraft 3D 4.0.2.
+Regression test for Minecraft 3D 4.1.0.
 
 Covers the world generator (biomes, trees, villages, ore layers), the renderer
 (mono and color paths, ray cache reuse, local refresh regions), the 36-slot
@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.0.2", "Minecraft 3D must publish the inventory, crafting and biome release")
+assert(app.id == "minecraft" and app.version == "4.1.0", "Minecraft 3D must publish the inventory, crafting and biome release")
 
 --[[--
 Palette and dithering helpers
@@ -265,6 +265,19 @@ assert(canvas._ray_cache == cache, "Repainting with the same view must reuse the
 session:turn(1)
 canvas:paintTo(buffer, 0, 0)
 assert(canvas._ray_cache ~= cache, "Turning must rebuild the view-ray cache")
+
+-- Bedrock-style live look: every pan sample applies only the finger delta,
+-- rather than snapping to the old fixed-size swipe turn.
+local old_refresh_fast, live_refreshes = canvas.refreshFast, 0
+canvas.refreshFast = function() live_refreshes = live_refreshes + 1 end
+local yaw_before, pitch_before = session.yaw, session.pitch
+assert(canvas:onPanMinecraftLook("PanMinecraftLook", { pos = { x = 100, y = 100 } }), "A look pan must start tracking")
+assert(canvas:onPanMinecraftLook("PanMinecraftLook", { pos = { x = 130, y = 80 } }), "A look pan must update continuously")
+assert(session.yaw > yaw_before and session.pitch > pitch_before and live_refreshes == 1,
+    "Finger movement must update yaw/pitch live and refresh the canvas")
+assert(canvas:onPanReleaseMinecraftLook("PanReleaseMinecraftLook", { pos = { x = 130, y = 80 } }), "A look pan must release cleanly")
+assert(canvas._look_pan_last == nil, "Pan release must clear the tracked finger position")
+canvas.refreshFast = old_refresh_fast
 
 color_enabled = false
 session.color_enabled = false
@@ -533,6 +546,16 @@ assert(state and state.session and state.canvas, "The pane must expose its Minec
 assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the canvas and the hotbar")
 assert(findWidget(pane[1], state.inventory_panel) and findWidget(pane[1], state.crafting_panel), "The pane must embed both overlays")
 assert(findWidget(pane[1], state.event_line), "The pane must embed the action line")
+assert(state.joystick, "The pane must expose the Bedrock-style D-pad")
+local dpad_action
+local old_dpad_act = state.canvas.act
+state.canvas.act = function(_, action) dpad_action = action; return true end
+state.joystick._origin_x, state.joystick._origin_y = 10, 20
+assert(state.joystick:onTapMinecraftJoystick("TapMinecraftJoystick", {
+    pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
+}), "The D-pad must accept the real two-argument tap callback")
+assert(dpad_action == "forward", "The upper D-pad button must move forward")
+state.canvas.act = old_dpad_act
 -- KOReader calls handlers as (event_arg, gesture). Verify the real dispatch
 -- shape for canvas interaction and hotbar selection, not only direct helpers.
 local old_pick, old_act = state.canvas.pickBlock, state.canvas.act
@@ -597,4 +620,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.0.2-ok")
+print("minecraft-4.1.0-ok")
