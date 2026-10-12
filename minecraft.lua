@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.3.2 uses sampling 6 for a balanced live-pan preview.
+Version 4.3.3 embeds the E-Ink splash logo so single-file AppStore installs include it.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -45,6 +45,103 @@ local MINECRAFT_LOGO_EINK = APP_DIR .. "/assets/minecraft_logo_eink.png"
 
 local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
 if not ok_lfs then ok_lfs, lfs = pcall(require, "lfs") end
+
+-- The AppStore installs one Lua file per DApp. Keep the small E-Ink logo
+-- embedded as a fallback so the Splashscreen works even when repository
+-- sidecar assets are not downloaded by an older AppStore implementation.
+local EMBEDDED_MINECRAFT_LOGO_B64 = [[
+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
+VlrAAAAAAElFTkSuQmCC
+]]
+local LOGO_CACHE_FILE = (ok_datastorage and (DataStorage:getDataDir() .. "/appdock_minecraft/minecraft_logo_eink.png")) or "/tmp/appdock_minecraft_logo_eink.png"
+
+local function decodeBase64(value)
+    local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    local out = {}
+    value = value:gsub("[^%w%+/=]", "")
+    for index = 1, #value, 4 do
+        local a, b, c, d = value:sub(index, index), value:sub(index + 1, index + 1), value:sub(index + 2, index + 2), value:sub(index + 3, index + 3)
+        local n1 = alphabet:find(a, 1, true) or 1
+        local n2 = alphabet:find(b, 1, true) or 1
+        local n3 = c == "=" and 1 or (alphabet:find(c, 1, true) or 1)
+        local n4 = d == "=" and 1 or (alphabet:find(d, 1, true) or 1)
+        local triple = (n1 - 1) * 262144 + (n2 - 1) * 4096 + (n3 - 1) * 64 + (n4 - 1)
+        out[#out + 1] = string.char(math.floor(triple / 65536) % 256)
+        if c ~= "=" then out[#out + 1] = string.char(math.floor(triple / 256) % 256) end
+        if d ~= "=" then out[#out + 1] = string.char(triple % 256) end
+    end
+    return table.concat(out)
+end
+
+local function ensureEmbeddedLogo()
+    local file = io.open(LOGO_CACHE_FILE, "rb")
+    if file then file:close(); return LOGO_CACHE_FILE end
+    local directory = LOGO_CACHE_FILE:match("^(.+)/[^/]+$")
+    if ok_lfs and directory and not lfs.attributes(directory) then lfs.mkdir(directory) end
+    local payload = decodeBase64(EMBEDDED_MINECRAFT_LOGO_B64)
+    file = io.open(LOGO_CACHE_FILE .. ".tmp", "wb")
+    if not file then return nil end
+    local ok = file:write(payload)
+    file:close()
+    if not ok or not os.rename(LOGO_CACHE_FILE .. ".tmp", LOGO_CACHE_FILE) then os.remove(LOGO_CACHE_FILE .. ".tmp"); return nil end
+    return LOGO_CACHE_FILE
+end
 
 local Screen = Device.screen
 local TAU = math.pi * 2
@@ -3021,8 +3118,8 @@ local function menuPane(state, context, width, height, title, subtitle, items)
     local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session }
     local logo = nil
     if ok_image_widget and ImageWidget then
-        local logo_file = MINECRAFT_LOGO_EINK
-        local logo_candidates = { logo_file, MINECRAFT_LOGO, "assets/minecraft_logo_eink.png", "assets/minecraft_logo.png" }
+        local logo_file = ensureEmbeddedLogo() or MINECRAFT_LOGO_EINK
+        local logo_candidates = { logo_file, MINECRAFT_LOGO_EINK, MINECRAFT_LOGO, "assets/minecraft_logo_eink.png", "assets/minecraft_logo.png" }
         for _, candidate in ipairs(logo_candidates) do
             local file = io.open(candidate, "rb")
             if file then file:close(); logo_file = candidate; break end
@@ -3168,7 +3265,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.2",
+    version = "4.3.3",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -3307,6 +3404,7 @@ return {
         extraBlockKey = extraBlockKey,
         rebuildWorldBlocks = rebuildWorldBlocks,
         parseWorldSeed = parseWorldSeed,
+        ensureEmbeddedLogo = ensureEmbeddedLogo,
         renderGridFor = renderGridFor,
         textureCoordinates = textureCoordinates,
         colorForMaterial = colorForMaterial,
