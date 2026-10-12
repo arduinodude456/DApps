@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.0.2 improves face lighting so top and side surfaces read as three-dimensional.
+Version 4.1.0 adds Bedrock-style touch controls, live finger-look camera movement and YouTube-style Bayer color dithering.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -56,7 +56,15 @@ local RENDER_SAMPLE = 5
 -- 3x3 keeps block silhouettes and texture dithering readable while cutting the
 -- hot DDA loop by roughly half on a typical AppDock pane.
 local COLOR_RENDER_SAMPLE = 3
-local BAYER4 = { { 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } }
+-- Same 8x8 ordered Bayer matrix used by AppDock YouTube's indexed-color
+-- pipeline. We normalize it to the 0..15 coverage range at the hot render
+-- site, keeping color transitions stable while avoiding per-pixel RGB math.
+local BAYER8 = {
+    { 0, 48, 12, 60, 3, 51, 15, 63 }, { 32, 16, 44, 28, 35, 19, 47, 31 },
+    { 8, 56, 4, 52, 11, 59, 7, 55 }, { 40, 24, 36, 20, 43, 27, 39, 23 },
+    { 2, 50, 14, 62, 1, 49, 13, 61 }, { 34, 18, 46, 30, 33, 17, 45, 29 },
+    { 10, 58, 6, 54, 9, 57, 5, 53 }, { 42, 26, 36, 22, 41, 25, 45, 21 },
+}
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
     red = { 220, 45, 45 },
@@ -82,6 +90,8 @@ local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
 local MOVE_FRAMES = 4
 local MOVE_FRAME_SECONDS = 0.045
+local LOOK_YAW_PER_PIXEL = 0.006
+local LOOK_PITCH_PER_PIXEL = 0.0045
 local START_PLAYER_X = 48.5
 local START_PLAYER_Z = 56.5
 local START_YAW = math.pi / 2
@@ -1524,6 +1534,18 @@ function VoxelSession:lookVertical(direction)
     return true
 end
 
+-- Finger-look uses the actual movement delta instead of quantising a swipe to
+-- a fixed 20-degree turn. This is deliberately separate from the button-sized
+-- turn/vertical controls so keyboard and D-pad behavior stay unchanged.
+function VoxelSession:lookDelta(delta_x, delta_y)
+    delta_x, delta_y = tonumber(delta_x) or 0, tonumber(delta_y) or 0
+    if delta_x == 0 and delta_y == 0 then return false end
+    self.yaw = wrapAngle(self.yaw + delta_x * LOOK_YAW_PER_PIXEL)
+    self.pitch = math.max(-1.35, math.min(1.35, self.pitch - delta_y * LOOK_PITCH_PER_PIXEL))
+    self.last_event = _("Umschauen")
+    return true
+end
+
 function VoxelSession:beginMove(direction)
     if self.motion then return false end
     local next_x = self.player_x + math.sin(self.yaw) * WALK_DISTANCE * direction
@@ -1650,6 +1672,7 @@ local VoxelCanvas = InputContainer:extend{
     dimen = nil,
     _origin_x = 0,
     _origin_y = 0,
+    _look_pan_last = nil,
 }
 
 function VoxelCanvas:init()
@@ -1657,6 +1680,8 @@ function VoxelCanvas:init()
     self.ges_events = {
         TapMinecraftExplore = { GestureRange:new{ ges = "tap", range = self.dimen } },
         SwipeMinecraftLook = { GestureRange:new{ ges = "swipe", range = self.dimen } },
+        PanMinecraftLook = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } },
+        PanReleaseMinecraftLook = { GestureRange:new{ ges = "pan_release", range = self.dimen } },
         HoldMinecraftAction = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
 end
@@ -1810,11 +1835,14 @@ function VoxelCanvas:_drawScene(bb, x, y)
         end
     end
     for ry = 0, rows - 1 do
-        local bayer_row = BAYER4[color_mode and (ry % 4) + 1 or (floor(ry / 2) % 4) + 1]
+            local bayer_row = BAYER8[(ry % 8) + 1]
         local row_ink, row_start
         for rx = 0, cols - 1 do
-            local bayer_col = color_mode and (rx % 4) or (floor(rx / 2) % 4)
-            local dither_threshold = bayer_row[bayer_col + 1]
+                local bayer_col = rx % 8
+                -- BAYER8 is 0..63 like AppDock YouTube; coverage in the
+                -- material cache is 0..16, so normalize without division in
+                -- the hot comparison path.
+                local dither_threshold = floor(bayer_row[bayer_col + 1] / 4)
             local index = ry * cols + rx + 1
             local dir_x, dir_z, dir_y = ray_x[index], ray_z[index], ray_y[index]
             local signed_delta_x, signed_delta_z, signed_delta_y = ray_dx[index], ray_dz[index], ray_dy[index]
@@ -2080,7 +2108,28 @@ function VoxelCanvas:onHoldMinecraftAction(first, second)
     return true
 end
 
-function VoxelCanvas:onSwipeMinecraftLook(_, gesture)
+function VoxelCanvas:_panLook(gesture, finish)
+    local pos = gesture and (gesture.pos or gesture)
+    if not pos then return false end
+    local previous = self._look_pan_last
+    self._look_pan_last = { x = pos.x, y = pos.y }
+    if previous and self.session:lookDelta((pos.x or 0) - (previous.x or 0), (pos.y or 0) - (previous.y or 0)) then
+        self:refreshFast()
+    end
+    if finish then self._look_pan_last = nil end
+    return true
+end
+
+function VoxelCanvas:onPanMinecraftLook(first, second)
+    return self:_panLook(second or first, false)
+end
+
+function VoxelCanvas:onPanReleaseMinecraftLook(first, second)
+    return self:_panLook(second or first, true)
+end
+
+function VoxelCanvas:onSwipeMinecraftLook(first, second)
+    local gesture = second or first
     if not self.session then return false end
     local direction = gesture and gesture.direction
     if direction == "west" then
@@ -2121,26 +2170,46 @@ function Joystick:paintTo(bb, x, y)
     local range = self.ges_events.TapMinecraftJoystick[1].range
     range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
     local size = math.min(self.width, self.height)
-    bb:paintRect(x + 1, y + 1, size - 2, size - 2, Blitbuffer.COLOR_WHITE)
-    bb:paintRect(x, y, size, 1, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x, y + size - 1, size, 1, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x, y, 1, size, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x + size - 1, y, 1, size, Blitbuffer.COLOR_BLACK)
-    local cx, cy = x + math.floor(size / 2), y + math.floor(size / 2)
-    bb:paintRect(cx - 2, cy - 2, 5, 5, Blitbuffer.COLOR_BLACK)
+    local cell = math.floor(size / 3)
+    local function button(column, row)
+        local bx, by = x + column * cell + 1, y + row * cell + 1
+        bb:paintRect(bx, by, cell - 2, cell - 2, Blitbuffer.COLOR_LIGHT_GRAY)
+        bb:paintRect(bx, by, cell - 2, 1, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(bx, by + cell - 3, cell - 2, 1, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(bx, by, 1, cell - 2, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(bx + cell - 3, by, 1, cell - 2, Blitbuffer.COLOR_BLACK)
+    end
+    local function arrow(column, row, direction)
+        local cx = x + column * cell + math.floor(cell / 2)
+        local cy = y + row * cell + math.floor(cell / 2)
+        if direction == "up" or direction == "down" then
+            local sign = direction == "up" and -1 or 1
+            bb:paintRect(cx - 2, cy + sign * 5, 5, 6, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(cx - 5, cy + sign * 1, 11, 3, Blitbuffer.COLOR_BLACK)
+        else
+            local sign = direction == "left" and -1 or 1
+            bb:paintRect(cx + sign * 5, cy - 2, 6, 5, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(cx + sign * 1, cy - 5, 3, 11, Blitbuffer.COLOR_BLACK)
+        end
+    end
+    button(1, 0); arrow(1, 0, "up")
+    button(0, 1); arrow(0, 1, "left")
+    button(2, 1); arrow(2, 1, "right")
+    button(1, 2); arrow(1, 2, "down")
     return true
 end
 
 function Joystick:_steer(gesture)
     local pos = gesture and gesture.pos
     if not pos or not self.canvas then return true end
-    local dx = (pos.x or self._origin_x) - (self._origin_x + self.width / 2)
-    local dy = (pos.y or self._origin_y) - (self._origin_y + self.height / 2)
-    if math.abs(dx) > math.abs(dy) then
-        self.canvas:act(dx < 0 and "left" or "right")
-    elseif math.abs(dy) > self.height * 0.15 then
-        self.canvas:act(dy < 0 and "forward" or "back")
-    end
+    local size, cell = math.min(self.width, self.height), math.floor(math.min(self.width, self.height) / 3)
+    local local_x, local_y = (pos.x or self._origin_x) - self._origin_x, (pos.y or self._origin_y) - self._origin_y
+    local action
+    if local_x >= cell and local_x < cell * 2 and local_y < cell then action = "forward"
+    elseif local_x < cell and local_y >= cell and local_y < cell * 2 then action = "left"
+    elseif local_x >= cell * 2 and local_y >= cell and local_y < cell * 2 then action = "right"
+    elseif local_x >= cell and local_x < cell * 2 and local_y >= cell * 2 and local_y < size then action = "back" end
+    if action then self.canvas:act(action) end
     return true
 end
 
@@ -2610,6 +2679,41 @@ function NavButton:onTapMinecraftNav()
     return true
 end
 
+-- Compact Bedrock-style jump control: a bordered light button with a bold
+-- upward arrow is more recognizable on both color and monochrome E-Ink than a
+-- text-only navigation button.
+local JumpControl = InputContainer:extend{
+    title = "Springen",
+    width = nil,
+    height = nil,
+    callback = nil,
+    dimen = nil,
+}
+
+function JumpControl:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+    self.ges_events = { TapMinecraftJump = { GestureRange:new{ ges = "tap", range = self.dimen } } }
+end
+
+function JumpControl:paintTo(bb, x, y)
+    local range = self.ges_events.TapMinecraftJump[1].range
+    range.x, range.y, range.w, range.h = x, y, self.width, self.height
+    bb:paintRect(x + 1, y + 1, self.width - 2, self.height - 2, Blitbuffer.COLOR_LIGHT_GRAY)
+    bb:paintRect(x, y, self.width, 1, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y + self.height - 1, self.width, 1, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, 1, self.height, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + self.width - 1, y, 1, self.height, Blitbuffer.COLOR_BLACK)
+    local cx, cy = x + math.floor(self.width / 2), y + math.floor(self.height / 2)
+    bb:paintRect(cx - 2, cy - 7, 5, 10, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(cx - 7, cy - 3, 15, 4, Blitbuffer.COLOR_BLACK)
+    return true
+end
+
+function JumpControl:onTapMinecraftJump()
+    if self.callback then self.callback() end
+    return true
+end
+
 local WorldPane = InputContainer:extend{ session = nil, canvas = nil }
 
 function WorldPane:_act(action)
@@ -2666,7 +2770,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.0.2",
+    version = "4.1.0",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -2731,6 +2835,8 @@ return {
         if groups.Select then pane.key_events.MinecraftForwardSelect = { { groups.Select }, event = "MinecraftForward" } end
         canvas.overlap_offset = { margin, canvas_y }
         local joystick = Joystick:new{ width = joystick_size, height = joystick_size, canvas = canvas }
+        joystick.overlap_offset = { margin + px(6), canvas_y + canvas_h - joystick_size - px(6) }
+        state.joystick = joystick
         local mode_label = state.session:tapActionLabel()
         local hint_text = state.session.tap_action == "place"
             and _("Tippen: Block setzen · Halten: abbauen · Wischen: umsehen")
@@ -2746,7 +2852,7 @@ return {
             canvas,
             hotbar,
             joystick,
-            NavButton:new{ title = _("Springen"), width = jump_w, height = jump_h, primary = true, callback = function() canvas:act("jump") end, overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) } },
+            JumpControl:new{ title = _("Springen"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end, overlap_offset = { margin + canvas_w - jump_w - px(8), canvas_y + canvas_h - jump_h - px(8) } },
             inventory_panel,
             crafting_panel,
             NavButton:new{ title = _("Links"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
@@ -2770,6 +2876,8 @@ return {
     _test = {
         VoxelSession = VoxelSession,
         VoxelCanvas = VoxelCanvas,
+        Joystick = Joystick,
+        JumpControl = JumpControl,
         InventoryPanel = InventoryPanel,
         CraftingPanel = CraftingPanel,
         Hotbar = Hotbar,
