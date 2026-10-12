@@ -1883,6 +1883,7 @@ function VoxelCanvas:init()
         PanMinecraftLook = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } },
         PanReleaseMinecraftLook = { GestureRange:new{ ges = "pan_release", range = self.dimen } },
         HoldMinecraftAction = { GestureRange:new{ ges = "hold", range = self.dimen } },
+        HoldReleaseMinecraftAction = { GestureRange:new{ ges = "hold_release", range = self.dimen } },
     }
 end
 
@@ -2461,7 +2462,16 @@ function VoxelCanvas:onHoldMinecraftAction(first, second)
     local gesture = second or first
     local pos = gesture and gesture.pos
     if not pos then return true end
-    if self:_controlActionAt(pos.x, pos.y) then return true end
+    local control_action = self:_controlActionAt(pos.x, pos.y)
+    if control_action == "jump" then
+        self:act("jump")
+        return true
+    elseif control_action and control_action ~= "none" then
+        -- The canvas owns the larger mining hold range. Do not swallow a
+        -- D-pad hold here: forward it to the repeat-movement timer.
+        if self.session then self.session:startHeldMove(control_action) end
+        return true
+    end
     local target = self:pickBlock(pos.x, pos.y)
     if target then
         self:act("hold", target)
@@ -2489,6 +2499,11 @@ function VoxelCanvas:_panLook(gesture, finish)
         -- the preview grid without slowing any intermediate pan sample.
         self:refreshFast()
     end
+    return true
+end
+
+function VoxelCanvas:onHoldReleaseMinecraftAction()
+    if self.session then self.session:stopHeldMove() end
     return true
 end
 
@@ -3425,7 +3440,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.6",
+    version = "4.3.7",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
