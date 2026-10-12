@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.0.0 adds the Minecraft-like feature set requested for AppDock:
+Version 4.0.1 fixes KOReader gesture dispatch for placing, mining and hotbar selection.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -2662,7 +2662,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.0.0",
+    version = "4.0.1",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",

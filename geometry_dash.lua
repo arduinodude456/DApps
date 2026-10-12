@@ -6,7 +6,7 @@ playfield is redrawn directly into the active screen buffer and refreshed with
 KOReader's fast waveform. UI chrome changes only on pause, retry, crash, or
 completion; every moving frame is confined to the canvas region.
 
-Version 1.1.0 adds a level editor: obstacles are placed on a snapped grid,
+Version 1.1.1 fixes the KOReader gesture dispatch for the level editor. obstacles are placed on a snapped grid,
 custom levels are stored atomically in the KOReader data directory and appear
 next to the built-in levels in the level switcher.
 --]]--
@@ -1017,7 +1017,7 @@ end
 
 return {
     id = "geometry_dash",
-    version = "1.1.0",
+    version = "1.1.1",
     title = "Geometry Dash",
     subtitle = "Fast-refresh obstacle runner mit Leveleditor",
     symbol = "G",
