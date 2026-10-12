@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.1.3 adds a low-cost live-look preview renderer to keep finger camera movement responsive on E-Ink.
+Version 4.1.4 slightly increases live-look preview resolution while retaining the fast E-Ink path.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -58,7 +58,7 @@ local RENDER_SAMPLE = 5
 local COLOR_RENDER_SAMPLE = 3
 -- During a finger drag the view is a preview. The release frame switches back
 -- to COLOR_RENDER_SAMPLE, while this coarser grid keeps camera feedback fluid.
-local LIVE_RENDER_SAMPLE = 10
+local LIVE_RENDER_SAMPLE = 9
 -- Same 8x8 ordered Bayer matrix used by AppDock YouTube's indexed-color
 -- pipeline. We normalize it to the 0..15 coverage range at the hot render
 -- site, keeping color transitions stable while avoiding per-pixel RGB math.
@@ -2852,7 +2852,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.1.3",
+    version = "4.1.4",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
