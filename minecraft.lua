@@ -166,6 +166,8 @@ local COLOR_RENDER_SAMPLE = 3
 -- During a finger drag the view is a preview. The release frame switches back
 -- to COLOR_RENDER_SAMPLE, while this coarser grid keeps camera feedback fluid.
 local LIVE_RENDER_SAMPLE = 6
+-- The E-Ink game view never switches to the expensive high-resolution path.
+local MINECRAFT_RENDER_SAMPLE = LIVE_RENDER_SAMPLE
 -- Same 8x8 ordered Bayer matrix used by AppDock YouTube's indexed-color
 -- pipeline. We normalize it to the 0..15 coverage range at the hot render
 -- site, keeping color transitions stable while avoiding per-pixel RGB math.
@@ -1298,6 +1300,7 @@ function VoxelSession.new(seed)
     self.view_height = self:walkHeight(player_x, player_z)
     self._motionTick = function() self:tickMotion() end
     self._jumpTick = function() self:tickJump() end
+    self._heldMoveTick = function() self:tickHeldMove() end
     self._mobTick = function() self:tickMobs() end
     UIManager:scheduleIn(700, self._mobTick)
     return self
@@ -1667,6 +1670,27 @@ function VoxelSession:tickJump()
     end
 end
 
+function VoxelSession:tickHeldMove()
+    local action = self.held_move_action
+    if not action then return end
+    if not self.motion then self:act(action) end
+    UIManager:scheduleIn(65, self._heldMoveTick)
+end
+
+function VoxelSession:startHeldMove(action)
+    if action ~= "forward" and action ~= "back" and action ~= "left" and action ~= "right" then return false end
+    self.held_move_action = action
+    if not self.motion then self:act(action) end
+    UIManager:unschedule(self._heldMoveTick)
+    UIManager:scheduleIn(65, self._heldMoveTick)
+    return true
+end
+
+function VoxelSession:stopHeldMove()
+    self.held_move_action = nil
+    UIManager:unschedule(self._heldMoveTick)
+end
+
 function VoxelSession:turn(direction)
     self.yaw = wrapAngle(self.yaw + direction * TURN_ANGLE)
     self.last_event = direction < 0 and _("Nach links gedreht.") or _("Nach rechts gedreht.")
@@ -1965,8 +1989,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
     if not session then return end
 
     local color_mode = session.color_enabled and colorRenderingEnabled()
-    local sample = session.live_look and LIVE_RENDER_SAMPLE
-        or (color_mode and COLOR_RENDER_SAMPLE or RENDER_SAMPLE)
+    -- Keep every frame, including settled frames after pan/movement, on the
+    -- fluid E-Ink preview grid. There is intentionally no high-res switch.
+    local sample = MINECRAFT_RENDER_SAMPLE
     -- The color path uses a finer grid so ordered shade dithering stays crisp;
     -- monochrome keeps the lower-cost 5x5 sampling and its existing textures.
     local cols, rows = renderGridFor(width, height, sample)
@@ -2242,16 +2267,6 @@ function VoxelCanvas:refreshFast()
     if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
     self._refresh_count = (self._refresh_count or 0) + 1
     UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
-    -- The canvas is larger than the controls and would otherwise paint over
-    -- them during every movement frame. Repaint both Bedrock controls last.
-    if self.control_dpad_widget and self.control_dpad_region then
-        local r = self.control_dpad_region
-        UIManager:widgetRepaint(self.control_dpad_widget, r.x, r.y)
-    end
-    if self.control_jump_widget and self.control_jump_region then
-        local r = self.control_jump_region
-        UIManager:widgetRepaint(self.control_jump_widget, r.x, r.y)
-    end
     -- Fast waveforms are intentionally used for motion, but they accumulate
     -- ghosting on E-Ink. Every second step gets a clean UI waveform for the
     -- same local region; it is still not a fullscreen refresh.
@@ -2264,6 +2279,17 @@ function VoxelCanvas:refreshFast()
         h = self.height,
     })
     if UIManager.forceRePaint then UIManager:forceRePaint() end
+    -- forceRePaint may redraw the dirty canvas after widgetRepaint. Paint the
+    -- controls after that flush, using the origins captured by their own
+    -- paintTo methods rather than reconstructing coordinates from the canvas.
+    local function repaintControl(widget, fallback)
+        if not widget then return end
+        local ox, oy = widget._origin_x, widget._origin_y
+        if type(ox) ~= "number" or type(oy) ~= "number" then ox, oy = fallback.x, fallback.y end
+        UIManager:widgetRepaint(widget, ox, oy)
+    end
+    if self.control_dpad_widget and self.control_dpad_region then repaintControl(self.control_dpad_widget, self.control_dpad_region) end
+    if self.control_jump_widget and self.control_jump_region then repaintControl(self.control_jump_widget, self.control_jump_region) end
     -- yieldToEPDC can stall successive finger samples on real E-Ink panels.
     -- The preview already uses the fast waveform; yield only for settled frames.
     if not live_preview and UIManager.yieldToEPDC then UIManager:yieldToEPDC() end
@@ -2275,7 +2301,7 @@ function VoxelCanvas:pickBlock(screen_x, screen_y)
     if not session or not screen_x or not screen_y then return nil end
     local relative_x = clamp(screen_x - self._origin_x, 0, self.width - 1)
     local relative_y = clamp(screen_y - self._origin_y, 0, self.height - 1)
-    local sample = session.color_enabled and colorRenderingEnabled() and COLOR_RENDER_SAMPLE or RENDER_SAMPLE
+    local sample = MINECRAFT_RENDER_SAMPLE
     local cols, rows = renderGridFor(self.width, self.height, sample)
     local rx = math.min(cols - 1, math.floor(relative_x / self.width * cols))
     local ry = math.min(rows - 1, math.floor(relative_y / self.height * rows))
@@ -2340,6 +2366,19 @@ end
 -- first: a control tap is routed to its action and can never place a block.
 function VoxelCanvas:_controlActionAt(screen_x, screen_y)
     local dpad, jump = self.control_dpad_region, self.control_jump_region
+    -- Use the origin captured by each widget's paintTo. OverlapGroup and
+    -- widgetRepaint can apply a parent offset; the drawn pixels and the hitbox
+    -- must always use the same final screen coordinates.
+    if self.control_dpad_widget and type(self.control_dpad_widget._origin_x) == "number"
+        and type(self.control_dpad_widget._origin_y) == "number" then
+        dpad = { x = self.control_dpad_widget._origin_x, y = self.control_dpad_widget._origin_y,
+            w = self.control_dpad_widget.width, h = self.control_dpad_widget.height }
+    end
+    if self.control_jump_widget and type(self.control_jump_widget._origin_x) == "number"
+        and type(self.control_jump_widget._origin_y) == "number" then
+        jump = { x = self.control_jump_widget._origin_x, y = self.control_jump_widget._origin_y,
+            w = self.control_jump_widget.width, h = self.control_jump_widget.height }
+    end
     if dpad and screen_x >= dpad.x and screen_x < dpad.x + dpad.w
         and screen_y >= dpad.y and screen_y < dpad.y + dpad.h then
         local cell = math.floor(dpad.w / 3)
@@ -2464,6 +2503,9 @@ function Joystick:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.ges_events = {
         TapMinecraftJoystick = { GestureRange:new{ ges = "tap", range = self.dimen } },
+        HoldMinecraftJoystick = { GestureRange:new{ ges = "hold", range = self.dimen } },
+        PanMinecraftJoystick = { GestureRange:new{ ges = "pan", range = self.dimen, rate = 8 } },
+        PanReleaseMinecraftJoystick = { GestureRange:new{ ges = "pan_release", range = self.dimen } },
         SwipeMinecraftJoystick = { GestureRange:new{ ges = "swipe", range = self.dimen } },
     }
 end
@@ -2516,7 +2558,39 @@ function Joystick:_steer(gesture)
     return true
 end
 
-function Joystick:onTapMinecraftJoystick(first, second) return self:_steer(second or first) end
+function Joystick:_heldAction(gesture)
+    local pos = gesture and gesture.pos
+    if not pos or not self.canvas then return nil end
+    local cell = math.floor(math.min(self.width, self.height) / 3)
+    local local_x, local_y = pos.x - self._origin_x, pos.y - self._origin_y
+    if local_x >= cell and local_x < cell * 2 and local_y < cell then return "forward" end
+    if local_x < cell and local_y >= cell and local_y < cell * 2 then return "left" end
+    if local_x >= cell * 2 and local_y >= cell and local_y < cell * 2 then return "right" end
+    if local_x >= cell and local_x < cell * 2 and local_y >= cell * 2 then return "back" end
+    return nil
+end
+
+function Joystick:onHoldMinecraftJoystick(first, second)
+    local action = self:_heldAction(second or first)
+    if action then self.canvas.session:startHeldMove(action) end
+    return true
+end
+
+function Joystick:onPanMinecraftJoystick(first, second)
+    local action = self:_heldAction(second or first)
+    if action then self.canvas.session:startHeldMove(action) end
+    return true
+end
+
+function Joystick:onPanReleaseMinecraftJoystick()
+    if self.canvas and self.canvas.session then self.canvas.session:stopHeldMove() end
+    return true
+end
+
+function Joystick:onTapMinecraftJoystick(first, second)
+    if self.canvas and self.canvas.session then self.canvas.session:stopHeldMove() end
+    return self:_steer(second or first)
+end
 function Joystick:onSwipeMinecraftJoystick(first, second)
     if not self.canvas then return false end
     local gesture = second or first
@@ -3321,7 +3395,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.3.4",
+    version = "4.3.5",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -3375,6 +3449,7 @@ return {
         state.inventory_panel, state.crafting_panel = inventory_panel, crafting_panel
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
         function pane:onDeactivate()
+            state.session:stopHeldMove()
             UIManager:unschedule(state.session._mobTick)
             if state.session.motion then
                 state.session.motion = nil
