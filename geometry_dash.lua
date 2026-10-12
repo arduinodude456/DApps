@@ -740,7 +740,11 @@ function EditorCanvas:refreshFast()
     return true
 end
 
-function EditorCanvas:onTapGeometryDashEditor(gesture)
+function EditorCanvas:onTapGeometryDashEditor(first, second)
+    -- KOReader dispatches gesture callbacks as (event_arg, gesture). Keep
+    -- the one-argument form too, because the editor is also exercised directly
+    -- by tests and by lightweight hosts.
+    local gesture = second or first
     local editor = self.editor
     if not editor or not editor.draft or not gesture or not gesture.pos then return true end
     local action = Editor.apply(editor.draft, editor.tool, self:worldXAt(gesture.pos.x))

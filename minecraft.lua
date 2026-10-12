@@ -2039,7 +2039,8 @@ function VoxelCanvas:act(action, target)
     return result ~= false
 end
 
-function VoxelCanvas:onTapMinecraftExplore(gesture)
+function VoxelCanvas:onTapMinecraftExplore(first, second)
+    local gesture = second or first
     if not gesture or not gesture.pos then return true end
     local target = self:pickBlock(gesture.pos.x, gesture.pos.y)
     if target then
@@ -2064,7 +2065,8 @@ function VoxelCanvas:onTapMinecraftExplore(gesture)
     return true
 end
 
-function VoxelCanvas:onHoldMinecraftAction(gesture)
+function VoxelCanvas:onHoldMinecraftAction(first, second)
+    local gesture = second or first
     local pos = gesture and gesture.pos
     if not pos then return true end
     local target = self:pickBlock(pos.x, pos.y)
@@ -2138,9 +2140,10 @@ function Joystick:_steer(gesture)
     return true
 end
 
-function Joystick:onTapMinecraftJoystick(gesture) return self:_steer(gesture) end
-function Joystick:onSwipeMinecraftJoystick(_, gesture)
+function Joystick:onTapMinecraftJoystick(first, second) return self:_steer(second or first) end
+function Joystick:onSwipeMinecraftJoystick(first, second)
     if not self.canvas then return false end
+    local gesture = second or first
     local direction = gesture and gesture.direction
     if direction == "west" then self.canvas:act("left")
     elseif direction == "east" then self.canvas:act("right")
@@ -2226,10 +2229,13 @@ function Hotbar:refresh()
     return true
 end
 
-function Hotbar:onTapMinecraftHotbar(gesture)
+function Hotbar:onTapMinecraftHotbar(first, second)
+    local gesture = second or first
     local pos = gesture and gesture.pos
     if not pos or not self.session then return true end
-    local slot = math.floor((pos.x - self.ges_events.TapMinecraftHotbar[1].range.x) / (self.width / HOTBAR_SLOTS)) + 1
+    local range = self.ges_events.TapMinecraftHotbar[1].range
+    local origin_x = range.x or self._origin_x or 0
+    local slot = math.floor((pos.x - origin_x) / (self.width / HOTBAR_SLOTS)) + 1
     if self.session:selectSlot(slot) then self:refresh() end
     return true
 end
@@ -2401,7 +2407,8 @@ function InventoryPanel:refresh()
     return true
 end
 
-function InventoryPanel:onTapMinecraftInventory(gesture)
+function InventoryPanel:onTapMinecraftInventory(first, second)
+    local gesture = second or first
     local session = self.session
     if not session or not session.inventory_open then return false end
     local pos = gesture and gesture.pos
@@ -2534,7 +2541,8 @@ function CraftingPanel:refresh()
     return true
 end
 
-function CraftingPanel:onTapMinecraftCrafting(gesture)
+function CraftingPanel:onTapMinecraftCrafting(first, second)
+    local gesture = second or first
     local session = self.session
     if not session or not session.crafting_open then return false end
     local pos = gesture and gesture.pos

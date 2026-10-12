@@ -533,6 +533,30 @@ assert(state and state.session and state.canvas, "The pane must expose its Minec
 assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the canvas and the hotbar")
 assert(findWidget(pane[1], state.inventory_panel) and findWidget(pane[1], state.crafting_panel), "The pane must embed both overlays")
 assert(findWidget(pane[1], state.event_line), "The pane must embed the action line")
+-- KOReader calls handlers as (event_arg, gesture). Verify the real dispatch
+-- shape for canvas interaction and hotbar selection, not only direct helpers.
+local old_pick, old_act = state.canvas.pickBlock, state.canvas.act
+state.canvas.pickBlock = function(_, x, y)
+    assert(x == 123 and y == 234, "The dispatched canvas gesture position must be forwarded")
+    return { x = 2, z = 2, y = 1 }
+end
+state.canvas.act = function(_, action, target)
+    assert(action == "tap" and target and target.x == 2, "A canvas tap must dispatch a tap action")
+    return true
+end
+assert(state.canvas:onTapMinecraftExplore("TapMinecraftExplore", { pos = { x = 123, y = 234 } }),
+    "The canvas must handle KOReader's two-argument tap callback")
+state.canvas.act = function(_, action, target)
+    assert(action == "hold" and target and target.x == 2, "A canvas hold must dispatch a hold action")
+    return true
+end
+assert(state.canvas:onHoldMinecraftAction("HoldMinecraftAction", { pos = { x = 123, y = 234 } }),
+    "The canvas must handle KOReader's two-argument hold callback")
+state.canvas.pickBlock, state.canvas.act = old_pick, old_act
+state.session:selectSlot(1)
+assert(state.hotbar:onTapMinecraftHotbar("TapMinecraftHotbar", { pos = { x = state.hotbar._origin_x + state.hotbar.width / 2, y = state.hotbar._origin_y + 5 } }),
+    "The hotbar must handle KOReader's two-argument selection callback")
+assert(state.session.selected_slot == 5, "A dispatched hotbar tap must select the touched slot")
 for _, title in ipairs({ "Farbe", "Welt", "Springen", "Links", "Vor", "Zurück", "Rechts", "Inventar", "Tipp: Setzen" }) do
     assert(findButton(pane[1], title), "The pane must expose the " .. title .. " control")
 end

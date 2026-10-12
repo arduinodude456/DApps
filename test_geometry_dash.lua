@@ -191,6 +191,12 @@ assert(repaint_calls == 1 and #dirty_calls == 1 and dirty_calls[1].waveform == "
 assert(dirty_calls[1].region.w == 210 and dirty_calls[1].region.h == 126, "The editor refresh region must match the canvas")
 local world_x = editor_canvas:worldXAt(57)
 assert(type(world_x) == "number" and world_x >= 0, "A canvas tap must resolve to a world column")
+-- KOReader supplies an event argument before the actual gesture. The second
+-- argument must still reach the editor so a real device tap places an object.
+local before_dispatch = #editor.draft.objects
+assert(editor_canvas:onTapGeometryDashEditor("TapGeometryDashEditor", { pos = { x = 78, y = 129 } }),
+    "The editor must accept KOReader's two-argument gesture callback")
+assert(#editor.draft.objects == before_dispatch + 1, "A dispatched editor tap must place an object")
 
 local arena_layout = test.levelLayout(210, 126, 17, 29)
 assert(arena_layout.scale > 0, "The play arena must keep its own layout helper")
