@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.2.0 adds a splash screen, saved-world picker and world creation menu.
+Version 4.3.0 adds the official logo splash, sharper pan preview, Bedrock-style inventory, protected touch controls and sheep mobs.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -36,6 +36,11 @@ local OverlapGroup = require("ui/widget/overlapgroup")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
+local ok_image_widget, ImageWidget = pcall(require, "ui/widget/imagewidget")
+
+local source_path = debug.getinfo(1, "S").source or ""
+local APP_DIR = source_path:sub(1, 1) == "@" and source_path:sub(2):match("(.+)/[^/]+$") or "."
+local MINECRAFT_LOGO = APP_DIR .. "/assets/minecraft_logo.png"
 
 local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
 if not ok_lfs then ok_lfs, lfs = pcall(require, "lfs") end
@@ -62,7 +67,7 @@ local RENDER_SAMPLE = 5
 local COLOR_RENDER_SAMPLE = 3
 -- During a finger drag the view is a preview. The release frame switches back
 -- to COLOR_RENDER_SAMPLE, while this coarser grid keeps camera feedback fluid.
-local LIVE_RENDER_SAMPLE = 9
+local LIVE_RENDER_SAMPLE = 8
 -- Same 8x8 ordered Bayer matrix used by AppDock YouTube's indexed-color
 -- pipeline. We normalize it to the 0..15 coverage range at the hot render
 -- site, keeping color transitions stable while avoiding per-pixel RGB math.
@@ -635,11 +640,35 @@ end
 local rebuildWorldBlocks
 local placeVillage, placeHouse, findVillageSite
 local heightAt, materialAt, biomeAt
+
+local function generateSheep(world, seed)
+    local sheep, sites = {}, {}
+    for z = 4, world.size - 5, 3 do
+        for x = 4, world.size - 5, 3 do
+            local biome = world.biomes[z + 1][x + 1]
+            local surface = world.materials[z + 1][x + 1]
+            local suitable = (biome == "plains" or biome == "forest" or biome == "birch_forest" or biome == "meadow") and surface == "grass"
+            if suitable and hash2(seed + 1901, x, z) > 0.972 and #sheep < 10 then
+                local ground = world.heights[z + 1][x + 1]
+                local clear = true
+                for _, site in ipairs(sites) do
+                    if math.abs(site.x - x) < 5 and math.abs(site.z - z) < 5 then clear = false; break end
+                end
+                if clear then
+                    sites[#sites + 1] = { x = x, z = z }
+                    sheep[#sheep + 1] = { x = x + 0.5, z = z + 0.5, y = ground, kind = "sheep", wool = "white" }
+                end
+            end
+        end
+    end
+    return sheep
+end
+
 local function buildWorld(seed)
     seed = normalizeSeed(seed)
     local world = {
         size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, subsurfaces = {},
-        biomes = {}, extra_blocks = {}, removed_blocks = {},
+        biomes = {}, extra_blocks = {}, removed_blocks = {}, mobs = {},
     }
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1], world.materials[z + 1], world.biomes[z + 1], world.subsurfaces[z + 1] = {}, {}, {}, {}
@@ -709,6 +738,7 @@ local function buildWorld(seed)
         end
     end
     world.village = placeVillage(world, seed)
+    world.mobs = generateSheep(world, seed)
     if rebuildWorldBlocks then rebuildWorldBlocks(world) end
     return world
 end
@@ -1727,6 +1757,37 @@ function VoxelCanvas:_stroke(bb, first, second, thickness)
     end
 end
 
+function VoxelCanvas:_drawSheep(bb, x, y, session)
+    local world = session.world
+    if not world or not world.mobs then return end
+    local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
+    local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
+    local focal = (self.width / 2) / math.tan(math.rad(90) / 2)
+    for _, mob in ipairs(world.mobs) do
+        local dx, dz = mob.x - session.player_x, mob.z - session.player_z
+        local depth = dx * forward_x + dz * forward_z
+        local lateral = dx * right_x + dz * right_z
+        if depth > 0.7 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.35 then
+            local sx, sy = self:projectPoint(mob.x, mob.z, mob.y + 0.85, session, x, y)
+            local size = math.max(4, math.min(28, focal / depth * 0.52))
+            local body_w, body_h = math.max(5, math.floor(size * 0.95)), math.max(4, math.floor(size * 0.52))
+            local body_x, body_y = math.floor(sx - body_w / 2), math.floor(sy - body_h / 2)
+            -- A black silhouette first keeps the animal legible on both white
+            -- E-Ink and dithered colour output; the inset white body reads as wool.
+            bb:paintRect(body_x - 1, body_y - 1, body_w + 2, body_h + 2, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(body_x, body_y, body_w, body_h, Blitbuffer.COLOR_WHITE)
+            local head = math.max(3, math.floor(size * 0.38))
+            local head_x, head_y = body_x + body_w - math.floor(head * 0.35), body_y - math.floor(head * 0.35)
+            bb:paintRect(head_x - 1, head_y - 1, head + 2, head + 2, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(head_x, head_y, head, head, Blitbuffer.COLOR_WHITE)
+            local leg_w = math.max(1, math.floor(size * 0.12))
+            local leg_h = math.max(2, math.floor(size * 0.30))
+            bb:paintRect(body_x + math.floor(body_w * 0.18), body_y + body_h, leg_w, leg_h, Blitbuffer.COLOR_BLACK)
+            bb:paintRect(body_x + math.floor(body_w * 0.72), body_y + body_h, leg_w, leg_h, Blitbuffer.COLOR_BLACK)
+        end
+    end
+end
+
 -- The targeted block gets a Minecraft-style face outline around the crosshair.
 function VoxelCanvas:_drawTargetOutline(bb, x, y, session)
     local target = self:pickBlock(x + math.floor(self.width / 2), y + math.floor(self.height / 2))
@@ -2019,6 +2080,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         end
         previous_hit_keys = current_hit_keys
     end
+    self:_drawSheep(bb, x, y, session)
     local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
     bb:paintRect(center_x - 5, center_y, 11, 1, Blitbuffer.COLOR_BLACK)
     bb:paintRect(center_x, center_y - 5, 1, 11, Blitbuffer.COLOR_BLACK)
@@ -2442,9 +2504,11 @@ end
 function InventoryPanel:headerHeight() return scale(26) end
 function InventoryPanel:footerHeight() return scale(20) end
 function InventoryPanel:slotHeight()
-    return math.max(scale(16), math.floor((self.height - self:headerHeight() - self:footerHeight() - scale(6)) / 4))
+    return math.max(scale(16), math.floor((self.height - self:headerHeight() - self:footerHeight() - scale(10)) / 4))
 end
 function InventoryPanel:slotWidth() return (self.width - scale(8)) / 9 end
+function InventoryPanel:mainGridY() return self:headerHeight() + scale(2) end
+function InventoryPanel:hotbarY() return self:mainGridY() + self:slotHeight() * 3 + scale(4) end
 
 function InventoryPanel:hitTest(local_x, local_y)
     local header_h, footer_h = self:headerHeight(), self:footerHeight()
@@ -2460,11 +2524,14 @@ function InventoryPanel:hitTest(local_x, local_y)
     end
     if local_y >= self.height - footer_h then return { kind = "footer" } end
     local slot_h, slot_w = self:slotHeight(), self:slotWidth()
-    local grid_y = header_h + scale(2)
-    if local_y < grid_y + slot_h * 4 then
+    local grid_y = self:mainGridY()
+    if local_y >= grid_y and local_y < grid_y + slot_h * 3 then
         local column = clamp(math.floor((local_x - scale(4)) / slot_w) + 1, 1, 9)
-        local row = clamp(math.floor((local_y - grid_y) / slot_h) + 1, 1, 4)
-        return { kind = "slot", slot = (row - 1) * 9 + column, row = row, column = column }
+        local row = clamp(math.floor((local_y - grid_y) / slot_h) + 1, 1, 3)
+        return { kind = "slot", slot = 9 + (row - 1) * 9 + column, row = row, column = column }
+    elseif local_y >= self:hotbarY() and local_y < self:hotbarY() + slot_h then
+        local column = clamp(math.floor((local_x - scale(4)) / slot_w) + 1, 1, 9)
+        return { kind = "slot", slot = column, row = 4, column = column }
     end
     return { kind = "empty" }
 end
@@ -2510,16 +2577,27 @@ function InventoryPanel:paintTo(bb, x, y)
         max_width = button_w - scale(4),
     }
     close_label:paintTo(bb, x + close_x + scale(4), y + scale(6))
-    local grid_y = header_h + scale(2)
-    for slot = 1, INVENTORY_SLOTS do
-        local column = (slot - 1) % 9
-        local row = math.floor((slot - 1) / 9)
+    local grid_y = self:mainGridY()
+    local hotbar_y = self:hotbarY()
+    -- Bedrock-style layout: three rows of storage, a visible separator, then
+    -- the nine hotbar slots at the bottom.
+    bb:paintRect(x + scale(3), y + hotbar_y - scale(2), self.width - scale(6), scale(2), Blitbuffer.COLOR_DARK_GRAY)
+    for visual = 1, INVENTORY_SLOTS do
+        local slot, column, row, sy_base
+        if visual <= 27 then
+            slot = visual + 9
+            column = (visual - 1) % 9
+            row = math.floor((visual - 1) / 9)
+            sy_base = grid_y
+        else
+            slot, column, row, sy_base = visual - 27, (visual - 28) % 9, 0, hotbar_y
+        end
         local sx = x + scale(4) + math.floor(column * slot_w)
-        local sy = y + grid_y + row * slot_h
+        local sy = y + sy_base + (row * slot_h)
         local cell_w = math.max(scale(8), math.floor(slot_w) - scale(2))
         local cell_h = math.max(scale(8), slot_h - scale(2))
         local item = session.slots[slot]
-        bb:paintRect(sx, sy, cell_w, cell_h, row == 0 and Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE)
+        bb:paintRect(sx, sy, cell_w, cell_h, sy_base == hotbar_y and Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE)
         bb:paintRect(sx, sy, cell_w, 1, Blitbuffer.COLOR_BLACK)
         bb:paintRect(sx, sy + cell_h - 1, cell_w, 1, Blitbuffer.COLOR_BLACK)
         bb:paintRect(sx, sy, 1, cell_h, Blitbuffer.COLOR_BLACK)
@@ -2940,9 +3018,16 @@ end
 
 local function menuPane(state, context, width, height, title, subtitle, items)
     local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session }
+    local logo = nil
+    if ok_image_widget and ImageWidget then
+        local ok, widget = pcall(function()
+            return ImageWidget:new{ file = MINECRAFT_LOGO, width = math.min(width - 30, 470), height = math.max(42, math.floor(height * 0.13)), scale_factor = 0, overlap_offset = { 15, math.max(8, math.floor(height * 0.045)) } }
+        end)
+        if ok then logo = widget end
+    end
     local children = {
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_DARK_GRAY, emptySizedWidget(width, height) },
-        TextWidget:new{ text = "MINECRAFT", face = Font:getFace("cfont", math.max(22, math.floor(width / 14))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(12, math.floor(height * 0.08)) } },
+        logo or TextWidget:new{ text = "MINECRAFT", face = Font:getFace("cfont", math.max(22, math.floor(width / 14))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(12, math.floor(height * 0.08)) } },
         TextWidget:new{ text = title, face = Font:getFace("cfont", math.max(16, math.floor(width / 24))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(55, math.floor(height * 0.20)) } },
         TextWidget:new{ text = subtitle or "", face = Font:getFace("smallinfofont", math.max(9, math.floor(width / 55))), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 20, overlap_offset = { 10, math.max(78, math.floor(height * 0.28)) } },
     }
@@ -3076,7 +3161,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.2.0",
+    version = "4.3.0",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -3101,8 +3186,8 @@ return {
         -- Controls are thumb targets, not toolbar buttons. Keep them large on
         -- normal screens and clamp only when a compact split pane leaves less
         -- room than the preferred Bedrock size.
-        local joystick_size = math.min(px(112), math.floor(canvas_w * 0.30), math.max(px(60), canvas_h - px(10)))
-        local jump_w, jump_h = px(82), px(58)
+        local joystick_size = math.min(px(128), math.floor(canvas_w * 0.34), math.max(px(68), canvas_h - px(10)))
+        local jump_w, jump_h = px(94), px(66)
         local world_button_w = math.max(px(8), math.min(px(38), math.floor(canvas_w * 0.22)))
         local header_gap = math.min(gap, math.floor(canvas_w * 0.04))
         local color_button_w = math.max(0, math.min(px(58), canvas_w - world_button_w - header_gap))
@@ -3169,10 +3254,13 @@ return {
             NavButton:new{ title = _("Menü"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
             hotbar,
-            joystick,
-            jump,
             inventory_panel,
             crafting_panel,
+            -- Keep the touch controls last in the overlap stack. Inventory and
+            -- crafting repaint the canvas-sized region while open; drawing the
+            -- D-pad afterwards prevents them from visually covering it.
+            joystick,
+            jump,
             NavButton:new{ title = _("Links"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
             NavButton:new{ title = _("Vor"), width = button_w, height = controls_h, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
             NavButton:new{ title = _("Zurück"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },

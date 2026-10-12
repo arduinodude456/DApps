@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.2.0", "Minecraft 3D must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.3.0", "Minecraft 3D must publish the splash, world list and creation menus")
 
 --[[--
 Palette and dithering helpers
@@ -156,6 +156,10 @@ for z = 0, world.size - 1 do
     end
 end
 assert(biome_count >= 5, "A seed must produce several biomes, got " .. biome_count)
+assert(type(world.mobs) == "table" and #world.mobs > 0, "World generation must add visible sheep mobs")
+for _, mob in ipairs(world.mobs) do
+    assert(mob.kind == "sheep" and mob.wool == "white" and mob.y >= 1, "Sheep mobs need a kind, wool colour and ground position")
+end
 local tree_blocks, plank_blocks, glass_blocks, wheat_blocks, cactus_blocks = 0, 0, 0, 0, 0
 for _, material in pairs(world.extra_blocks) do
     if material == "wood" or material == "wood_birch" or material == "wood_spruce"
@@ -490,16 +494,18 @@ assert(inventory_panel:hitTest(inventory_panel.width - 6, 6).kind == "button", "
 local panel_button_w = math.max(30, math.floor((inventory_panel.width - 12) / 3))
 local craft_button_x = inventory_panel.width - 8 - panel_button_w * 2
 assert(inventory_panel:hitTest(craft_button_x + 2, 6).id == "craft", "The crafting button must sit next to the close button")
-local slot_hit = inventory_panel:hitTest(4 + inventory_panel:slotWidth() * 8 + 2, inventory_panel:headerHeight() + 3)
-assert(slot_hit.kind == "slot" and slot_hit.slot == 9 and slot_hit.row == 1, "The first row must map to hotbar slots 1-9")
-local last_hit = inventory_panel:hitTest(4 + 2, inventory_panel:headerHeight() + inventory_panel:slotHeight() * 3 + 3)
-assert(last_hit.slot == 28, "The last row must map to storage slots 28-36")
+local slot_hit = inventory_panel:hitTest(4 + inventory_panel:slotWidth() * 8 + 2, inventory_panel:mainGridY() + 3)
+assert(slot_hit.kind == "slot" and slot_hit.slot == 18 and slot_hit.row == 1, "The first storage row must map to slots 10-18")
+local last_hit = inventory_panel:hitTest(4 + 2, inventory_panel:mainGridY() + inventory_panel:slotHeight() * 2 + 3)
+assert(last_hit.slot == 28, "The first column of the last storage row must map to slot 28")
+local hotbar_hit = inventory_panel:hitTest(4 + 2, inventory_panel:hotbarY() + 3)
+assert(hotbar_hit.slot == 1 and hotbar_hit.row == 4, "The separated bottom row must map to hotbar slot 1")
 assert(inventory_panel:hitTest(4, inventory_panel.height - 4).kind == "footer", "The held-stack hint must own the footer")
 
 session:act("inventory")
 assert(session.inventory_open, "The inventory command must open the overlay")
 dirty_calls, repaint_calls = {}, 0
-assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + 4 + 2, y = 7 + inventory_panel:headerHeight() + 3 } },
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + 4 + 2, y = 7 + inventory_panel:hotbarY() + 3 } },
     "Tapping a slot must be handled")
 assert(session.held and session.held.material == "grass", "Tapping the first slot must pick the stack up")
 assert(repaint_calls >= 1 and dirty_calls[#dirty_calls].waveform == "ui", "Overlays must refresh their own region with a ui waveform")
@@ -647,4 +653,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventar") and findButton(compact[1], "Farbe"), "The compact pane must keep its controls")
 
-print("minecraft-4.2.0-ok")
+print("minecraft-4.3.0-ok")
