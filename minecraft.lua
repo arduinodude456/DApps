@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.1.4 slightly increases live-look preview resolution while retaining the fast E-Ink path.
+Version 4.2.0 adds a splash screen, saved-world picker and world creation menu.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -23,6 +23,7 @@ Version 4.1.4 slightly increases live-look preview resolution while retaining th
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local Device = require("device")
+local ok_datastorage, DataStorage = pcall(require, "datastorage")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
@@ -35,6 +36,9 @@ local OverlapGroup = require("ui/widget/overlapgroup")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local _ = require("gettext")
+
+local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+if not ok_lfs then ok_lfs, lfs = pcall(require, "lfs") end
 
 local Screen = Device.screen
 local TAU = math.pi * 2
@@ -127,6 +131,7 @@ end
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
+local function trim(value) return type(value) == "string" and value:gsub("^%s+", ""):gsub("%s+$", "") or "" end
 local function wrapAngle(value) return value % TAU end
 local function normalizeSeed(seed)
     seed = tonumber(seed)
@@ -2808,9 +2813,16 @@ function WorldPane:onMinecraftBack() return self:_act("back") end
 function WorldPane:onMinecraftLeft() return self:_act("left") end
 function WorldPane:onMinecraftRight() return self:_act("right") end
 
+local WorldStore = {}
+
 local function stateFor(instance)
     if instance.minecraft then return instance.minecraft end
-    local state = { session = VoxelSession.new() }
+    local state = {
+        session = VoxelSession.new(),
+        world_store = WorldStore.load(),
+        screen = "splash",
+        create = { name = "Meine Welt", seed = "", mode = "Überleben", difficulty = "Normal", cheats = false },
+    }
     instance.minecraft = state
     return state
 end
@@ -2822,6 +2834,77 @@ local function parseWorldSeed(value)
     local seed = tonumber(text)
     if not seed or seed < -MAX_WORLD_SEED or seed >= MAX_WORLD_SEED then return false end
     return normalizeSeed(seed)
+end
+
+-- Local world catalogue. The generated terrain remains deterministic from the
+-- seed, so the catalogue stays small and robust on an E-Ink device while still
+-- offering several named save slots like Bedrock's world picker.
+local WORLD_STORE_DIR = ok_datastorage and (DataStorage:getDataDir() .. "/appdock_minecraft") or "/tmp/appdock_minecraft"
+local WORLD_STORE_FILE = WORLD_STORE_DIR .. "/worlds.lua"
+
+local function serializeWorldValue(value, indent)
+    indent = indent or ""
+    if type(value) == "number" then return tostring(value) end
+    if type(value) == "boolean" then return value and "true" or "false" end
+    if type(value) == "string" then return string.format("%q", value) end
+    if type(value) ~= "table" then return "nil" end
+    local out, deeper = { "{" }, indent .. "  "
+    for _, item in ipairs(value) do out[#out + 1] = "\n" .. deeper .. serializeWorldValue(item, deeper) .. "," end
+    local keys = {}
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or key > #value or key % 1 ~= 0 then keys[#keys + 1] = key end
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    for _, key in ipairs(keys) do
+        local encoded = type(key) == "string" and (key:match("^[%a_][%w_]*$") and key or "[" .. string.format("%q", key) .. "]") or "[" .. tostring(key) .. "]"
+        out[#out + 1] = "\n" .. deeper .. encoded .. " = " .. serializeWorldValue(value[key], deeper) .. ","
+    end
+    if #out > 1 then out[#out + 1] = "\n" .. indent end
+    out[#out + 1] = "}"
+    return table.concat(out)
+end
+
+function WorldStore.ensure()
+    if not ok_lfs then return true end
+    local attr = lfs.attributes(WORLD_STORE_DIR)
+    return attr and attr.mode == "directory" or lfs.mkdir(WORLD_STORE_DIR)
+end
+
+function WorldStore.load()
+    local data = { version = 1, worlds = {} }
+    local chunk = loadfile(WORLD_STORE_FILE)
+    if not chunk then return data end
+    if setfenv then setfenv(chunk, {}) end
+    local ok, loaded = pcall(chunk)
+    if not ok or type(loaded) ~= "table" or loaded.version ~= 1 or type(loaded.worlds) ~= "table" then return data end
+    for _, world in ipairs(loaded.worlds) do
+        if type(world) == "table" and tostring(world.name or "") ~= "" and parseWorldSeed(world.seed) ~= false then
+            data.worlds[#data.worlds + 1] = {
+                id = tostring(world.id or #data.worlds + 1),
+                name = tostring(world.name):sub(1, 40),
+                seed = parseWorldSeed(world.seed) or normalizeSeed(0),
+                mode = world.mode == "Kreativ" and "Kreativ" or "Überleben",
+                difficulty = ({ Friedlich = true, Einfach = true, Normal = true, Schwer = true })[world.difficulty] and world.difficulty or "Normal",
+                cheats = world.cheats == true,
+                created = tostring(world.created or os.date("%d.%m.%y")),
+            }
+            if #data.worlds >= 32 then break end
+        end
+    end
+    return data
+end
+
+function WorldStore.save(data)
+    if not WorldStore.ensure() then return false end
+    local tmp = WORLD_STORE_FILE .. ".tmp"
+    local file = io.open(tmp, "wb")
+    if not file then return false end
+    local ok = file:write("return " .. serializeWorldValue(data) .. "\n")
+    file:close()
+    if not ok then os.remove(tmp); return false end
+    local renamed = os.rename(tmp, WORLD_STORE_FILE)
+    if not renamed then os.remove(tmp) end
+    return renamed ~= nil
 end
 
 local function promptNewWorld(state, context)
@@ -2850,9 +2933,150 @@ local function promptNewWorld(state, context)
     dialog:onShowKeyboard()
 end
 
+local function rebuildScreen(state, context, screen)
+    state.screen = screen
+    if context.requestRebuild then context.requestRebuild("ui") end
+end
+
+local function menuPane(state, context, width, height, title, subtitle, items)
+    local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session }
+    local children = {
+        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_DARK_GRAY, emptySizedWidget(width, height) },
+        TextWidget:new{ text = "MINECRAFT", face = Font:getFace("cfont", math.max(22, math.floor(width / 14))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(12, math.floor(height * 0.08)) } },
+        TextWidget:new{ text = title, face = Font:getFace("cfont", math.max(16, math.floor(width / 24))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(55, math.floor(height * 0.20)) } },
+        TextWidget:new{ text = subtitle or "", face = Font:getFace("smallinfofont", math.max(9, math.floor(width / 55))), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 20, overlap_offset = { 10, math.max(78, math.floor(height * 0.28)) } },
+    }
+    for _, item in ipairs(items) do children[#children + 1] = item end
+    pane[1] = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false, unpack(children) }
+    return pane
+end
+
+local function menuButton(title, width, height, x, y, callback, primary)
+    return NavButton:new{ title = title, width = width, height = height, primary = primary, callback = callback, overlap_offset = { x, y } }
+end
+
+local function buildSplashPane(state, context, width, height)
+    local button_w, button_h = math.min(math.floor(width * 0.62), 330), math.max(38, math.floor(height * 0.075))
+    local x, y, gap = math.floor((width - button_w) / 2), math.floor(height * 0.40), math.max(7, math.floor(height * 0.018))
+    return menuPane(state, context, width, height, _("Willkommen"), _("Eine kleine Welt. Deine Regeln."), {
+        menuButton(_("Spielen"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
+        menuButton(_("Einstellungen"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
+        menuButton(_("Über das Spiel"), button_w, button_h, x, y + 2 * (button_h + gap), function() rebuildScreen(state, context, "about") end),
+    })
+end
+
+local function openSavedWorld(state, context, world)
+    state.active_world = world
+    state.session:newWorld(world.seed)
+    rebuildScreen(state, context, "world")
+end
+
+local function buildWorldsPane(state, context, width, height)
+    local gap = math.max(6, math.floor(width * 0.015))
+    local card_w, card_h = math.floor((width - 3 * gap) / 2), math.max(62, math.floor(height * 0.14))
+    local items = {
+        menuButton(_("Neue Welt erstellen"), math.min(260, width - 2 * gap), 38, width - math.min(260, width - 2 * gap) - gap, math.max(10, math.floor(height * 0.30)), function() rebuildScreen(state, context, "create") end, true),
+        menuButton(_("Zurück"), math.min(130, width / 3), 32, gap, height - 42, function() rebuildScreen(state, context, "splash") end),
+    }
+    local worlds = state.world_store.worlds
+    if #worlds == 0 then
+        items[#items + 1] = TextWidget:new{ text = _("Noch keine gespeicherten Welten."), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * gap, overlap_offset = { gap, math.floor(height * 0.47) } }
+    else
+        for index, world in ipairs(worlds) do
+            local column, row = (index - 1) % 2, math.floor((index - 1) / 2)
+            local x, y = gap + column * (card_w + gap), math.floor(height * 0.39) + row * (card_h + gap)
+            local label = world.name .. "\n" .. world.mode .. " · " .. world.difficulty .. "\nSeed: " .. tostring(world.seed)
+            items[#items + 1] = menuButton(label, card_w, card_h, x, y, function() openSavedWorld(state, context, world) end, false)
+        end
+    end
+    return menuPane(state, context, width, height, _("Deine Welten"), _("Wähle eine Welt oder erstelle eine neue."), items)
+end
+
+local function promptWorldField(state, context, field, title, hint)
+    local dialog
+    dialog = InputDialog:new{
+        title = title,
+        input = tostring(state.create[field] or ""),
+        input_hint = hint,
+        buttons = {
+            {
+                { text = _("Abbrechen"), callback = function() UIManager:close(dialog) end },
+                { text = _("Übernehmen"), is_enter_default = true, callback = function()
+                    local value = trim(dialog:getInputText())
+                    if value ~= "" then state.create[field] = value end
+                    UIManager:close(dialog)
+                    rebuildScreen(state, context, "create")
+                end },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+local function createWorld(state, context)
+    local seed = parseWorldSeed(state.create.seed)
+    if state.create.seed ~= "" and seed == false then
+        UIManager:show(InfoMessage:new{ text = _("Der Seed muss eine gültige Ganzzahl sein.") })
+        return
+    end
+    seed = seed or nextWorldSeed(state.session.seed)
+    local world = {
+        id = tostring(#state.world_store.worlds + 1) .. "-" .. tostring(seed),
+        name = trim(state.create.name) ~= "" and trim(state.create.name):sub(1, 40) or _("Meine Welt"),
+        seed = seed,
+        mode = state.create.mode,
+        difficulty = state.create.difficulty,
+        cheats = state.create.cheats,
+        created = os.date("%d.%m.%y"),
+    }
+    state.world_store.worlds[#state.world_store.worlds + 1] = world
+    WorldStore.save(state.world_store)
+    state.create.seed = ""
+    openSavedWorld(state, context, world)
+end
+
+local function buildCreatePane(state, context, width, height)
+    local gap, left, row_h = 8, math.max(10, math.floor(width * 0.08)), 40
+    local button_w = math.min(420, width - 2 * left)
+    local y = math.floor(height * 0.32)
+    local items = {
+        menuButton(_("Name: ") .. state.create.name, button_w, row_h, left, y, function() promptWorldField(state, context, "name", _("Name der Welt"), _("z. B. Meine Welt")) end),
+        menuButton(_("Seed: ") .. (state.create.seed ~= "" and state.create.seed or _("Zufällig")), button_w, row_h, left, y + row_h + gap, function() promptWorldField(state, context, "seed", _("Welt-Seed"), _("Leer = zufälliger Seed")) end),
+        menuButton(_("Spielmodus: ") .. state.create.mode, button_w, row_h, left, y + 2 * (row_h + gap), function() state.create.mode = state.create.mode == "Überleben" and "Kreativ" or "Überleben"; rebuildScreen(state, context, "create") end),
+        menuButton(_("Schwierigkeit: ") .. state.create.difficulty, button_w, row_h, left, y + 3 * (row_h + gap), function()
+            local order = { "Friedlich", "Einfach", "Normal", "Schwer" }
+            for i, value in ipairs(order) do if value == state.create.difficulty then state.create.difficulty = order[i % #order + 1]; break end end
+            rebuildScreen(state, context, "create")
+        end),
+        menuButton(_("Cheats: ") .. (state.create.cheats and _("An") or _("Aus")), button_w, row_h, left, y + 4 * (row_h + gap), function() state.create.cheats = not state.create.cheats; rebuildScreen(state, context, "create") end),
+        menuButton(_("Erstellen"), math.floor(button_w * 0.58), row_h, left, height - row_h - 12, function() createWorld(state, context) end, true),
+        menuButton(_("Zurück"), math.floor(button_w * 0.38), row_h, left + math.floor(button_w * 0.62), height - row_h - 12, function() rebuildScreen(state, context, "worlds") end),
+    }
+    return menuPane(state, context, width, height, _("Neue Welt erstellen"), _("Lege Name, Seed und Spielregeln fest."), items)
+end
+
+local function buildSettingsPane(state, context, width, height)
+    local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
+    local x, y = math.floor((width - button_w) / 2), math.floor(height * 0.38)
+    return menuPane(state, context, width, height, _("Einstellungen"), _("Anzeige und Spielverhalten"), {
+        menuButton(_("Farbe: ") .. (state.session.color_enabled and _("An") or _("Aus")), button_w, button_h, x, y, function() state.session:toggleColor(); rebuildScreen(state, context, "settings") end),
+        menuButton(_("Zurück"), button_w, button_h, x, y + button_h + 10, function() rebuildScreen(state, context, "splash") end),
+    })
+end
+
+local function buildAboutPane(state, context, width, height)
+    local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
+    local x = math.floor((width - button_w) / 2)
+    return menuPane(state, context, width, height, _("Über das Spiel"), _("Offline-Voxel-Sandbox für AppDock"), {
+        TextWidget:new{ text = _("Biomes · Dörfer · Inventar · Crafting\n\nMinecraft 3D 4.1.4"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        menuButton(_("Zurück"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
+    })
+end
+
 return {
     id = "minecraft",
-    version = "4.1.4",
+    version = "4.2.0",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
@@ -2861,6 +3085,11 @@ return {
         local state = stateFor(instance)
         local width, height = context.dimen.w, context.dimen.h
         local px = context.px or scale
+        if state.screen == "splash" then return buildSplashPane(state, context, width, height) end
+        if state.screen == "worlds" then return buildWorldsPane(state, context, width, height) end
+        if state.screen == "create" then return buildCreatePane(state, context, width, height) end
+        if state.screen == "settings" then return buildSettingsPane(state, context, width, height) end
+        if state.screen == "about" then return buildAboutPane(state, context, width, height) end
         local margin, gap = px(9), px(5)
         local header_h, controls_h, hotbar_h = px(43), px(31), px(30)
         local canvas_h = math.max(px(76), height - header_h - controls_h - hotbar_h - px(33))
@@ -2937,7 +3166,7 @@ return {
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", heading_size), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = heading_w, overlap_offset = { margin, px(6) } },
             TextWidget:new{ text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName(), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w, overlap_offset = { margin, px(29) } },
             NavButton:new{ title = _("Farbe"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
-            NavButton:new{ title = _("Welt"), width = world_button_w, height = px(25), callback = function() promptNewWorld(state, context) end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
+            NavButton:new{ title = _("Menü"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
             hotbar,
             joystick,
