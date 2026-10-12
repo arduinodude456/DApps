@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.1.2 improves touch controls with faster live-look sensitivity, larger Bedrock targets and safe control routing.
+Version 4.1.3 adds a low-cost live-look preview renderer to keep finger camera movement responsive on E-Ink.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -56,6 +56,9 @@ local RENDER_SAMPLE = 5
 -- 3x3 keeps block silhouettes and texture dithering readable while cutting the
 -- hot DDA loop by roughly half on a typical AppDock pane.
 local COLOR_RENDER_SAMPLE = 3
+-- During a finger drag the view is a preview. The release frame switches back
+-- to COLOR_RENDER_SAMPLE, while this coarser grid keeps camera feedback fluid.
+local LIVE_RENDER_SAMPLE = 10
 -- Same 8x8 ordered Bayer matrix used by AppDock YouTube's indexed-color
 -- pipeline. We normalize it to the 0..15 coverage range at the hot render
 -- site, keeping color transitions stable while avoiding per-pixel RGB math.
@@ -217,12 +220,16 @@ local MATERIAL_ORDER = {
 }
 
 local MATERIAL_COLORS, MATERIAL_TARGET_RGB, MATERIAL_LABELS, MATERIAL_PATTERNS, DROPS = {}, {}, {}, {}, {}
+local MATERIAL_EDGE_IDS = {}
+local next_edge_id = 1
 for id, definition in pairs(MATERIALS) do
     MATERIAL_COLORS[id] = definition.color
     MATERIAL_TARGET_RGB[id] = definition.rgb
     MATERIAL_LABELS[id] = definition.label
     MATERIAL_PATTERNS[id] = definition.pattern
     DROPS[id] = definition.drop or id
+    MATERIAL_EDGE_IDS[id] = next_edge_id
+    next_edge_id = next_edge_id + 1
 end
 
 local function materialLabel(material)
@@ -1748,7 +1755,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
     if not session then return end
 
     local color_mode = session.color_enabled and colorRenderingEnabled()
-    local sample = color_mode and COLOR_RENDER_SAMPLE or RENDER_SAMPLE
+    local sample = session.live_look and LIVE_RENDER_SAMPLE
+        or (color_mode and COLOR_RENDER_SAMPLE or RENDER_SAMPLE)
     -- The color path uses a finer grid so ordered shade dithering stays crisp;
     -- monochrome keeps the lower-cost 5x5 sampling and its existing textures.
     local cols, rows = renderGridFor(width, height, sample)
@@ -1892,7 +1900,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 -- a height or material change should not. Ignoring x/z here
                 -- avoids a heavy black checkerboard over every meadow tile
                 -- while retaining the contour around a raised block.
-                local hit_key = by .. ":" .. hit_material
+                local hit_key = by * 64 + (MATERIAL_EDGE_IDS[hit_material] or 0)
                 edge = last_hit_key ~= hit_key or previous_hit_keys[rx] ~= hit_key
                 last_hit_key = hit_key
                 current_hit_keys[rx] = hit_key
@@ -2026,7 +2034,8 @@ function VoxelCanvas:refreshFast()
     -- Fast waveforms are intentionally used for motion, but they accumulate
     -- ghosting on E-Ink. Every second step gets a clean UI waveform for the
     -- same local region; it is still not a fullscreen refresh.
-    local waveform = self._refresh_count % 2 == 0 and "ui" or "fast"
+    local live_preview = self.session and self.session.live_look
+    local waveform = live_preview and "fast" or (self._refresh_count % 2 == 0 and "ui" or "fast")
     UIManager:setDirty(nil, waveform, Geom:new{
         x = self._origin_x,
         y = self._origin_y,
@@ -2034,7 +2043,9 @@ function VoxelCanvas:refreshFast()
         h = self.height,
     })
     if UIManager.forceRePaint then UIManager:forceRePaint() end
-    if UIManager.yieldToEPDC then UIManager:yieldToEPDC() end
+    -- yieldToEPDC can stall successive finger samples on real E-Ink panels.
+    -- The preview already uses the fast waveform; yield only for settled frames.
+    if not live_preview and UIManager.yieldToEPDC then UIManager:yieldToEPDC() end
     return true
 end
 
@@ -2175,12 +2186,19 @@ function VoxelCanvas:_panLook(gesture, finish)
         if finish then self._look_pan_last = nil end
         return true
     end
+    self.session.live_look = true
     local previous = self._look_pan_last
     self._look_pan_last = { x = pos.x, y = pos.y }
     if previous and self.session:lookDelta((pos.x or 0) - (previous.x or 0), (pos.y or 0) - (previous.y or 0)) then
         self:refreshFast()
     end
-    if finish then self._look_pan_last = nil end
+    if finish then
+        self._look_pan_last = nil
+        self.session.live_look = false
+        -- One clean, full-quality frame after the finger is released removes
+        -- the preview grid without slowing any intermediate pan sample.
+        self:refreshFast()
+    end
     return true
 end
 
@@ -2834,7 +2852,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.1.2",
+    version = "4.1.3",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
