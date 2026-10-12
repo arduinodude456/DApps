@@ -202,10 +202,9 @@ local WALK_DISTANCE = 0.64
 local TURN_ANGLE = math.pi / 12
 local MOVE_FRAMES = 4
 local MOVE_FRAME_SECONDS = 0.045
--- Sheep and their local canvas are redrawn at about 11 FPS. scheduleIn uses
--- seconds, not milliseconds; using 420 here made the old sheep timer wait
--- seven minutes between updates, so they appeared completely static.
-local MOB_FRAME_SECONDS = 0.09
+-- scheduleIn uses seconds. Keep the held-movement poll below one animation
+-- step so a held D-pad direction starts the next step as soon as possible.
+local HELD_MOVE_SECONDS = 0.045
 -- Mobile Bedrock look sensitivity: a normal thumb drag should turn the view
 -- decisively, not require a full-screen swipe for a small camera movement.
 local LOOK_YAW_PER_PIXEL = 0.014
@@ -744,45 +743,11 @@ local rebuildWorldBlocks
 local placeVillage, placeHouse, findVillageSite
 local heightAt, materialAt, biomeAt
 
-local function generateSheep(world, seed)
-    local sheep, sites = {}, {}
-    for z = 4, world.size - 5, 3 do
-        for x = 4, world.size - 5, 3 do
-            local biome = world.biomes[z + 1][x + 1]
-            local surface = world.materials[z + 1][x + 1]
-            local suitable = (biome == "plains" or biome == "forest" or biome == "birch_forest" or biome == "meadow") and surface == "grass"
-            if suitable and hash2(seed + 1901, x, z) > 0.972 and #sheep < 10 then
-                local ground = world.heights[z + 1][x + 1]
-                local clear = true
-                for _, site in ipairs(sites) do
-                    if math.abs(site.x - x) < 5 and math.abs(site.z - z) < 5 then clear = false; break end
-                end
-                if clear then
-                    sites[#sites + 1] = { x = x, z = z }
-                    local wool_tone = biome == "birch_forest" and "white"
-                        or biome == "forest" and "warm_gray"
-                        or "cream"
-                    sheep[#sheep + 1] = {
-                        x = x + 0.5, z = z + 0.5, y = ground,
-                        kind = "sheep", wool = "white", wool_tone = wool_tone,
-                        phase = hash2(seed + 2901, x, z) * math.pi * 2,
-                        gait = hash2(seed + 2902, x, z),
-                        heading = hash2(seed + 2903, x, z) * math.pi * 2,
-                        wander_phase = hash2(seed + 2904, x, z) * math.pi * 2,
-                        grazing = hash2(seed + 2905, x, z) > 0.42,
-                    }
-                end
-            end
-        end
-    end
-    return sheep
-end
-
 local function buildWorld(seed)
     seed = normalizeSeed(seed)
     local world = {
         size = WORLD_SIZE, seed = seed, heights = {}, materials = {}, subsurfaces = {},
-        biomes = {}, extra_blocks = {}, removed_blocks = {}, mobs = {},
+        biomes = {}, extra_blocks = {}, removed_blocks = {},
     }
     for z = 0, WORLD_SIZE - 1 do
         world.heights[z + 1], world.materials[z + 1], world.biomes[z + 1], world.subsurfaces[z + 1] = {}, {}, {}, {}
@@ -852,7 +817,6 @@ local function buildWorld(seed)
         end
     end
     world.village = placeVillage(world, seed)
-    world.mobs = generateSheep(world, seed)
     if rebuildWorldBlocks then rebuildWorldBlocks(world) end
     return world
 end
@@ -1308,15 +1272,12 @@ function VoxelSession.new(seed)
         tap_action = "place",
         color_enabled = true,
         view_height = nil,
-        mob_clock = 0,
     }, VoxelSession)
     self:syncDerived()
     self.view_height = self:walkHeight(player_x, player_z)
     self._motionTick = function() self:tickMotion() end
     self._jumpTick = function() self:tickJump() end
     self._heldMoveTick = function() self:tickHeldMove() end
-    self._mobTick = function() self:tickMobs() end
-    UIManager:scheduleIn(MOB_FRAME_SECONDS, self._mobTick)
     return self
 end
 
@@ -1688,7 +1649,7 @@ function VoxelSession:tickHeldMove()
     local action = self.held_move_action
     if not action then return end
     if not self.motion then self:act(action) end
-    UIManager:scheduleIn(65, self._heldMoveTick)
+    UIManager:scheduleIn(HELD_MOVE_SECONDS, self._heldMoveTick)
 end
 
 function VoxelSession:startHeldMove(action)
@@ -1696,7 +1657,7 @@ function VoxelSession:startHeldMove(action)
     self.held_move_action = action
     if not self.motion then self:act(action) end
     UIManager:unschedule(self._heldMoveTick)
-    UIManager:scheduleIn(65, self._heldMoveTick)
+    UIManager:scheduleIn(HELD_MOVE_SECONDS, self._heldMoveTick)
     return true
 end
 
@@ -1727,41 +1688,6 @@ function VoxelSession:lookDelta(delta_x, delta_y)
     self.pitch = math.max(-1.35, math.min(1.35, self.pitch - delta_y * LOOK_PITCH_PER_PIXEL))
     self.last_event = _("Look around")
     return true
-end
-
-function VoxelSession:tickMobs()
-    self.mob_clock = (self.mob_clock or 0) + 1
-    local world = self.world
-    if world and world.mobs then
-        for index, mob in ipairs(world.mobs) do
-            local phase = (mob.wander_phase or index) + self.mob_clock * 0.075
-            local turn = math.sin(phase) * 0.055 + math.sin(phase * 0.37) * 0.025
-            mob.heading = wrapAngle((mob.heading or phase) + turn)
-            local speed = mob.grazing and 0.018 or (0.045 + (mob.gait or 0) * 0.035)
-            local nx = mob.x + math.sin(mob.heading) * speed
-            local nz = mob.z + math.cos(mob.heading) * speed
-            if nx > 2 and nz > 2 and nx < world.size - 2 and nz < world.size - 2 then
-                local ground = self:walkHeight(nx, nz)
-                local current_ground = self:walkHeight(mob.x, mob.z)
-                local column_material = materialAt(world, math.floor(nx), math.floor(nz))
-                local can_graze = column_material == "grass" or column_material == "snow"
-                if math.abs(ground - current_ground) <= 1 and can_graze then
-                    mob.x, mob.z, mob.y = nx, nz, ground
-                else
-                    mob.heading = wrapAngle(mob.heading + math.pi * (0.45 + (mob.gait or 0) * 0.25))
-                end
-            else
-                mob.heading = wrapAngle(mob.heading + math.pi * 0.65)
-            end
-            mob.walk_cycle = (mob.walk_cycle or 0) + speed * 32
-            mob.head_bob = math.sin((mob.walk_cycle or 0) * 0.65) * (mob.grazing and 0.035 or 0.018)
-            if self.mob_clock % 18 == 0 then
-                mob.grazing = not mob.grazing
-            end
-        end
-    end
-    if self.canvas then self.canvas:refreshFast() end
-    UIManager:scheduleIn(MOB_FRAME_SECONDS, self._mobTick)
 end
 
 function VoxelSession:beginMove(direction)
@@ -1954,122 +1880,6 @@ function VoxelCanvas:_fillProjectedFace(bb, points, ink)
         for index = 1, #intersections - 1, 2 do
             local left, right = math.floor(intersections[index]), math.ceil(intersections[index + 1])
             if right >= left then bb:paintRect(left, scan_y, right - left + 1, 1, ink) end
-        end
-    end
-end
-
-function VoxelCanvas:_sheepHasLineOfSight(session, mob)
-    local world = session.world
-    local ox, oz = session.player_x, session.player_z
-    local oy = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
-    local tx, tz, ty = mob.x, mob.z, mob.y + 0.62
-    local dx, dz, dy = tx - ox, tz - oz, ty - oy
-    local distance = math.sqrt(dx * dx + dz * dz + dy * dy)
-    if distance <= 0.1 then return true end
-    local steps = math.max(2, math.ceil(distance * 8))
-    -- Sample the ray before the final mob cell. A solid voxel between the
-    -- player and the sheep occludes it exactly like a Minecraft block would.
-    for index = 1, steps - 1 do
-        local t = index / steps
-        local cell_x = math.floor(ox + dx * t)
-        local cell_z = math.floor(oz + dz * t)
-        local cell_y = math.floor(oy + dy * t)
-        if blockAt(world, cell_x, cell_z, cell_y) then return false end
-    end
-    return true
-end
-
-local function sheepShades(mob)
-    -- Keep the palette readable on E-Ink while giving each habitat a slightly
-    -- different natural coat: birch groves stay bright, forests are warmer and
-    -- open plains use a soft cream tone.
-    if not colorRenderingEnabled() then
-        return {
-            top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_BLACK,
-            front = Blitbuffer.COLOR_WHITE,
-            face = { top = Blitbuffer.COLOR_BLACK, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_BLACK },
-        }
-    end
-    if mob.wool_tone == "warm_gray" then
-        return {
-            top = Blitbuffer.COLOR_LIGHT_GRAY, side = Blitbuffer.COLOR_DARK_GRAY,
-            front = Blitbuffer.COLOR_LIGHT_GRAY,
-            face = { top = Blitbuffer.COLOR_DARK_GRAY, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_DARK_GRAY },
-        }
-    elseif mob.wool_tone == "cream" then
-        return {
-            top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_LIGHT_GRAY,
-            front = Blitbuffer.COLOR_WHITE,
-            face = { top = Blitbuffer.COLOR_DARK_GRAY, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_DARK_GRAY },
-        }
-    end
-    return {
-        top = Blitbuffer.COLOR_WHITE, side = Blitbuffer.COLOR_LIGHT_GRAY,
-        front = Blitbuffer.COLOR_WHITE,
-        face = { top = Blitbuffer.COLOR_DARK_GRAY, side = Blitbuffer.COLOR_BLACK, front = Blitbuffer.COLOR_DARK_GRAY },
-    }
-end
-
-function VoxelCanvas:_drawSheepCuboid(bb, session, origin_x, origin_y, cx, cz, y0, y1, half_x, half_z, shades)
-    local function point(wx, wz, wy)
-        local px, py = self:projectPoint(wx, wz, wy, session, origin_x, origin_y)
-        return { px, py }
-    end
-    local sx = session.player_x >= cx and 1 or -1
-    local sz = session.player_z >= cz and 1 or -1
-    local top = { point(cx-half_x, cz-half_z, y1), point(cx+half_x, cz-half_z, y1), point(cx+half_x, cz+half_z, y1), point(cx-half_x, cz+half_z, y1) }
-    local xface = { point(cx+sx*half_x, cz-half_z, y0), point(cx+sx*half_x, cz+half_z, y0), point(cx+sx*half_x, cz+half_z, y1), point(cx+sx*half_x, cz-half_z, y1) }
-    local zface = { point(cx-half_x, cz+sz*half_z, y0), point(cx+half_x, cz+sz*half_z, y0), point(cx+half_x, cz+sz*half_z, y1), point(cx-half_x, cz+sz*half_z, y1) }
-    self:_fillProjectedFace(bb, top, shades.top)
-    self:_fillProjectedFace(bb, xface, shades.side)
-    self:_fillProjectedFace(bb, zface, shades.front)
-    for _, face in ipairs({ top, xface, zface }) do
-        for index = 1, #face do self:_stroke(bb, face[index], face[index % #face + 1], 1) end
-    end
-end
-
-function VoxelCanvas:_drawSheep(bb, x, y, session)
-    local world = session.world
-    if not world or not world.mobs then return end
-    local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
-    local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
-    local focal = (self.width / 2) / math.tan(math.rad(90) / 2)
-    for _, mob in ipairs(world.mobs) do
-        local dx, dz = mob.x - session.player_x, mob.z - session.player_z
-        local depth = dx * forward_x + dz * forward_z
-        local lateral = dx * right_x + dz * right_z
-        if depth > 0.7 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.35
-            and self:_sheepHasLineOfSight(session, mob) then
-            local projected_size = math.max(6, math.min(34, focal / depth * 0.58))
-            local scale = projected_size / math.max(8, focal / depth)
-            local body_x, body_z = mob.x, mob.z
-            local shades = sheepShades(mob)
-            -- Body, four legs and head are all world-space cuboids. The extra
-            -- silhouette pieces make the sheep read as an animal instead of a
-            -- floating box, even on a coarse E-Ink render grid.
-            self:_drawSheepCuboid(bb, session, x, y, body_x, body_z, mob.y + 0.05, mob.y + 0.78, 0.46, 0.32, shades)
-            local leg_offsets = { {-0.30,-0.20}, {0.30,-0.20}, {-0.30,0.20}, {0.30,0.20} }
-            for index, offset in ipairs(leg_offsets) do
-                local stride = math.sin((mob.walk_cycle or 0) + (index % 2) * math.pi) * 0.06
-                self:_drawSheepCuboid(bb, session, x, y, body_x + offset[1], body_z + offset[2], mob.y - 0.02, mob.y + 0.35 + stride, 0.08, 0.08, shades.face)
-            end
-            local to_x, to_z = session.player_x - body_x, session.player_z - body_z
-            local distance = math.max(0.01, math.sqrt(to_x * to_x + to_z * to_z))
-            local look_x, look_z = to_x / distance, to_z / distance
-            local head_x, head_z = body_x + look_x * 0.52, body_z + look_z * 0.52
-            local bob = mob.head_bob or 0
-            self:_drawSheepCuboid(bb, session, x, y, head_x, head_z, mob.y + 0.60 + bob, mob.y + 1.04 + bob, 0.22, 0.22, shades.face)
-            local side_x, side_z = -look_z, look_x
-            for _, side in ipairs({ -1, 1 }) do
-                self:_drawSheepCuboid(bb, session, x, y,
-                    head_x + side_x * side * 0.19, head_z + side_z * side * 0.19,
-                    mob.y + 0.89 + bob, mob.y + 1.12 + bob, 0.055, 0.055, shades.face)
-            end
-            -- A small tail opposite the head completes the silhouette and
-            -- gives the sheep a clear facing direction while it wanders.
-            self:_drawSheepCuboid(bb, session, x, y,
-                body_x - look_x * 0.45, body_z - look_z * 0.45,
-                mob.y + 0.48, mob.y + 0.72, 0.10, 0.10, shades)
         end
     end
 end
@@ -2367,7 +2177,6 @@ function VoxelCanvas:_drawScene(bb, x, y)
         end
         previous_hit_keys = current_hit_keys
     end
-    self:_drawSheep(bb, x, y, session)
     local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
     bb:paintRect(center_x - 5, center_y, 11, 1, Blitbuffer.COLOR_BLACK)
     bb:paintRect(center_x, center_y - 5, 1, 11, Blitbuffer.COLOR_BLACK)
@@ -3533,7 +3342,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.4.0",
+    version = "4.4.1",
     title = "Minecraft 3D",
     subtitle = "Biomes, Villages, Inventory & Crafting",
     symbol = "M",
@@ -3592,7 +3401,6 @@ return {
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
         function pane:onDeactivate()
             state.session:stopHeldMove()
-            UIManager:unschedule(state.session._mobTick)
             if state.session.motion then
                 state.session.motion = nil
                 UIManager:unschedule(state.session._motionTick)
@@ -3716,7 +3524,7 @@ return {
         TURN_ANGLE = TURN_ANGLE,
         MOVE_FRAMES = MOVE_FRAMES,
         MOVE_FRAME_SECONDS = MOVE_FRAME_SECONDS,
-        MOB_FRAME_SECONDS = MOB_FRAME_SECONDS,
+        HELD_MOVE_SECONDS = HELD_MOVE_SECONDS,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,
         STACK_LIMIT = STACK_LIMIT,

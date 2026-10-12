@@ -101,7 +101,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.4.0", "Minecraft 3D must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.4.1", "Minecraft 3D must publish the splash, world list and creation menus")
 local embedded_logo = test.ensureEmbeddedLogo()
 local embedded_file = assert(io.open(embedded_logo, "rb"), "The installed DApp must materialize its embedded logo")
 assert(embedded_file:read(8) == "\137PNG\13\10\26\10", "The embedded logo must be a valid PNG")
@@ -144,10 +144,16 @@ World generation: biomes, trees, structures, ore layers
 local session = test.VoxelSession.new(12345)
 local world = session.world
 assert(world.seed == 12345 and world.size == test.WORLD_SIZE, "The default world must use seed 12345")
-assert(test.MOB_FRAME_SECONDS >= 1 / 12 and test.MOB_FRAME_SECONDS <= 1 / 10,
-    "Mob redraws must run at approximately 10-12 FPS")
-assert(scheduled[1] and scheduled[1].delay == test.MOB_FRAME_SECONDS,
-    "The sheep timer must schedule its first redraw at the target FPS")
+assert(test.HELD_MOVE_SECONDS > 0 and test.HELD_MOVE_SECONDS <= 0.1,
+    "Held D-pad movement must poll several times per second")
+local held_act_calls = 0
+local old_session_act = session.act
+session.held_move_action, session.motion = "forward", nil
+session.act = function(_, action) held_act_calls = held_act_calls + 1; assert(action == "forward") end
+session:tickHeldMove()
+assert(held_act_calls == 1 and scheduled[#scheduled].delay == test.HELD_MOVE_SECONDS,
+    "Held D-pad movement must schedule its next repeat in a fraction of a second")
+session.act, session.held_move_action = old_session_act, nil
 local biome_names, biome_count = {}, 0
 for z = 0, world.size - 1 do
     for x = 0, world.size - 1 do
@@ -164,18 +170,6 @@ for z = 0, world.size - 1 do
     end
 end
 assert(biome_count >= 5, "A seed must produce several biomes, got " .. biome_count)
-assert(type(world.mobs) == "table" and #world.mobs > 0, "World generation must add visible sheep mobs")
-for _, mob in ipairs(world.mobs) do
-    assert(mob.kind == "sheep" and mob.wool == "white" and mob.y >= 1, "Sheep mobs need a kind, wool colour and ground position")
-    assert(mob.wool_tone and mob.heading and mob.grazing ~= nil, "Sheep need habitat-aware coats and wander state")
-end
-if #world.mobs > 0 then
-    local sheep = world.mobs[1]
-    local old_x, old_z = sheep.x, sheep.z
-    session:tickMobs()
-    assert(sheep.walk_cycle and sheep.head_bob, "Sheep must animate their gait and head")
-    assert(sheep.x ~= old_x or sheep.z ~= old_z or sheep.heading ~= nil, "Sheep must wander through the terrain")
-end
 local tree_blocks, plank_blocks, glass_blocks, wheat_blocks, cactus_blocks = 0, 0, 0, 0, 0
 for _, material in pairs(world.extra_blocks) do
     if material == "wood" or material == "wood_birch" or material == "wood_spruce"
@@ -679,4 +673,4 @@ local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = fun
 assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
 assert(findButton(compact[1], "Inventory") and findButton(compact[1], "Color"), "The compact pane must keep its controls")
 
-print("minecraft-4.4.0-ok")
+print("minecraft-4.4.1-ok")
