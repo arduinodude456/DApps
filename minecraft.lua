@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.1.0 adds Bedrock-style touch controls, live finger-look camera movement and YouTube-style Bayer color dithering.
+Version 4.1.1 adds screen-space voxel contours so raised blocks remain visually separated from the terrain.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -1834,15 +1834,21 @@ function VoxelCanvas:_drawScene(bb, x, y)
             end
         end
     end
+    -- Keep the hit voxel from the previous screen sample in both directions.
+    -- A change here is a real voxel boundary, not just a color change caused
+    -- by Bayer dithering; it lets a raised grass block separate from the grass
+    -- field behind it.
+    local previous_hit_keys = {}
     for ry = 0, rows - 1 do
-            local bayer_row = BAYER8[(ry % 8) + 1]
+        local bayer_row = BAYER8[(ry % 8) + 1]
         local row_ink, row_start
+        local current_hit_keys = {}
+        local last_hit_key
         for rx = 0, cols - 1 do
-                local bayer_col = rx % 8
-                -- BAYER8 is 0..63 like AppDock YouTube; coverage in the
-                -- material cache is 0..16, so normalize without division in
-                -- the hot comparison path.
-                local dither_threshold = floor(bayer_row[bayer_col + 1] / 4)
+            local bayer_col = rx % 8
+            -- BAYER8 is 0..63 like AppDock YouTube; coverage in the material
+            -- cache is 0..16, so normalize before the hot comparison.
+            local dither_threshold = floor(bayer_row[bayer_col + 1] / 4)
             local index = ry * cols + rx + 1
             local dir_x, dir_z, dir_y = ray_x[index], ray_z[index], ray_y[index]
             local signed_delta_x, signed_delta_z, signed_delta_y = ray_dx[index], ray_dz[index], ray_dy[index]
@@ -1855,14 +1861,14 @@ function VoxelCanvas:_drawScene(bb, x, y)
             local next_x = step_x < 0 and fraction_x * delta_x or (1 - fraction_x) * delta_x
             local next_z = step_z < 0 and fraction_z * delta_z or (1 - fraction_z) * delta_z
             local next_y = step_y < 0 and fraction_y * delta_y or (1 - fraction_y) * delta_y
-            local dist, side, bx, bz, hit_dist, hit_side, hit_material = 0, 0
+            local dist, side, bx, bz, by, hit_dist, hit_side, hit_material = 0, 0
             for ray_step = 1, 24 do
                 local material
                 if cell_y >= 0 and cell_y < MAX_COLUMN_HEIGHT then
                     material = voxel_flat[voxel_index]
                 end
                 if material then
-                    bx, bz, hit_dist, hit_side, hit_material = cell_x, cell_z, dist, side, material
+                    bx, bz, by, hit_dist, hit_side, hit_material = cell_x, cell_z, cell_y, dist, side, material
                     break
                 end
                 if next_x < next_z and next_x < next_y then
@@ -1878,7 +1884,16 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 if dist > MAX_VIEW_DISTANCE then break end
             end
             local ink
+            local edge = false
             if bx then
+                -- Adjacent blocks on one continuous grass plane should blend;
+                -- a height or material change should not. Ignoring x/z here
+                -- avoids a heavy black checkerboard over every meadow tile
+                -- while retaining the contour around a raised block.
+                local hit_key = by .. ":" .. hit_material
+                edge = last_hit_key ~= hit_key or previous_hit_keys[rx] ~= hit_key
+                last_hit_key = hit_key
+                current_hit_keys[rx] = hit_key
                 local hx = player_x + dir_x * hit_dist
                 local hy = camera_y + dir_y * hit_dist
                 local hz = player_z + dir_z * hit_dist
@@ -1939,6 +1954,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
                     ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
                 end
             elseif color_mode then
+                edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
+                current_hit_keys[rx] = nil
+                last_hit_key = nil
                 -- Give the empty part of the view a blue gradient, a pale
                 -- horizon and a few stable square clouds instead of a blank
                 -- white canvas. This is the strongest visual cue for the
@@ -1959,9 +1977,20 @@ function VoxelCanvas:_drawScene(bb, x, y)
             elseif dir_y < 0 then
                 -- Distant terrain as a mid-gray dither: on monochrome panels the
                 -- sky stays light while the far ground stays visibly darker.
+                edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
+                current_hit_keys[rx] = nil
+                last_hit_key = nil
                 ink = dither_threshold < 6 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
             else
+                edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
+                current_hit_keys[rx] = nil
+                last_hit_key = nil
                 ink = Blitbuffer.COLOR_WHITE
+            end
+            if edge then
+                -- One dark sample cell is enough to separate adjacent voxel
+                -- faces without turning the whole scene into a heavy outline.
+                ink = color_mode and "black" or Blitbuffer.COLOR_BLACK
             end
             if rx == 0 then
                 row_ink, row_start = ink, rx
@@ -1973,6 +2002,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         if row_ink then
             paintSpan(row_start, cols, ry, row_ink)
         end
+        previous_hit_keys = current_hit_keys
     end
     local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
     bb:paintRect(center_x - 5, center_y, 11, 1, Blitbuffer.COLOR_BLACK)
@@ -2770,7 +2800,7 @@ end
 
 return {
     id = "minecraft",
-    version = "4.1.0",
+    version = "4.1.1",
     title = "Minecraft 3D",
     subtitle = "Biome, Dörfer, Inventar & Crafting",
     symbol = "M",
