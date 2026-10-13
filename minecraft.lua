@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.3.3 embeds the E-Ink splash logo so single-file AppStore installs include it.
+Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -219,6 +219,13 @@ local INVENTORY_SLOTS = 36
 local STACK_LIMIT = 64
 local CRAFT_ROWS_PER_PAGE = 4
 local CRAFT_PAGES_MAX = 4
+-- Time advances with player actions rather than an always-running redraw timer:
+-- this keeps the day/night cycle responsive without wasting E-Ink refreshes.
+local DAY_LENGTH_TICKS = 144
+local DAY_TICK_PER_ACTION = 1
+local MAX_MOBS = 18
+local MOBS_PER_KIND = 4
+local TORCH_LIGHT_RADIUS = 8
 
 -- A Minecraft-like sky is painted only on color displays. The monochrome path
 -- keeps its crisp black/white behavior for fast E-Ink refreshes.
@@ -231,17 +238,78 @@ local scene_rgb_colors = {}
 local function sceneColor(name)
     local color = scene_rgb_colors[name]
     if not color then
-        local rgb = SCENE_COLORS[name]
+        local rgb = SCENE_COLORS[name] or SCENE_COLORS.sky_top
         color = Blitbuffer.colorFromString(string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3]))
         scene_rgb_colors[name] = color
     end
     return color
 end
 
+-- Dynamic sky colors are named by their RGB value. This avoids comparing
+-- Blitbuffer cdata values in the hot span merger while still caching colors.
+local function dynamicSceneColor(prefix, red, green, blue)
+    red = math.max(0, math.min(255, math.floor(red + 0.5)))
+    green = math.max(0, math.min(255, math.floor(green + 0.5)))
+    blue = math.max(0, math.min(255, math.floor(blue + 0.5)))
+    local name = prefix .. "_" .. red .. "_" .. green .. "_" .. blue
+    if not SCENE_COLORS[name] then SCENE_COLORS[name] = { red, green, blue } end
+    return name
+end
+
+local function blendRGB(first, second, amount)
+    return {
+        first[1] + (second[1] - first[1]) * amount,
+        first[2] + (second[2] - first[2]) * amount,
+        first[3] + (second[3] - first[3]) * amount,
+    }
+end
+
+local function scenePaletteForTime(time_of_day)
+    local elevation = math.sin((time_of_day - 0.25) * TAU)
+    local daylight = math.max(0, math.min(1, (elevation + 0.10) / 0.52))
+    local dawn = math.max(0, math.min(1, 1 - math.abs(time_of_day - 0.27) / 0.14))
+    local dusk = math.max(0, math.min(1, 1 - math.abs(time_of_day - 0.73) / 0.14))
+    local warm = math.max(dawn, dusk)
+    local night_top, night_mid, night_horizon = { 8, 18, 43 }, { 18, 39, 79 }, { 56, 75, 108 }
+    local day_top, day_mid, day_horizon = SCENE_COLORS.sky_top, SCENE_COLORS.sky_mid, SCENE_COLORS.sky_horizon
+    local top, mid, horizon = blendRGB(night_top, day_top, daylight), blendRGB(night_mid, day_mid, daylight), blendRGB(night_horizon, day_horizon, daylight)
+    if warm > 0 then
+        top = blendRGB(top, { 93, 56, 84 }, warm * 0.45)
+        mid = blendRGB(mid, { 222, 133, 91 }, warm * 0.38)
+        horizon = blendRGB(horizon, { 244, 181, 118 }, warm * 0.45)
+    end
+    local ground = blendRGB({ 20, 29, 32 }, SCENE_COLORS.distant_ground, daylight)
+    local ground_dark = blendRGB({ 8, 14, 18 }, SCENE_COLORS.distant_ground_dark, daylight)
+    return {
+        daylight = daylight,
+        top = dynamicSceneColor("sky_top", top[1], top[2], top[3]),
+        mid = dynamicSceneColor("sky_mid", mid[1], mid[2], mid[3]),
+        horizon = dynamicSceneColor("sky_horizon", horizon[1], horizon[2], horizon[3]),
+        ground = dynamicSceneColor("ground", ground[1], ground[2], ground[3]),
+        ground_dark = dynamicSceneColor("ground_dark", ground_dark[1], ground_dark[2], ground_dark[3]),
+    }
+end
+
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
 local function trim(value) return type(value) == "string" and value:gsub("^%s+", ""):gsub("%s+$", "") or "" end
 local function wrapAngle(value) return value % TAU end
+
+local function daylightForTime(time_of_day)
+    -- 0.25 is sunrise, 0.50 noon, 0.75 sunset; the short shoulder keeps dawn
+    -- and dusk readable on E-Ink instead of flipping between black and white.
+    local elevation = math.sin((time_of_day - 0.25) * TAU)
+    return clamp((elevation + 0.10) / 0.52, 0, 1), elevation
+end
+
+local function timeLabelFor(time_of_day)
+    local daylight = daylightForTime(time_of_day)
+    if daylight < 0.08 then return _("Night") end
+    if time_of_day < 0.34 then return _("Sunrise") end
+    if time_of_day > 0.66 then return _("Sunset") end
+    return _("Day")
+end
+
 local function normalizeSeed(seed)
     seed = tonumber(seed)
     if not seed or seed ~= seed or seed == math.huge or seed == -math.huge then return 12345 end
@@ -321,6 +389,7 @@ local MATERIALS = {
     cactus = { label = _("Cactus"), color = "green", rgb = { 74, 140, 62 }, pattern = "cactus" },
     dead_bush = { label = _("Dead Bush"), color = "yellow", rgb = { 148, 109, 58 }, pattern = "dead_bush" },
     wheat = { label = _("Wheat"), color = "yellow", rgb = { 208, 190, 90 }, pattern = "wheat" },
+    torch = { label = _("Torch"), color = "yellow", rgb = { 255, 185, 48 }, pattern = "torch", emissive = true },
 }
 
 -- Display and crafting order: natural blocks, ores, wood, foliage, crafted blocks.
@@ -330,7 +399,7 @@ local MATERIAL_ORDER = {
     "coal", "iron", "gold", "diamond", "redstone",
     "wood", "wood_birch", "wood_spruce", "wood_jungle", "wood_acacia",
     "leaves", "leaves_birch", "leaves_spruce", "leaves_jungle", "leaves_acacia",
-    "planks", "glass", "crafting_table", "furnace", "cactus", "dead_bush", "wheat",
+    "planks", "glass", "crafting_table", "furnace", "cactus", "dead_bush", "wheat", "torch",
 }
 
 local MATERIAL_COLORS, MATERIAL_TARGET_RGB, MATERIAL_LABELS, MATERIAL_PATTERNS, DROPS = {}, {}, {}, {}, {}
@@ -411,6 +480,7 @@ local MATERIAL_MIX = {
     wood_jungle = { "red", "green" }, wood_acacia = { "red", "green" },
     planks = { "red", "green" }, bricks = { "red", "green" },
     crafting_table = { "red", "green" }, dead_bush = { "black", "yellow" },
+    torch = { "red", "yellow" },
 }
 local function paletteMixForMaterial(material, level)
     local shades = material_mix_cache[material]
@@ -512,6 +582,7 @@ local PATTERNS = {
     cactus = "11221122" .. "11121112" .. "11221122" .. "11121112" .. "11221122" .. "11121112" .. "11221122" .. "11121112",
     dead_bush = "10001100" .. "01000100" .. "00100100" .. "01010101" .. "00101010" .. "01000100" .. "00100010" .. "01000100",
     wheat = "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131",
+    torch = "00010000" .. "00130000" .. "00010000" .. "00010000" .. "00010000" .. "00010000" .. "00010000" .. "00010000",
 }
 
 local PATTERN_VALUES = {}
@@ -534,6 +605,7 @@ local RECIPES = {
     { result = { "planks", 4 }, ingredients = { { "wood_spruce", 1 } } },
     { result = { "planks", 4 }, ingredients = { { "wood_jungle", 1 } } },
     { result = { "planks", 4 }, ingredients = { { "wood_acacia", 1 } } },
+    { result = { "torch", 4 }, ingredients = { { "wood", 1 }, { "coal", 1 } } },
     { result = { "crafting_table", 1 }, ingredients = { { "planks", 4 } } },
     { result = { "furnace", 1 }, ingredients = { { "cobblestone", 8 } } },
     { result = { "stone", 1 }, ingredients = { { "cobblestone", 1 }, { "coal", 1 } } },
@@ -740,9 +812,61 @@ local function surfaceFor(seed, x, z, biome, height)
     return surface, subsurface
 end
 
-local rebuildWorldBlocks
+local rebuildWorldBlocks, rebuildLightSources
 local placeVillage, placeHouse, findVillageSite
 local heightAt, materialAt, biomeAt
+
+-- Mobs are deliberately entities rather than blocks. The world renderer keeps
+-- block occlusion while these simple voxel animals can walk between columns.
+local MOB_DEFS = {
+    sheep = { label = _("Sheep"), biomes = { plains = true, forest = true, birch_forest = true, snowy_plains = true }, chance = 0.982, speed = 0.050, body = "white", face = "black" },
+    cow = { label = _("Cow"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.988, speed = 0.044, body = "red", face = "black" },
+    pig = { label = _("Pig"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.991, speed = 0.052, body = "magenta", face = "red" },
+    zombie = { label = _("Zombie"), biomes = { plains = true, forest = true, birch_forest = true, taiga = true }, chance = 0.992, speed = 0.061, body = "green", face = "cyan", nocturnal = true },
+}
+
+local function mobCellIsClear(world, x, z)
+    if x < 2 or z < 2 or x >= world.size - 2 or z >= world.size - 2 then return false end
+    local surface = world.materials[z + 1] and world.materials[z + 1][x + 1]
+    if surface == "water" or surface == "ice" or surface == "lava" then return false end
+    local ground = world.heights[z + 1][x + 1]
+    return not world.extra_blocks[extraBlockKey(x, z, ground)]
+        and not world.extra_blocks[extraBlockKey(x, z, ground + 1)]
+end
+
+local function generateMobs(world, seed)
+    local mobs, sites = {}, {}
+    local ordered_kinds = { "sheep", "cow", "pig", "zombie" }
+    for kind_index, kind in ipairs(ordered_kinds) do
+        local definition, spawned = MOB_DEFS[kind], 0
+        for z = 4, world.size - 5, 3 do
+            for x = 4, world.size - 5, 3 do
+                if #mobs >= MAX_MOBS then return mobs end
+                if spawned >= MOBS_PER_KIND then break end
+                local biome = world.biomes[z + 1][x + 1]
+                local chance = hash2(seed + kind_index * 997, x, z)
+                if definition.biomes[biome] and chance > definition.chance and mobCellIsClear(world, x, z) then
+                    local clear = true
+                    for _, site in ipairs(sites) do
+                        if (site.x - x) ^ 2 + (site.z - z) ^ 2 < 36 then clear = false; break end
+                    end
+                    if clear then
+                        sites[#sites + 1] = { x = x, z = z }
+                        mobs[#mobs + 1] = {
+                            kind = kind, x = x + 0.5, z = z + 0.5,
+                            y = world.heights[z + 1][x + 1], heading = hash2(seed + kind_index * 211, x, z) * TAU,
+                            phase = hash2(seed + kind_index * 313, x, z) * TAU,
+                            gait = hash2(seed + kind_index * 419, x, z), walk_cycle = 0,
+                            nocturnal = definition.nocturnal == true,
+                        }
+                        spawned = spawned + 1
+                    end
+                end
+            end
+        end
+    end
+    return mobs
+end
 
 local function buildWorld(seed)
     seed = normalizeSeed(seed)
@@ -818,6 +942,7 @@ local function buildWorld(seed)
         end
     end
     world.village = placeVillage(world, seed)
+    world.mobs = generateMobs(world, seed)
     if rebuildWorldBlocks then rebuildWorldBlocks(world) end
     return world
 end
@@ -843,6 +968,9 @@ placeVillage = function(world, seed)
             world.heights[pz + 1][px + 1] = ground
             world.materials[pz + 1][px + 1] = "cobblestone"
             for level = ground, ground + 2 do putExtraBlock(world, px, pz, level, "wood") end
+            -- Four small lamps make a village visible after sunset and establish
+            -- that a torch is a real light-emitting voxel, not only an inventory item.
+            putExtraBlock(world, px, pz, ground + 3, "torch")
         end
     end
     putBox(world, cx - 3, cz - 3, ground + 3, cx + 3, cz + 3, ground + 3, "planks")
@@ -1173,6 +1301,18 @@ local function rawBlockAt(world, x, z, level)
     return "stone"
 end
 
+rebuildLightSources = function(world)
+    local sources = {}
+    for key, material in pairs(world.extra_blocks or {}) do
+        if MATERIALS[material] and MATERIALS[material].emissive then
+            local x, z, level = key:match("^(%-?%d+):(%-?%d+):(%-?%d+)$")
+            x, z, level = tonumber(x), tonumber(z), tonumber(level)
+            if x and z and level then sources[#sources + 1] = { x = x + 0.5, z = z + 0.5, y = level + 0.58, strength = 1 } end
+        end
+    end
+    world.light_sources = sources
+end
+
 rebuildWorldBlocks = function(world)
     local planes, size = {}, world.size
     local flat_stride = size + VOXEL_PADDING * 2
@@ -1196,6 +1336,7 @@ rebuildWorldBlocks = function(world)
     world.block_flat = flat_blocks
     world.block_flat_stride = flat_stride
     world.block_flat_padding = VOXEL_PADDING
+    rebuildLightSources(world)
 end
 
 local function rebuildBlockColumn(world, x, z)
@@ -1211,6 +1352,7 @@ local function rebuildBlockColumn(world, x, z)
         planes[level + 1][index] = material
         if flat_blocks then flat_blocks[level * plane_size + flat_column_index] = material or false end
     end
+    rebuildLightSources(world)
 end
 
 local function blockAt(world, x, z, level)
@@ -1234,10 +1376,10 @@ end
 -- Starting kit: the hotbar and the first storage slots hold the most useful
 -- building blocks, so a fresh world can be explored and reshaped immediately.
 local STARTING_KIT = {
-    "grass", "dirt", "stone", "wood", "planks", "cobblestone", "sand", "glass", "bricks",
-    "leaves", "snow", "ice", "sandstone", "clay", "gravel", "obsidian", "coal", "iron",
+    "grass", "dirt", "stone", "wood", "planks", "cobblestone", "sand", "glass", "torch",
+    "bricks", "leaves", "snow", "ice", "sandstone", "clay", "gravel", "obsidian", "coal", "iron",
 }
-local STARTING_COUNTS = { 64, 64, 64, 64, 64, 64, 64, 32, 32, 32, 32, 16, 32, 32, 32, 16, 32, 16 }
+local STARTING_COUNTS = { 64, 64, 64, 64, 64, 64, 64, 32, 16, 32, 32, 32, 16, 32, 32, 32, 16, 32, 16 }
 
 local function startingSlots()
     local slots = {}
@@ -1273,6 +1415,11 @@ function VoxelSession.new(seed)
         tap_action = "place",
         color_enabled = true,
         view_height = nil,
+        -- A complete day lasts 144 meaningful player actions. This gives the
+        -- player visible time progression without a wasteful background redraw.
+        world_time = 0.31,
+        world_ticks = 0,
+        mob_clock = 0,
     }, VoxelSession)
     self:syncDerived()
     self.view_height = self:walkHeight(player_x, player_z)
@@ -1280,6 +1427,68 @@ function VoxelSession.new(seed)
     self._jumpTick = function() self:tickJump() end
     self._heldMoveTick = function() self:tickHeldMove() end
     return self
+end
+
+function VoxelSession:timeOfDay()
+    return (self.world_time or 0.31) % 1
+end
+
+function VoxelSession:daylight()
+    return daylightForTime(self:timeOfDay())
+end
+
+function VoxelSession:timeLabel()
+    return timeLabelFor(self:timeOfDay())
+end
+
+function VoxelSession:sunDirection()
+    local time_of_day = self:timeOfDay()
+    local _, elevation = daylightForTime(time_of_day)
+    local azimuth = (time_of_day - 0.25) * TAU
+    local horizontal = math.sqrt(math.max(0.001, 1 - elevation * elevation))
+    return math.cos(azimuth) * horizontal, math.sin(azimuth) * horizontal, elevation
+end
+
+function VoxelSession:mobGroundAt(x, z)
+    local cell_x, cell_z = math.floor(x), math.floor(z)
+    local world = self.world
+    if not mobCellIsClear(world, cell_x, cell_z) then return nil end
+    return world.heights[cell_z + 1][cell_x + 1]
+end
+
+function VoxelSession:tickMobs()
+    local world = self.world
+    if not world or not world.mobs then return end
+    self.mob_clock = (self.mob_clock or 0) + 1
+    local daylight = self:daylight()
+    for index, mob in ipairs(world.mobs) do
+        local definition = MOB_DEFS[mob.kind]
+        if definition then
+            local active = not mob.nocturnal or daylight < 0.23
+            if active then
+                local phase = (mob.phase or index) + self.mob_clock * (0.13 + (mob.gait or 0) * 0.05)
+                mob.heading = wrapAngle((mob.heading or phase) + math.sin(phase) * 0.10 + math.sin(phase * 0.41) * 0.035)
+                local speed = definition.speed * (0.72 + (mob.gait or 0) * 0.55)
+                local nx, nz = mob.x + math.sin(mob.heading) * speed, mob.z + math.cos(mob.heading) * speed
+                local next_ground = self:mobGroundAt(nx, nz)
+                if next_ground and math.abs(next_ground - (mob.y or next_ground)) <= 1 then
+                    mob.x, mob.z, mob.y = nx, nz, next_ground
+                else
+                    mob.heading = wrapAngle(mob.heading + math.pi * (0.55 + (mob.gait or 0) * 0.25))
+                end
+                mob.walk_cycle = (mob.walk_cycle or 0) + speed * 26
+            end
+            mob.head_bob = math.sin((mob.walk_cycle or 0) * 0.72) * (active and 0.035 or 0.012)
+        end
+    end
+end
+
+function VoxelSession:advanceEnvironment(amount)
+    amount = tonumber(amount) or DAY_TICK_PER_ACTION
+    if amount <= 0 then return end
+    self.world_ticks = (self.world_ticks or 0) + amount
+    self.world_time = ((self.world_time or 0.31) + amount / DAY_LENGTH_TICKS) % 1
+    self:tickMobs()
 end
 
 -- Inventory -------------------------------------------------------------------
@@ -1536,6 +1745,7 @@ function VoxelSession:newWorld(seed)
     self.pitch = 0
     self.motion, self.jump_frame, self.jump_offset = nil, nil, 0
     self.steps = 0
+    self.world_time, self.world_ticks, self.mob_clock = 0.31, 0, 0
     self.view_height = self:walkHeight(self.player_x, self.player_z)
     self.last_event = _("New world created. Seed: ") .. tostring(self.seed)
     return true
@@ -1573,6 +1783,7 @@ function VoxelSession:mineBlock(target)
     local leftover = self:addItem(drop, 1)
     self.last_event = leftover > 0 and _("The inventory is full.") or (_("Mined: ") .. materialLabel(drop))
     self.view_height = self:walkHeight(self.player_x, self.player_z)
+    self:advanceEnvironment(0.55)
     return true
 end
 
@@ -1622,6 +1833,7 @@ function VoxelSession:placeBlock(target)
     end
     self:syncDerived()
     self.last_event = _("Placed: ") .. materialLabel(material)
+    self:advanceEnvironment(0.55)
     return true
 end
 
@@ -1629,6 +1841,7 @@ function VoxelSession:jump()
     if self.jump_frame then return false end
     self.jump_frame = 0
     self.last_event = _("Jump!")
+    self:advanceEnvironment(0.25)
     UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._jumpTick)
     return true
 end
@@ -1650,8 +1863,10 @@ local function performHeldStep(session, action)
     local changed
     -- Finish each held forward/back step synchronously. This avoids a second
     -- repeat callback arriving while the animated motion is still in flight.
-    if action == "forward" or action == "back" then
-        changed = session:move(action)
+    if action == "forward" then
+        changed = session:move(1)
+    elseif action == "back" then
+        changed = session:move(-1)
     else
         changed = session:act(action)
     end
@@ -1697,6 +1912,7 @@ end
 
 function VoxelSession:turn(direction)
     self.yaw = wrapAngle(self.yaw + direction * TURN_ANGLE)
+    self:advanceEnvironment(0.20)
     self.last_event = direction < 0 and _("Turned left.") or _("Turned right.")
     return true
 end
@@ -1744,6 +1960,7 @@ function VoxelSession:beginMove(direction)
         frame = 0,
     }
     self.steps = self.steps + 1
+    self:advanceEnvironment(DAY_TICK_PER_ACTION)
     self.last_event = direction > 0 and _("Forward.") or _("Backward.")
     -- Bedrock's default auto-jump climbs a two-block wall without a jump button.
     if step >= 2 then self:jump() end
@@ -1891,7 +2108,7 @@ function VoxelCanvas:_stroke(bb, first, second, thickness)
     end
 end
 
-function VoxelCanvas:_fillProjectedFace(bb, points, ink)
+function VoxelCanvas:_fillProjectedFace(bb, points, ink, color_mode)
     local min_y, max_y = points[1][2], points[1][2]
     for _, point in ipairs(points) do
         min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
@@ -1908,9 +2125,146 @@ function VoxelCanvas:_fillProjectedFace(bb, points, ink)
         table.sort(intersections)
         for index = 1, #intersections - 1, 2 do
             local left, right = math.floor(intersections[index]), math.ceil(intersections[index + 1])
-            if right >= left then bb:paintRect(left, scan_y, right - left + 1, 1, ink) end
+            if right >= left then
+                if color_mode and bb.paintRectRGB32 then
+                    bb:paintRectRGB32(left, scan_y, right - left + 1, 1, ink)
+                else
+                    bb:paintRect(left, scan_y, right - left + 1, 1, ink)
+                end
+            end
         end
     end
+end
+
+local function mobInk(name, color_mode, brightness)
+    if color_mode then return paletteColor(name) end
+    return brightness == "top" and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
+end
+
+local function mobShades(mob, color_mode, daylight)
+    local definition = MOB_DEFS[mob.kind] or MOB_DEFS.sheep
+    local body = definition.body or "white"
+    local face = definition.face or "black"
+    -- At night zombies retain a faint green silhouette; passive mobs remain
+    -- visible only where the scene or nearby torch provides contrast.
+    if daylight < 0.22 and mob.nocturnal then body = "green" end
+    return {
+        top = mobInk(body, color_mode, "top"),
+        side = mobInk(body, color_mode, "side"),
+        front = mobInk(body, color_mode, "front"),
+        face = mobInk(face, color_mode, "side"),
+    }
+end
+
+function VoxelCanvas:_mobHasLineOfSight(session, mob)
+    local world = session.world
+    local ox, oz = session.player_x, session.player_z
+    local oy = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
+    local tx, tz, ty = mob.x, mob.z, mob.y + 0.72
+    local dx, dz, dy = tx - ox, tz - oz, ty - oy
+    local distance = math.sqrt(dx * dx + dz * dz + dy * dy)
+    if distance <= 0.1 then return true end
+    local steps = math.max(2, math.ceil(distance * 7))
+    -- Sample before the entity cell so a solid world voxel always hides a mob.
+    for index = 1, steps - 1 do
+        local fraction = index / steps
+        if blockAt(world, math.floor(ox + dx * fraction), math.floor(oz + dz * fraction), math.floor(oy + dy * fraction)) then return false end
+    end
+    return true
+end
+
+function VoxelCanvas:_drawMobCuboid(bb, session, origin_x, origin_y, center_x, center_z, bottom, top, half_x, half_z, shades, color_mode)
+    local function point(wx, wz, wy)
+        local px, py = self:projectPoint(wx, wz, wy, session, origin_x, origin_y)
+        return { px, py }
+    end
+    local camera_x = session.player_x >= center_x and 1 or -1
+    local camera_z = session.player_z >= center_z and 1 or -1
+    local top_face = { point(center_x-half_x, center_z-half_z, top), point(center_x+half_x, center_z-half_z, top), point(center_x+half_x, center_z+half_z, top), point(center_x-half_x, center_z+half_z, top) }
+    local x_face = { point(center_x+camera_x*half_x, center_z-half_z, bottom), point(center_x+camera_x*half_x, center_z+half_z, bottom), point(center_x+camera_x*half_x, center_z+half_z, top), point(center_x+camera_x*half_x, center_z-half_z, top) }
+    local z_face = { point(center_x-half_x, center_z+camera_z*half_z, bottom), point(center_x+half_x, center_z+camera_z*half_z, bottom), point(center_x+half_x, center_z+camera_z*half_z, top), point(center_x-half_x, center_z+camera_z*half_z, top) }
+    self:_fillProjectedFace(bb, top_face, shades.top, color_mode)
+    self:_fillProjectedFace(bb, x_face, shades.side, color_mode)
+    self:_fillProjectedFace(bb, z_face, shades.front, color_mode)
+    for _, face in ipairs({ top_face, x_face, z_face }) do
+        for index = 1, #face do self:_stroke(bb, face[index], face[index % #face + 1], 1) end
+    end
+end
+
+function VoxelCanvas:_drawMobShadow(bb, x, y, session, mob, color_mode)
+    local sun_x, sun_z, sun_y = session:sunDirection()
+    if sun_y <= 0.06 then return end
+    local stretch = math.min(1.25, 0.24 + (1 - sun_y) * 0.90)
+    local offset_x, offset_z = -sun_x * stretch, -sun_z * stretch
+    local ground = mob.y + 0.018
+    local points = {}
+    for _, offset in ipairs({ { -0.42, -0.24 }, { 0.42, -0.24 }, { 0.42 + offset_x, 0.24 + offset_z }, { -0.42 + offset_x, 0.24 + offset_z } }) do
+        local px, py = self:projectPoint(mob.x + offset[1], mob.z + offset[2], ground, session, x, y)
+        points[#points + 1] = { px, py }
+    end
+    self:_fillProjectedFace(bb, points, color_mode and paletteColor("black") or Blitbuffer.COLOR_BLACK, color_mode)
+end
+
+function VoxelCanvas:_drawMob(bb, x, y, session, mob, color_mode)
+    local shades = mobShades(mob, color_mode, session:daylight())
+    local definition = MOB_DEFS[mob.kind] or MOB_DEFS.sheep
+    local body_x, body_z, base = mob.x, mob.z, mob.y
+    local forward_x, forward_z = math.sin(mob.heading or 0), math.cos(mob.heading or 0)
+    local side_x, side_z = -forward_z, forward_x
+    self:_drawMobShadow(bb, x, y, session, mob, color_mode)
+    if mob.kind == "zombie" then
+        self:_drawMobCuboid(bb, session, x, y, body_x, body_z, base + 0.04, base + 0.92, 0.27, 0.20, shades, color_mode)
+        self:_drawMobCuboid(bb, session, x, y, body_x, body_z, base + 0.92, base + 1.32, 0.24, 0.22, { top = shades.face, side = shades.face, front = shades.face }, color_mode)
+        local stride = math.sin(mob.walk_cycle or 0) * 0.09
+        for index, side in ipairs({ -1, 1 }) do
+            self:_drawMobCuboid(bb, session, x, y, body_x + side_x * side * 0.14, body_z + side_z * side * 0.14, base, base + 0.47 + (index == 1 and stride or -stride), 0.07, 0.07, shades, color_mode)
+            self:_drawMobCuboid(bb, session, x, y, body_x + side_x * side * 0.38 + forward_x * 0.03, body_z + side_z * side * 0.38 + forward_z * 0.03, base + 0.48, base + 0.92, 0.055, 0.055, shades, color_mode)
+        end
+        return
+    end
+    local is_cow = mob.kind == "cow"
+    local is_pig = mob.kind == "pig"
+    local body_half_x, body_half_z = is_cow and 0.50 or (is_pig and 0.45 or 0.46), is_cow and 0.34 or 0.32
+    local body_top = base + (is_cow and 0.86 or 0.78)
+    self:_drawMobCuboid(bb, session, x, y, body_x, body_z, base + 0.08, body_top, body_half_x, body_half_z, shades, color_mode)
+    for index, pair in ipairs({ { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } }) do
+        local stride = math.sin((mob.walk_cycle or 0) + (index % 2) * math.pi) * 0.07
+        self:_drawMobCuboid(bb, session, x, y,
+            body_x + forward_x * pair[1] * 0.27 + side_x * pair[2] * 0.20,
+            body_z + forward_z * pair[1] * 0.27 + side_z * pair[2] * 0.20,
+            base - 0.02, base + 0.37 + stride, 0.075, 0.075, { top = shades.face, side = shades.face, front = shades.face }, color_mode)
+    end
+    local head_x, head_z = body_x + forward_x * (body_half_x + 0.13), body_z + forward_z * (body_half_x + 0.13)
+    local head_bottom, head_top = base + 0.57 + (mob.head_bob or 0), base + (is_cow and 1.17 or 1.07) + (mob.head_bob or 0)
+    self:_drawMobCuboid(bb, session, x, y, head_x, head_z, head_bottom, head_top, is_cow and 0.25 or 0.22, 0.22, { top = shades.face, side = shades.face, front = shades.face }, color_mode)
+    if mob.kind == "sheep" then
+        for _, side in ipairs({ -1, 1 }) do
+            self:_drawMobCuboid(bb, session, x, y, head_x + side_x * side * 0.19, head_z + side_z * side * 0.19, head_top - 0.15, head_top + 0.09, 0.05, 0.05, { top = shades.face, side = shades.face, front = shades.face }, color_mode)
+        end
+    elseif is_cow then
+        for _, side in ipairs({ -1, 1 }) do
+            self:_drawMobCuboid(bb, session, x, y, head_x + side_x * side * 0.21, head_z + side_z * side * 0.21, head_top - 0.08, head_top + 0.13, 0.045, 0.045, shades, color_mode)
+        end
+    end
+end
+
+function VoxelCanvas:_drawMobs(bb, x, y, session, color_mode)
+    local world = session.world
+    if not world or not world.mobs then return end
+    local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
+    local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
+    local visible = {}
+    local daylight = session:daylight()
+    for _, mob in ipairs(world.mobs) do
+        local dx, dz = mob.x - session.player_x, mob.z - session.player_z
+        local depth, lateral = dx * forward_x + dz * forward_z, dx * right_x + dz * right_z
+        if depth > 0.65 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.25
+            and (not mob.nocturnal or daylight < 0.25) and self:_mobHasLineOfSight(session, mob) then
+            visible[#visible + 1] = { mob = mob, depth = depth }
+        end
+    end
+    table.sort(visible, function(first, second) return first.depth > second.depth end)
+    for _, entry in ipairs(visible) do self:_drawMob(bb, x, y, session, entry.mob, color_mode) end
 end
 
 -- The targeted block gets a Minecraft-style face outline around the crosshair.
@@ -1970,6 +2324,40 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local yaw = session.yaw
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
+    local scene_palette = scenePaletteForTime(session:timeOfDay())
+    local daylight = scene_palette.daylight
+    local sun_x, sun_z, sun_y = session:sunDirection()
+    local shadow_bucket = math.floor(session:timeOfDay() * 16)
+    local shadow_cache = self._shadow_cache
+    if not shadow_cache or shadow_cache.bucket ~= shadow_bucket or shadow_cache.world ~= world then
+        shadow_cache = { bucket = shadow_bucket, world = world, values = {} }
+        self._shadow_cache = shadow_cache
+    end
+    local function torchLightAt(wx, wz, wy)
+        local strongest = 0
+        for _, source in ipairs(world.light_sources or {}) do
+            local dx, dz, dy = source.x - wx, source.z - wz, source.y - wy
+            local distance = math.sqrt(dx * dx + dz * dz + dy * dy)
+            if distance < TORCH_LIGHT_RADIUS then strongest = math.max(strongest, (1 - distance / TORCH_LIGHT_RADIUS) * (source.strength or 1)) end
+        end
+        return strongest
+    end
+    local function sunReachesVoxel(bx, bz, by, hx, hz, hy)
+        if daylight <= 0.08 or sun_y <= 0.03 then return false end
+        local key = bx .. ":" .. bz .. ":" .. by
+        local cached = shadow_cache.values[key]
+        if cached ~= nil then return cached end
+        local visible = true
+        for sample = 1, 9 do
+            local distance = sample * 0.62
+            if blockAt(world, math.floor(hx + sun_x * distance), math.floor(hz + sun_z * distance), math.floor(hy + sun_y * distance)) then
+                visible = false
+                break
+            end
+        end
+        shadow_cache.values[key] = visible
+        return visible
+    end
     -- Camera directions depend on view geometry, not player position. Movement
     -- animates four redraws at the same yaw/pitch, so cache normalized rays and
     -- avoid repeating trigonometry plus one square root for every output cell.
@@ -2137,7 +2525,14 @@ function VoxelCanvas:_drawScene(bb, x, y)
                     -- a bright grass cap never turns into blank white paper.
                     level = level - 1
                 end
-                level = max(0, min(3, level))
+                local material_def = MATERIALS[hit_material]
+                local face_light = top and 1 or (hit_side == 0 and 0.72 or 0.62)
+                local torch_light = torchLightAt(hx, hz, hy)
+                local sunlit = sunReachesVoxel(bx, bz, by, hx, hz, hy)
+                local daylight_light = (0.16 + daylight * 0.84) * face_light
+                if daylight > 0.10 and not sunlit then daylight_light = daylight_light * 0.42 end
+                local light = (material_def and material_def.emissive) and 1 or max(torch_light, daylight_light)
+                level = max(0, min(3, math.floor(level * light + 0.5)))
                 if color_mode then
                     local mix = material_mix_cache[texture_material][level + 1]
                     ink = dither_threshold < mix.second_pixels and mix.second or mix.first
@@ -2159,22 +2554,18 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
                 current_hit_keys[rx] = nil
                 last_hit_key = nil
-                -- Give the empty part of the view a blue gradient, a pale
-                -- horizon and a few stable square clouds instead of a blank
-                -- white canvas. This is the strongest visual cue for the
-                -- Minecraft-like outdoor world.
                 local sky_position = ry / math.max(1, rows - 1)
                 if dir_y < 0 then
-                    -- Distant terrain is a two-tone dithered band: it reads as
-                    -- ground and keeps the horizon line crisp, unlike a striped
-                    -- pattern which looked like a printed texture artifact.
-                    ink = dither_threshold < 7 and "distant_ground_dark" or "distant_ground"
+                    ink = dither_threshold < 7 and scene_palette.ground_dark or scene_palette.ground
+                elseif daylight < 0.10 then
+                    -- Stable stars leave the night recognisable without an animated sky.
+                    ink = ((floor(rx / 7) + floor(ry / 5)) % 19 == 0) and "white" or scene_palette.top
                 elseif sky_position < 0.27 then
-                    ink = ((floor(rx / 11) + floor(ry / 5)) % 13 == 0) and "cloud" or "sky_top"
+                    ink = ((floor(rx / 11) + floor(ry / 5)) % 13 == 0) and "cloud" or scene_palette.top
                 elseif sky_position < 0.58 then
-                    ink = ((floor(rx / 15) + floor(ry / 4)) % 17 == 0) and "cloud" or "sky_mid"
+                    ink = ((floor(rx / 15) + floor(ry / 4)) % 17 == 0) and "cloud" or scene_palette.mid
                 else
-                    ink = "sky_horizon"
+                    ink = scene_palette.horizon
                 end
             elseif dir_y < 0 then
                 -- Distant terrain as a mid-gray dither: on monochrome panels the
@@ -2187,7 +2578,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
                 current_hit_keys[rx] = nil
                 last_hit_key = nil
-                ink = Blitbuffer.COLOR_WHITE
+                -- Monochrome still signals night through a dense dark sky.
+                ink = daylight < 0.10 and (dither_threshold < 12 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE) or Blitbuffer.COLOR_WHITE
             end
             if edge then
                 -- One dark sample cell is enough to separate adjacent voxel
@@ -2206,6 +2598,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         end
         previous_hit_keys = current_hit_keys
     end
+    self:_drawMobs(bb, x, y, session, color_mode)
     local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
     bb:paintRect(center_x - 5, center_y, 11, 1, Blitbuffer.COLOR_BLACK)
     bb:paintRect(center_x, center_y - 5, 1, 11, Blitbuffer.COLOR_BLACK)
@@ -2599,6 +2992,64 @@ local function abbreviationFor(material)
     return abbreviation
 end
 
+-- Pixel-art material icons and beveled slots give the compact E-Ink inventory a
+-- recognizable Bedrock character without relying on external image assets.
+local function paintBlockIcon(bb, x, y, size, material, session)
+    local color_mode = session and session.color_enabled and colorRenderingEnabled() and bb.paintRectRGB32
+    local pattern = PATTERN_VALUES[material] or PATTERN_VALUES.stone
+    local pixels = 4
+    local pixel = math.max(1, math.floor(size / pixels))
+    for row = 0, pixels - 1 do
+        for column = 0, pixels - 1 do
+            local level = pattern[(row * 2) * 8 + column * 2 + 1] or 2
+            local px, py = x + column * pixel, y + row * pixel
+            local width = column == pixels - 1 and size - column * pixel or pixel
+            local height = row == pixels - 1 and size - row * pixel or pixel
+            if color_mode then
+                local mix = material_mix_cache[material] and material_mix_cache[material][level + 1]
+                local ink = mix and paletteColor((row + column) % 2 == 0 and mix.first or mix.second) or paletteColor("black")
+                bb:paintRectRGB32(px, py, width, height, ink)
+            else
+                bb:paintRect(px, py, width, height, level >= 2 and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK)
+            end
+        end
+    end
+    -- A dark one-pixel base makes light blocks visible against a pale slot.
+    bb:paintRect(x, y + size - 1, size, 1, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + size - 1, y, 1, size, Blitbuffer.COLOR_BLACK)
+end
+
+local function paintMinecraftSlot(bb, x, y, width, height, session, item, selected, number, compact)
+    local border = selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY
+    local fill = selected and Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE
+    local inset = compact and 2 or 3
+    bb:paintRect(x + 2, y + 2, width, height, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, width - 2, height - 2, border)
+    bb:paintRect(x + inset, y + inset, math.max(1, width - inset * 2 - 2), math.max(1, height - inset * 2 - 2), fill)
+    if selected then
+        -- Pixel corners rather than a rounded outline read much closer to Minecraft UI.
+        bb:paintRect(x + 1, y + 1, width - 4, 1, Blitbuffer.COLOR_WHITE)
+        bb:paintRect(x + 1, y + 1, 1, height - 4, Blitbuffer.COLOR_WHITE)
+    end
+    if number and not compact then
+        local slot_number = TextWidget:new{
+            text = tostring(number), face = Font:getFace("smallinfofont", math.max(scale(6), scale(7))),
+            fgcolor = Blitbuffer.COLOR_DARK_GRAY, padding = 0,
+        }
+        slot_number:paintTo(bb, x + inset + 1, y + inset)
+    end
+    if item then
+        local icon_size = math.max(compact and scale(9) or scale(12), math.min(width - scale(8), height - (compact and scale(7) or scale(12))))
+        paintBlockIcon(bb, x + math.floor((width - icon_size) / 2), y + (compact and scale(3) or scale(5)), icon_size, item.material, session)
+        local count = TextWidget:new{
+            text = tostring(item.count), face = Font:getFace("smallinfofont", math.max(scale(6), compact and scale(7) or scale(8))),
+            fgcolor = Blitbuffer.COLOR_BLACK, bold = true, padding = 0,
+        }
+        local count_size = count:getSize()
+        count:paintTo(bb, x + width - count_size.w - scale(3), y + height - count_size.h - scale(2))
+    end
+end
+
 local Hotbar = InputContainer:extend{ session = nil, canvas = nil, width = nil, height = nil, dimen = nil, _origin_x = 0, _origin_y = 0 }
 
 function Hotbar:init()
@@ -2610,46 +3061,16 @@ function Hotbar:paintTo(bb, x, y)
     self._origin_x, self._origin_y = x, y
     local range = self.ges_events.TapMinecraftHotbar[1].range
     range.x, range.y, range.w, range.h = x, y, self.width, self.height
-    local slot_w = self.width / HOTBAR_SLOTS
     local session = self.session
+    local slot_w = self.width / HOTBAR_SLOTS
+    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + 2, y + 2, math.max(1, self.width - 4), math.max(1, self.height - 4), Blitbuffer.COLOR_DARK_GRAY)
     for slot = 1, HOTBAR_SLOTS do
-        local left = x + math.floor((slot - 1) * slot_w)
-        local right = x + math.floor(slot * slot_w)
-        local cell_w = math.max(1, right - left)
-        local sx = left + 1
-        local selected = session and session.selected_slot == slot
+        local left = x + math.floor((slot - 1) * slot_w) + 2
+        local right = x + math.floor(slot * slot_w) - 1
+        local cell_w = math.max(scale(12), right - left)
         local item = session and session.slots[slot] or nil
-        local material = item and item.material or nil
-        bb:paintRect(sx, y + 1, math.max(1, cell_w - 2), self.height - 2, selected and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY)
-        bb:paintRect(sx + 2, y + 3, math.max(1, cell_w - 6), math.max(1, self.height - 6), Blitbuffer.COLOR_WHITE)
-        if material then
-            local swatch = colorForMaterial(material)
-            local swatch_size = math.min(scale(10), math.max(1, self.height - scale(10)))
-            local swatch_x, swatch_y = sx + 4, y + math.floor((self.height - swatch_size) / 2)
-            if session.color_enabled and colorRenderingEnabled() and bb.paintRectRGB32 then
-                bb:paintRectRGB32(swatch_x, swatch_y, swatch_size, swatch_size, swatch)
-            else
-                bb:paintRect(swatch_x, swatch_y, swatch_size, swatch_size, swatch)
-            end
-            local label = TextWidget:new{
-                text = abbreviationFor(material) .. tostring(item.count),
-                face = Font:getFace("smallinfofont", math.max(scale(7), math.min(scale(9), self.height - scale(18)))),
-                fgcolor = Blitbuffer.COLOR_BLACK,
-                bold = selected,
-                max_width = math.max(scale(8), cell_w - swatch_size - scale(9)),
-                padding = 0,
-            }
-            local label_size = label:getSize()
-            label:paintTo(bb, math.min(right - label_size.w - 2, swatch_x + swatch_size + 2), y + math.floor((self.height - label_size.h) / 2))
-        else
-            local label = TextWidget:new{
-                text = "-",
-                face = Font:getFace("smallinfofont", math.max(scale(7), math.min(scale(9), self.height - scale(18)))),
-                fgcolor = Blitbuffer.COLOR_DARK_GRAY,
-                padding = 0,
-            }
-            label:paintTo(bb, sx + math.floor(cell_w / 2) - scale(2), y + math.floor((self.height - label:getSize().h) / 2))
-        end
+        paintMinecraftSlot(bb, left, y + 2, cell_w, math.max(scale(12), self.height - 4), session, item, session and session.selected_slot == slot, slot, true)
     end
     return true
 end
@@ -2755,11 +3176,10 @@ function InventoryPanel:paintTo(bb, x, y)
     range.x, range.y, range.w, range.h = x, y, self.width, self.height
     local header_h, footer_h = self:headerHeight(), self:footerHeight()
     local slot_h, slot_w = self:slotHeight(), self:slotWidth()
-    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_WHITE)
-    bb:paintRect(x, y, self.width, 2, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x, y + self.height - 2, self.width, 2, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x, y, 2, self.height, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x + self.width - 2, y, 2, self.height, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + 3, y + 3, self.width - 6, self.height - 6, Blitbuffer.COLOR_WHITE)
+    bb:paintRect(x + 3, y + 3, self.width - 6, header_h, Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(x + 5, y + header_h + 2, self.width - 10, self.height - header_h - footer_h - 5, Blitbuffer.COLOR_LIGHT_GRAY)
     local title = TextWidget:new{
         text = _("INVENTORY") .. "  ·  " .. tostring(session.used_slots) .. "/" .. tostring(INVENTORY_SLOTS),
         face = Font:getFace("cfont", math.max(scale(8), scale(10))),
@@ -2808,27 +3228,7 @@ function InventoryPanel:paintTo(bb, x, y)
         local cell_w = math.max(scale(8), math.floor(slot_w) - scale(2))
         local cell_h = math.max(scale(8), slot_h - scale(2))
         local item = session.slots[slot]
-        bb:paintRect(sx, sy, cell_w, cell_h, sy_base == hotbar_y and Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE)
-        bb:paintRect(sx, sy, cell_w, 1, Blitbuffer.COLOR_BLACK)
-        bb:paintRect(sx, sy + cell_h - 1, cell_w, 1, Blitbuffer.COLOR_BLACK)
-        bb:paintRect(sx, sy, 1, cell_h, Blitbuffer.COLOR_BLACK)
-        bb:paintRect(sx + cell_w - 1, sy, 1, cell_h, Blitbuffer.COLOR_BLACK)
-        if item then
-            local swatch_size = math.max(scale(6), math.min(cell_w - scale(8), cell_h - scale(8)))
-            local swatch = colorForMaterial(item.material)
-            if session.color_enabled and colorRenderingEnabled() and bb.paintRectRGB32 then
-                bb:paintRectRGB32(sx + scale(4), sy + scale(4), swatch_size, swatch_size, swatch)
-            else
-                bb:paintRect(sx + scale(4), sy + scale(4), swatch_size, swatch_size, swatch)
-            end
-            local count = TextWidget:new{
-                text = tostring(item.count),
-                face = Font:getFace("smallinfofont", math.max(scale(6), scale(7))),
-                fgcolor = Blitbuffer.COLOR_BLACK,
-                max_width = cell_w - scale(4),
-            }
-            count:paintTo(bb, sx + math.max(scale(3), cell_w - count:getSize().w - scale(2)), sy + cell_h - scale(10))
-        end
+        paintMinecraftSlot(bb, sx, sy, cell_w, cell_h, session, item, slot == session.selected_slot, slot, false)
     end
     local status
     if session.held then
@@ -3023,31 +3423,28 @@ local NavButton = InputContainer:extend{
 
 function NavButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    self[1] = FrameContainer:new{
-        width = self.width,
-        height = self.height,
-        padding = 0,
-        bordersize = 0,
-        radius = math.max(3, math.floor(self.height * 0.22)),
-        background = self.primary and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY,
-        CenterContainer:new{
-            dimen = self.dimen,
-            TextWidget:new{
-                text = self.title,
-                face = Font:getFace("smallinfofont", math.max(scale(9), math.floor(self.height * 0.32))),
-                fgcolor = self.primary and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK,
-                bold = true,
-                max_width = self.width - scale(6),
-            },
-        },
-    }
     self.ges_events = { TapMinecraftNav = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 
 function NavButton:paintTo(bb, x, y)
     local range = self.ges_events.TapMinecraftNav[1].range
     range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
-    return InputContainer.paintTo(self, bb, x, y)
+    -- Minecraft-style 3D bevel: a black lower-right shadow, pale upper edge,
+    -- and a square face stay legible on both Carta and color E-Ink panels.
+    local shadow = math.max(2, math.floor(self.height * 0.13))
+    local face = self.primary and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY
+    local text_color = self.primary and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
+    bb:paintRect(x + shadow, y + shadow, self.width - shadow, self.height - shadow, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, self.width - shadow, self.height - shadow, face)
+    bb:paintRect(x + 2, y + 2, math.max(1, self.width - shadow - 4), 1, self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
+    bb:paintRect(x + 2, y + 2, 1, math.max(1, self.height - shadow - 4), self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
+    local label = TextWidget:new{
+        text = self.title, face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * 0.30))),
+        fgcolor = text_color, bold = true, max_width = math.max(scale(12), self.width - shadow - scale(8)),
+    }
+    local size = label:getSize()
+    label:paintTo(bb, x + math.floor((self.width - shadow - size.w) / 2), y + math.floor((self.height - shadow - size.h) / 2))
+    return true
 end
 
 function NavButton:onTapMinecraftNav()
@@ -3087,6 +3484,39 @@ end
 
 function JumpControl:onTapMinecraftJump()
     if self.callback then self.callback() end
+    return true
+end
+
+local MenuBackdrop = InputContainer:extend{ width = nil, height = nil, dimen = nil }
+
+function MenuBackdrop:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+end
+
+function MenuBackdrop:paintTo(bb, x, y)
+    local color_mode = colorRenderingEnabled() and bb.paintRectRGB32
+    local function fill(left, top, width, height, ink)
+        if color_mode then bb:paintRectRGB32(left, top, width, height, paletteColor(ink)) else bb:paintRect(left, top, width, height, ink == "white" and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK) end
+    end
+    fill(x, y, self.width, self.height, "black")
+    local horizon = math.floor(self.height * 0.58)
+    fill(x + 3, y + 3, self.width - 6, math.max(1, horizon - 3), "blue")
+    -- Pixel clouds/stars, distant hills and a blocky ground create a real game
+    -- scene behind the logo instead of a flat dark-gray dialog.
+    for column = 0, math.floor(self.width / 26) do
+        local cloud_y = y + 12 + ((column * 17) % math.max(16, math.floor(horizon * 0.45)))
+        if column % 3 ~= 1 then fill(x + column * 26 + 5, cloud_y, 14, 3, "white") end
+    end
+    for column = 0, math.floor(self.width / 18) do
+        local hill = 9 + ((column * 11 + column * column) % 24)
+        fill(x + column * 18, y + horizon - hill, 20, hill + 4, column % 2 == 0 and "green" or "cyan")
+    end
+    fill(x + 3, y + horizon, self.width - 6, self.height - horizon - 3, "green")
+    for row = 0, math.floor((self.height - horizon) / 14) do
+        for column = 0, math.floor(self.width / 20) do
+            if (row + column * 3) % 5 == 0 then fill(x + column * 20 + 4, y + horizon + row * 14 + 6, 5, 3, "red") end
+        end
+    end
     return true
 end
 
@@ -3243,7 +3673,7 @@ local function menuPane(state, context, width, height, title, subtitle, items)
         if ok then logo = widget end
     end
     local children = {
-        FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_DARK_GRAY, emptySizedWidget(width, height) },
+        MenuBackdrop:new{ width = width, height = height },
         logo or TextWidget:new{ text = "MINECRAFT", face = Font:getFace("cfont", math.max(22, math.floor(width / 14))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(12, math.floor(height * 0.08)) } },
         TextWidget:new{ text = title, face = Font:getFace("cfont", math.max(16, math.floor(width / 24))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true, max_width = width - 20, overlap_offset = { 10, math.max(55, math.floor(height * 0.20)) } },
         TextWidget:new{ text = subtitle or "", face = Font:getFace("smallinfofont", math.max(9, math.floor(width / 55))), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 20, overlap_offset = { 10, math.max(78, math.floor(height * 0.28)) } },
@@ -3258,12 +3688,12 @@ local function menuButton(title, width, height, x, y, callback, primary)
 end
 
 local function buildSplashPane(state, context, width, height)
-    local button_w, button_h = math.min(math.floor(width * 0.62), 330), math.max(38, math.floor(height * 0.075))
-    local x, y, gap = math.floor((width - button_w) / 2), math.floor(height * 0.40), math.max(7, math.floor(height * 0.018))
-    return menuPane(state, context, width, height, _("Welcome"), _("A small world. Your rules."), {
-        menuButton(_("Play"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
-        menuButton(_("Settings"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
-        menuButton(_("About the Game"), button_w, button_h, x, y + 2 * (button_h + gap), function() rebuildScreen(state, context, "about") end),
+    local button_w, button_h = math.min(math.floor(width * 0.66), 350), math.max(40, math.floor(height * 0.078))
+    local x, y, gap = math.floor((width - button_w) / 2), math.floor(height * 0.43), math.max(8, math.floor(height * 0.020))
+    return menuPane(state, context, width, height, _("SURVIVAL EDITION"), _("Build. Explore. Survive the night."), {
+        menuButton(_("PLAY WORLD"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
+        menuButton(_("SETTINGS"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
+        menuButton(_("ABOUT"), button_w, button_h, x, y + 2 * (button_h + gap), function() rebuildScreen(state, context, "about") end),
     })
 end
 
@@ -3371,16 +3801,16 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Inventory · Crafting\n\nMinecraft 3D 4.1.4"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.0"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.4.2",
+    version = "4.5.0",
     title = "Minecraft 3D",
-    subtitle = "Biomes, Villages, Inventory & Crafting",
+    subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
     logo = "minecraft",
     buildPane = function(instance, context)
@@ -3472,7 +3902,7 @@ return {
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", heading_size), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = heading_w, overlap_offset = { margin, px(6) } },
-            TextWidget:new{ text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName(), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w, overlap_offset = { margin, px(29) } },
+            TextWidget:new{ text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName() .. " · " .. state.session:timeLabel(), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w, overlap_offset = { margin, px(29) } },
             NavButton:new{ title = _("Color"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
             NavButton:new{ title = _("Menu"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
@@ -3544,6 +3974,11 @@ return {
         RECIPE_PAGES = RECIPE_PAGES,
         BIOMES = BIOMES,
         BIOME_ORDER = BIOME_ORDER,
+        MOB_DEFS = MOB_DEFS,
+        generateMobs = generateMobs,
+        rebuildLightSources = rebuildLightSources,
+        daylightForTime = daylightForTime,
+        scenePaletteForTime = scenePaletteForTime,
         TREE_DEFS = TREE_DEFS,
         STARTING_KIT = STARTING_KIT,
         WORLD_SIZE = WORLD_SIZE,
@@ -3561,6 +3996,8 @@ return {
         MOVE_FRAMES = MOVE_FRAMES,
         MOVE_FRAME_SECONDS = MOVE_FRAME_SECONDS,
         HELD_MOVE_SECONDS = HELD_MOVE_SECONDS,
+        DAY_LENGTH_TICKS = DAY_LENGTH_TICKS,
+        MOBS_PER_KIND = MOBS_PER_KIND,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,
         STACK_LIMIT = STACK_LIMIT,
