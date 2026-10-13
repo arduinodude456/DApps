@@ -1,4 +1,10 @@
-# Minecraft 3D 4.5.0
+# Minecraft 3D 4.5.1
+
+## Mob-Bewegung und Renderleistung
+
+Mobs erhalten jetzt während der geöffneten Weltansicht einen eigenen, aufgeräumten Ambient-Timer. Sie bewegen sich daher auch, wenn der Spieler stillsteht; beim Verlassen des Weltbildschirms wird der Timer beendet. Die Bewegungsgeschwindigkeit wurde leicht angehoben, damit Richtungswechsel und Laufanimation im Spiel besser erkennbar sind.
+
+Mob-Körper, Köpfe, Beine, Schatten und Konturen werden nun auf das grobe Sample-Raster der Blockwelt quantisiert, statt jedes Display-Pixel einzeln zu bemalen. Die sichtbare Auflösung und der Rasterstil passen damit zusammen, und das Mob-Rendering benötigt wesentlich weniger Zeichenoperationen.
 
 ## Stabilität
 

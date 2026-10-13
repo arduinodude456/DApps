@@ -225,6 +225,7 @@ local DAY_LENGTH_TICKS = 144
 local DAY_TICK_PER_ACTION = 1
 local MAX_MOBS = 18
 local MOBS_PER_KIND = 4
+local AMBIENT_MOB_SECONDS = 0.72
 local TORCH_LIGHT_RADIUS = 8
 
 -- A Minecraft-like sky is painted only on color displays. The monochrome path
@@ -819,10 +820,10 @@ local heightAt, materialAt, biomeAt
 -- Mobs are deliberately entities rather than blocks. The world renderer keeps
 -- block occlusion while these simple voxel animals can walk between columns.
 local MOB_DEFS = {
-    sheep = { label = _("Sheep"), biomes = { plains = true, forest = true, birch_forest = true, snowy_plains = true }, chance = 0.982, speed = 0.050, body = "white", face = "black" },
-    cow = { label = _("Cow"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.988, speed = 0.044, body = "red", face = "black" },
-    pig = { label = _("Pig"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.991, speed = 0.052, body = "magenta", face = "red" },
-    zombie = { label = _("Zombie"), biomes = { plains = true, forest = true, birch_forest = true, taiga = true }, chance = 0.992, speed = 0.061, body = "green", face = "cyan", nocturnal = true },
+    sheep = { label = _("Sheep"), biomes = { plains = true, forest = true, birch_forest = true, snowy_plains = true }, chance = 0.982, speed = 0.11, body = "white", face = "black" },
+    cow = { label = _("Cow"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.988, speed = 0.10, body = "red", face = "black" },
+    pig = { label = _("Pig"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.991, speed = 0.12, body = "magenta", face = "red" },
+    zombie = { label = _("Zombie"), biomes = { plains = true, forest = true, birch_forest = true, taiga = true }, chance = 0.992, speed = 0.13, body = "green", face = "cyan", nocturnal = true },
 }
 
 local function mobCellIsClear(world, x, z)
@@ -1415,8 +1416,8 @@ function VoxelSession.new(seed)
         tap_action = "place",
         color_enabled = true,
         view_height = nil,
-        -- A complete day lasts 144 meaningful player actions. This gives the
-        -- player visible time progression without a wasteful background redraw.
+        -- A complete day lasts 144 world ticks; ambient world ticks continue
+        -- while the gameplay pane is visible.
         world_time = 0.31,
         world_ticks = 0,
         mob_clock = 0,
@@ -1426,6 +1427,7 @@ function VoxelSession.new(seed)
     self._motionTick = function() self:tickMotion() end
     self._jumpTick = function() self:tickJump() end
     self._heldMoveTick = function() self:tickHeldMove() end
+    self._ambientMobTick = function() self:tickAmbientMobs() end
     return self
 end
 
@@ -1489,6 +1491,23 @@ function VoxelSession:advanceEnvironment(amount)
     self.world_ticks = (self.world_ticks or 0) + amount
     self.world_time = ((self.world_time or 0.31) + amount / DAY_LENGTH_TICKS) % 1
     self:tickMobs()
+end
+
+-- Ambient entities keep moving even when the player is standing still.
+function VoxelSession:tickAmbientMobs()
+    if not self.world or not self.world.mobs then return end
+    self:advanceEnvironment(0.55)
+    if self.canvas then self.canvas:refreshFast() end
+    UIManager:scheduleIn(AMBIENT_MOB_SECONDS, self._ambientMobTick)
+end
+
+function VoxelSession:startAmbientMobs()
+    UIManager:unschedule(self._ambientMobTick)
+    UIManager:scheduleIn(AMBIENT_MOB_SECONDS, self._ambientMobTick)
+end
+
+function VoxelSession:stopAmbientMobs()
+    UIManager:unschedule(self._ambientMobTick)
 end
 
 -- Inventory -------------------------------------------------------------------
@@ -2099,38 +2118,45 @@ function VoxelCanvas:projectPoint(wx, wz, wy, session, origin_x, origin_y)
 end
 
 function VoxelCanvas:_stroke(bb, first, second, thickness)
-    local dx, dy = second[1] - first[1], second[2] - first[2]
-    local steps = math.max(1, math.ceil(math.max(math.abs(dx), math.abs(dy))))
-    local size = math.max(1, thickness or 1)
+    local cols, rows = renderGridFor(self.width, self.height, MINECRAFT_RENDER_SAMPLE)
+    local cell_w, cell_h = self.width / cols, self.height / rows
+    local ax, ay = math.floor(first[1] / cell_w), math.floor(first[2] / cell_h)
+    local bx, by = math.floor(second[1] / cell_w), math.floor(second[2] / cell_h)
+    local steps = math.max(1, math.abs(bx - ax), math.abs(by - ay))
     for step = 0, steps do
         local ratio = step / steps
-        bb:paintRect(math.floor(first[1] + dx * ratio), math.floor(first[2] + dy * ratio), size, size, Blitbuffer.COLOR_BLACK)
+        local gx = clamp(math.floor(ax + (bx - ax) * ratio), 0, cols - 1)
+        local gy = clamp(math.floor(ay + (by - ay) * ratio), 0, rows - 1)
+        bb:paintRect(math.floor(gx * cell_w), math.floor(gy * cell_h), math.max(1, math.ceil(cell_w)), math.max(1, math.ceil(cell_h)), Blitbuffer.COLOR_BLACK)
     end
 end
 
 function VoxelCanvas:_fillProjectedFace(bb, points, ink, color_mode)
-    local min_y, max_y = points[1][2], points[1][2]
-    for _, point in ipairs(points) do
-        min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
-    end
-    for scan_y = math.floor(min_y), math.ceil(max_y) do
+    -- Rasterize entity faces on exactly the same coarse sample grid as terrain.
+    local cols, rows = renderGridFor(self.width, self.height, MINECRAFT_RENDER_SAMPLE)
+    local cell_w, cell_h = self.width / cols, self.height / rows
+    local grid = {}
+    for _, point in ipairs(points) do grid[#grid + 1] = { x = point[1] / cell_w, y = point[2] / cell_h } end
+    local min_y, max_y = grid[1].y, grid[1].y
+    for _, point in ipairs(grid) do min_y, max_y = math.min(min_y, point.y), math.max(max_y, point.y) end
+    for row = math.max(0, math.floor(min_y)), math.min(rows - 1, math.ceil(max_y) - 1) do
         local intersections = {}
-        for index = 1, #points do
-            local a, b = points[index], points[index % #points + 1]
-            if (a[2] <= scan_y and b[2] > scan_y) or (b[2] <= scan_y and a[2] > scan_y) then
-                local ratio = (scan_y - a[2]) / (b[2] - a[2])
-                intersections[#intersections + 1] = a[1] + (b[1] - a[1]) * ratio
+        for index = 1, #grid do
+            local a, b = grid[index], grid[index % #grid + 1]
+            if (a.y <= row and b.y > row) or (b.y <= row and a.y > row) then
+                local ratio = (row + 0.5 - a.y) / (b.y - a.y)
+                intersections[#intersections + 1] = a.x + (b.x - a.x) * ratio
             end
         end
         table.sort(intersections)
         for index = 1, #intersections - 1, 2 do
-            local left, right = math.floor(intersections[index]), math.ceil(intersections[index + 1])
-            if right >= left then
-                if color_mode and bb.paintRectRGB32 then
-                    bb:paintRectRGB32(left, scan_y, right - left + 1, 1, ink)
-                else
-                    bb:paintRect(left, scan_y, right - left + 1, 1, ink)
-                end
+            local left, right = math.max(0, math.floor(intersections[index])), math.min(cols, math.ceil(intersections[index + 1]))
+            local top, bottom = math.floor(row * cell_h), math.min(self.height, math.ceil((row + 1) * cell_h))
+            if right > left and bottom > top then
+                local px, py = math.floor(left * cell_w), top
+                local pw, ph = math.ceil((right - left) * cell_w), bottom - top
+                if color_mode and bb.paintRectRGB32 then bb:paintRectRGB32(px, py, pw, ph, ink)
+                else bb:paintRect(px, py, pw, ph, ink) end
             end
         end
     end
@@ -3801,14 +3827,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.0"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.1"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.0",
+    version = "4.5.1",
     title = "Minecraft 3D",
     subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
@@ -3858,6 +3884,7 @@ return {
         inventory_panel.overlap_offset = { margin, canvas_y }
         crafting_panel.overlap_offset = { margin, canvas_y }
         state.session.canvas = canvas
+        state.session:startAmbientMobs()
         canvas.hotbar = hotbar
         canvas.event_line = event_line
         -- Keep the widgets reachable for refresh calls and for the regression
@@ -3866,6 +3893,7 @@ return {
         state.inventory_panel, state.crafting_panel = inventory_panel, crafting_panel
         local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
         function pane:onDeactivate()
+            state.session:stopAmbientMobs()
             state.session:stopHeldMove()
             if state.session.motion then
                 state.session.motion = nil
@@ -3998,6 +4026,8 @@ return {
         HELD_MOVE_SECONDS = HELD_MOVE_SECONDS,
         DAY_LENGTH_TICKS = DAY_LENGTH_TICKS,
         MOBS_PER_KIND = MOBS_PER_KIND,
+        AMBIENT_MOB_SECONDS = AMBIENT_MOB_SECONDS,
+        MAX_MOBS = MAX_MOBS,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,
         STACK_LIMIT = STACK_LIMIT,
