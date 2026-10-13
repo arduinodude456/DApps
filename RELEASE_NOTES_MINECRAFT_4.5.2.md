@@ -1,4 +1,8 @@
-# Minecraft 3D 4.5.1
+# Minecraft 3D 4.5.2
+
+## Schatten
+
+Die Sonnenschatten auf Blöcken sind aufgehellt, damit die Textur nicht mehr zu schwarzen Flächen absäuft. Mob-Schatten sind kleiner, kürzer und transparent wirkend als grobes Raster aus einzelnen dunklen Pixelzellen dargestellt; das Gelände bleibt darunter sichtbar.
 
 ## Mob-Bewegung und Renderleistung
 
@@ -14,7 +18,7 @@ Mob-Körper, Köpfe, Beine, Schatten und Konturen werden nun auf das grobe Sampl
 ## Welt: Zeit, Licht und Mobs
 
 - Schrittbasierter **Tag-/Nacht-Zyklus** mit Morgen, Tag, Sonnenuntergang und Nacht; der aktuelle Status erscheint im Kopfbereich.
-- Dynamischer Himmel, dunklere Nachtlandschaft, stabile Sterne und harte voxelbasierte **Sonnenschatten** auf Blockoberflächen.
+- Dynamischer Himmel, dunklere Nachtlandschaft, stabile Sterne und voxelige **Sonnenschatten** auf Blockoberflächen.
 - Platzierbare **Fackeln** mit eigener Textur, Lichtquellen-Registry und lokalem Lichtkegel. Dorfplätze erhalten Fackeln; vier Fackeln lassen sich aus Holz und Kohle herstellen.
 - Mehrteilige, perspektivisch projizierte 3D-Mobs: **Schafe, Kühe, Schweine** sowie nachts aktive **Zombies**. Körper, Köpfe, Beine beziehungsweise Arme werden aus 3D-Quadern aufgebaut, animiert und von Weltblöcken korrekt verdeckt.
 - Mobs besitzen dynamische Bodenausrichtung, schrittweise Bewegung und geworfene Bodenschatten.

@@ -2220,17 +2220,54 @@ end
 function VoxelCanvas:_drawMobShadow(bb, x, y, session, mob, color_mode)
     local sun_x, sun_z, sun_y = session:sunDirection()
     if sun_y <= 0.06 then return end
-    local stretch = math.min(1.25, 0.24 + (1 - sun_y) * 0.90)
+    local stretch = math.min(0.72, 0.14 + (1 - sun_y) * 0.48)
     local offset_x, offset_z = -sun_x * stretch, -sun_z * stretch
     local ground = mob.y + 0.018
     local points = {}
-    for _, offset in ipairs({ { -0.42, -0.24 }, { 0.42, -0.24 }, { 0.42 + offset_x, 0.24 + offset_z }, { -0.42 + offset_x, 0.24 + offset_z } }) do
+    for _, offset in ipairs({ { -0.30, -0.17 }, { 0.30, -0.17 }, { 0.30 + offset_x, 0.17 + offset_z }, { -0.30 + offset_x, 0.17 + offset_z } }) do
         local px, py = self:projectPoint(mob.x + offset[1], mob.z + offset[2], ground, session, x, y)
         points[#points + 1] = { px, py }
     end
-    self:_fillProjectedFace(bb, points, color_mode and paletteColor("black") or Blitbuffer.COLOR_BLACK, color_mode)
+    -- A transparent-looking 25% halftone shadow reveals the terrain underneath;
+    -- drawing an opaque black polygon looked like a solid black slab on E-Ink.
+    local cols, rows = renderGridFor(self.width, self.height, MINECRAFT_RENDER_SAMPLE)
+    local cell_w, cell_h = self.width / cols, self.height / rows
+    local min_x, max_x, min_y, max_y = points[1][1], points[1][1], points[1][2], points[1][2]
+    for _, point in ipairs(points) do
+        min_x, max_x = math.min(min_x, point[1]), math.max(max_x, point[1])
+        min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
+    end
+    if max_x < 0 or min_x > self.width or max_y < 0 or min_y > self.height then return end
+    local first_col, last_col = math.max(0, math.floor(min_x / cell_w)), math.min(cols - 1, math.ceil(max_x / cell_w))
+    local first_row, last_row = math.max(0, math.floor(min_y / cell_h)), math.min(rows - 1, math.ceil(max_y / cell_h))
+    local function inside(px, py)
+        local hit, previous = false, #points
+        for index = 1, #points do
+            local a, b = points[index], points[previous]
+            if ((a[2] > py) ~= (b[2] > py)) and px < (b[1] - a[1]) * (py - a[2]) / (b[2] - a[2]) + a[1] then hit = not hit end
+            previous = index
+        end
+        return hit
+    end
+    local painted = false
+    for row = first_row, last_row do
+        for column = first_col, last_col do
+            local center_x, center_y = (column + 0.5) * cell_w, (row + 0.5) * cell_h
+            if inside(center_x, center_y) and (column + row * 3) % 4 == 0 then
+                bb:paintRect(math.floor(column * cell_w), math.floor(row * cell_h), math.max(1, math.ceil(cell_w)), math.max(1, math.ceil(cell_h)), Blitbuffer.COLOR_BLACK)
+                painted = true
+            end
+        end
+    end
+    -- Tiny distant shadows still get one soft pixel instead of vanishing entirely.
+    if not painted then
+        local center_x = (points[1][1] + points[3][1]) / 2
+        local center_y = (points[1][2] + points[3][2]) / 2
+        local column = clamp(math.floor(center_x / cell_w), 0, cols - 1)
+        local row = clamp(math.floor(center_y / cell_h), 0, rows - 1)
+        bb:paintRect(math.floor(column * cell_w), math.floor(row * cell_h), math.max(1, math.ceil(cell_w)), math.max(1, math.ceil(cell_h)), Blitbuffer.COLOR_BLACK)
+    end
 end
-
 function VoxelCanvas:_drawMob(bb, x, y, session, mob, color_mode)
     local shades = mobShades(mob, color_mode, session:daylight())
     local definition = MOB_DEFS[mob.kind] or MOB_DEFS.sheep
@@ -2556,7 +2593,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 local torch_light = torchLightAt(hx, hz, hy)
                 local sunlit = sunReachesVoxel(bx, bz, by, hx, hz, hy)
                 local daylight_light = (0.16 + daylight * 0.84) * face_light
-                if daylight > 0.10 and not sunlit then daylight_light = daylight_light * 0.42 end
+                -- Keep cast shadows readable but never crush block texture into
+                -- near-black slabs on either monochrome or color E-Ink panels.
+                if daylight > 0.10 and not sunlit then daylight_light = daylight_light * 0.70 end
                 local light = (material_def and material_def.emissive) and 1 or max(torch_light, daylight_light)
                 level = max(0, min(3, math.floor(level * light + 0.5)))
                 if color_mode then
@@ -3827,14 +3866,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.1"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.2"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.1",
+    version = "4.5.2",
     title = "Minecraft 3D",
     subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
@@ -4028,6 +4067,7 @@ return {
         MOBS_PER_KIND = MOBS_PER_KIND,
         AMBIENT_MOB_SECONDS = AMBIENT_MOB_SECONDS,
         MAX_MOBS = MAX_MOBS,
+        mobShades = mobShades,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,
         STACK_LIMIT = STACK_LIMIT,
