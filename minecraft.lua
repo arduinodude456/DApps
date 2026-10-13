@@ -225,7 +225,8 @@ local DAY_LENGTH_TICKS = 144
 local DAY_TICK_PER_ACTION = 1
 local MAX_MOBS = 18
 local MOBS_PER_KIND = 4
-local AMBIENT_MOB_SECONDS = 0.72
+local MAX_RENDERED_MOBS = 3
+local AMBIENT_MOB_SECONDS = 1.25
 local TORCH_LIGHT_RADIUS = 8
 
 -- A Minecraft-like sky is painted only on color displays. The monochrome path
@@ -820,10 +821,10 @@ local heightAt, materialAt, biomeAt
 -- Mobs are deliberately entities rather than blocks. The world renderer keeps
 -- block occlusion while these simple voxel animals can walk between columns.
 local MOB_DEFS = {
-    sheep = { label = _("Sheep"), biomes = { plains = true, forest = true, birch_forest = true, snowy_plains = true }, chance = 0.982, speed = 0.11, body = "white", face = "black" },
-    cow = { label = _("Cow"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.988, speed = 0.10, body = "red", face = "black" },
-    pig = { label = _("Pig"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.991, speed = 0.12, body = "magenta", face = "red" },
-    zombie = { label = _("Zombie"), biomes = { plains = true, forest = true, birch_forest = true, taiga = true }, chance = 0.992, speed = 0.13, body = "green", face = "cyan", nocturnal = true },
+    sheep = { label = _("Sheep"), biomes = { plains = true, forest = true, birch_forest = true, snowy_plains = true }, chance = 0.982, speed = 0.20, body = "white", face = "black" },
+    cow = { label = _("Cow"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.988, speed = 0.18, body = "red", face = "black" },
+    pig = { label = _("Pig"), biomes = { plains = true, forest = true, savanna = true }, chance = 0.991, speed = 0.21, body = "magenta", face = "red" },
+    zombie = { label = _("Zombie"), biomes = { plains = true, forest = true, birch_forest = true, taiga = true }, chance = 0.992, speed = 0.22, body = "green", face = "cyan", nocturnal = true },
 }
 
 local function mobCellIsClear(world, x, z)
@@ -2190,7 +2191,7 @@ function VoxelCanvas:_mobHasLineOfSight(session, mob)
     local dx, dz, dy = tx - ox, tz - oz, ty - oy
     local distance = math.sqrt(dx * dx + dz * dz + dy * dy)
     if distance <= 0.1 then return true end
-    local steps = math.max(2, math.ceil(distance * 7))
+    local steps = math.max(2, math.ceil(distance * 3))
     -- Sample before the entity cell so a solid world voxel always hides a mob.
     for index = 1, steps - 1 do
         local fraction = index / steps
@@ -2212,9 +2213,8 @@ function VoxelCanvas:_drawMobCuboid(bb, session, origin_x, origin_y, center_x, c
     self:_fillProjectedFace(bb, top_face, shades.top, color_mode)
     self:_fillProjectedFace(bb, x_face, shades.side, color_mode)
     self:_fillProjectedFace(bb, z_face, shades.front, color_mode)
-    for _, face in ipairs({ top_face, x_face, z_face }) do
-        for index = 1, #face do self:_stroke(bb, face[index], face[index % #face + 1], 1) end
-    end
+    -- Three flat voxel faces carry the shape; outlining every edge on every
+    -- limb caused hundreds of redundant E-Ink draw calls per nearby mob.
 end
 
 function VoxelCanvas:_drawMobShadow(bb, x, y, session, mob, color_mode)
@@ -2316,18 +2316,27 @@ function VoxelCanvas:_drawMobs(bb, x, y, session, color_mode)
     if not world or not world.mobs then return end
     local forward_x, forward_z = math.sin(session.yaw), math.cos(session.yaw)
     local right_x, right_z = math.cos(session.yaw), -math.sin(session.yaw)
-    local visible = {}
+    local candidates = {}
     local daylight = session:daylight()
     for _, mob in ipairs(world.mobs) do
         local dx, dz = mob.x - session.player_x, mob.z - session.player_z
         local depth, lateral = dx * forward_x + dz * forward_z, dx * right_x + dz * right_z
         if depth > 0.65 and depth < MAX_VIEW_DISTANCE and math.abs(lateral) < depth * 1.25
-            and (not mob.nocturnal or daylight < 0.25) and self:_mobHasLineOfSight(session, mob) then
-            visible[#visible + 1] = { mob = mob, depth = depth }
+            and (not mob.nocturnal or daylight < 0.25) then
+            candidates[#candidates + 1] = { mob = mob, depth = depth }
         end
     end
-    table.sort(visible, function(first, second) return first.depth > second.depth end)
-    for _, entry in ipairs(visible) do self:_drawMob(bb, x, y, session, entry.mob, color_mode) end
+    -- Test occlusion only for near candidates and stop once the small draw budget
+    -- is filled. The farthest crowd used to do line-of-sight work then draw too.
+    table.sort(candidates, function(first, second) return first.depth < second.depth end)
+    local drawn = 0
+    for _, entry in ipairs(candidates) do
+        if self:_mobHasLineOfSight(session, entry.mob) then
+            self:_drawMob(bb, x, y, session, entry.mob, color_mode)
+            drawn = drawn + 1
+            if drawn >= MAX_RENDERED_MOBS then break end
+        end
+    end
 end
 
 -- The targeted block gets a Minecraft-style face outline around the crosshair.
@@ -3866,14 +3875,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.2"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.3"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.2",
+    version = "4.5.3",
     title = "Minecraft 3D",
     subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
@@ -4067,6 +4076,7 @@ return {
         MOBS_PER_KIND = MOBS_PER_KIND,
         AMBIENT_MOB_SECONDS = AMBIENT_MOB_SECONDS,
         MAX_MOBS = MAX_MOBS,
+        MAX_RENDERED_MOBS = MAX_RENDERED_MOBS,
         mobShades = mobShades,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,

@@ -1,4 +1,8 @@
-# Minecraft 3D 4.5.2
+# Minecraft 3D 4.5.3
+
+## Mob-Performance
+
+Die Welt rendert höchstens drei nahe Mobs auf einmal. Sichtlinien werden erst nach Distanzsortierung geprüft und die Suche stoppt, sobald das Mob-Budget gefüllt ist. Überflüssige pixelweise Konturen an jedem Körperteil entfallen; das reduziert die Zeichenoperationen stark. Die autonome Aktualisierung läuft im 1,25-Sekunden-Takt statt mehr als einmal pro Sekunde.
 
 ## Schatten
 
