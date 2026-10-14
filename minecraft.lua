@@ -1955,7 +1955,18 @@ function VoxelSession:lookDelta(delta_x, delta_y)
     return true
 end
 
+local function numericMoveDirection(direction)
+    if direction == "forward" then return 1 end
+    if direction == "back" then return -1 end
+    if type(direction) ~= "number" then return nil end
+    if direction > 0 then return 1 end
+    if direction < 0 then return -1 end
+    return nil
+end
+
 function VoxelSession:beginMove(direction)
+    direction = numericMoveDirection(direction)
+    if not direction then return false end
     if self.motion then return false end
     local next_x = self.player_x + math.sin(self.yaw) * WALK_DISTANCE * direction
     local next_z = self.player_z + math.cos(self.yaw) * WALK_DISTANCE * direction
@@ -2011,7 +2022,8 @@ end
 
 -- A non-animated single step, used by tests and by explicit keyboard repeats.
 function VoxelSession:move(direction)
-    if not self:beginMove(direction) then return false end
+    direction = numericMoveDirection(direction)
+    if not direction or not self:beginMove(direction) then return false end
     local motion = self.motion
     self.motion = nil
     self.live_look = false
@@ -2217,64 +2229,13 @@ function VoxelCanvas:_drawMobCuboid(bb, session, origin_x, origin_y, center_x, c
     -- limb caused hundreds of redundant E-Ink draw calls per nearby mob.
 end
 
-function VoxelCanvas:_drawMobShadow(bb, x, y, session, mob, color_mode)
-    local sun_x, sun_z, sun_y = session:sunDirection()
-    if sun_y <= 0.06 then return end
-    local stretch = math.min(0.72, 0.14 + (1 - sun_y) * 0.48)
-    local offset_x, offset_z = -sun_x * stretch, -sun_z * stretch
-    local ground = mob.y + 0.018
-    local points = {}
-    for _, offset in ipairs({ { -0.30, -0.17 }, { 0.30, -0.17 }, { 0.30 + offset_x, 0.17 + offset_z }, { -0.30 + offset_x, 0.17 + offset_z } }) do
-        local px, py = self:projectPoint(mob.x + offset[1], mob.z + offset[2], ground, session, x, y)
-        points[#points + 1] = { px, py }
-    end
-    -- A transparent-looking 25% halftone shadow reveals the terrain underneath;
-    -- drawing an opaque black polygon looked like a solid black slab on E-Ink.
-    local cols, rows = renderGridFor(self.width, self.height, MINECRAFT_RENDER_SAMPLE)
-    local cell_w, cell_h = self.width / cols, self.height / rows
-    local min_x, max_x, min_y, max_y = points[1][1], points[1][1], points[1][2], points[1][2]
-    for _, point in ipairs(points) do
-        min_x, max_x = math.min(min_x, point[1]), math.max(max_x, point[1])
-        min_y, max_y = math.min(min_y, point[2]), math.max(max_y, point[2])
-    end
-    if max_x < 0 or min_x > self.width or max_y < 0 or min_y > self.height then return end
-    local first_col, last_col = math.max(0, math.floor(min_x / cell_w)), math.min(cols - 1, math.ceil(max_x / cell_w))
-    local first_row, last_row = math.max(0, math.floor(min_y / cell_h)), math.min(rows - 1, math.ceil(max_y / cell_h))
-    local function inside(px, py)
-        local hit, previous = false, #points
-        for index = 1, #points do
-            local a, b = points[index], points[previous]
-            if ((a[2] > py) ~= (b[2] > py)) and px < (b[1] - a[1]) * (py - a[2]) / (b[2] - a[2]) + a[1] then hit = not hit end
-            previous = index
-        end
-        return hit
-    end
-    local painted = false
-    for row = first_row, last_row do
-        for column = first_col, last_col do
-            local center_x, center_y = (column + 0.5) * cell_w, (row + 0.5) * cell_h
-            if inside(center_x, center_y) and (column + row * 3) % 4 == 0 then
-                bb:paintRect(math.floor(column * cell_w), math.floor(row * cell_h), math.max(1, math.ceil(cell_w)), math.max(1, math.ceil(cell_h)), Blitbuffer.COLOR_BLACK)
-                painted = true
-            end
-        end
-    end
-    -- Tiny distant shadows still get one soft pixel instead of vanishing entirely.
-    if not painted then
-        local center_x = (points[1][1] + points[3][1]) / 2
-        local center_y = (points[1][2] + points[3][2]) / 2
-        local column = clamp(math.floor(center_x / cell_w), 0, cols - 1)
-        local row = clamp(math.floor(center_y / cell_h), 0, rows - 1)
-        bb:paintRect(math.floor(column * cell_w), math.floor(row * cell_h), math.max(1, math.ceil(cell_w)), math.max(1, math.ceil(cell_h)), Blitbuffer.COLOR_BLACK)
-    end
-end
+
 function VoxelCanvas:_drawMob(bb, x, y, session, mob, color_mode)
     local shades = mobShades(mob, color_mode, session:daylight())
     local definition = MOB_DEFS[mob.kind] or MOB_DEFS.sheep
     local body_x, body_z, base = mob.x, mob.z, mob.y
     local forward_x, forward_z = math.sin(mob.heading or 0), math.cos(mob.heading or 0)
     local side_x, side_z = -forward_z, forward_x
-    self:_drawMobShadow(bb, x, y, session, mob, color_mode)
     if mob.kind == "zombie" then
         self:_drawMobCuboid(bb, session, x, y, body_x, body_z, base + 0.04, base + 0.92, 0.27, 0.20, shades, color_mode)
         self:_drawMobCuboid(bb, session, x, y, body_x, body_z, base + 0.92, base + 1.32, 0.24, 0.22, { top = shades.face, side = shades.face, front = shades.face }, color_mode)
@@ -2398,13 +2359,6 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local pattern_values = PATTERN_VALUES
     local scene_palette = scenePaletteForTime(session:timeOfDay())
     local daylight = scene_palette.daylight
-    local sun_x, sun_z, sun_y = session:sunDirection()
-    local shadow_bucket = math.floor(session:timeOfDay() * 16)
-    local shadow_cache = self._shadow_cache
-    if not shadow_cache or shadow_cache.bucket ~= shadow_bucket or shadow_cache.world ~= world then
-        shadow_cache = { bucket = shadow_bucket, world = world, values = {} }
-        self._shadow_cache = shadow_cache
-    end
     local function torchLightAt(wx, wz, wy)
         local strongest = 0
         for _, source in ipairs(world.light_sources or {}) do
@@ -2413,22 +2367,6 @@ function VoxelCanvas:_drawScene(bb, x, y)
             if distance < TORCH_LIGHT_RADIUS then strongest = math.max(strongest, (1 - distance / TORCH_LIGHT_RADIUS) * (source.strength or 1)) end
         end
         return strongest
-    end
-    local function sunReachesVoxel(bx, bz, by, hx, hz, hy)
-        if daylight <= 0.08 or sun_y <= 0.03 then return false end
-        local key = bx .. ":" .. bz .. ":" .. by
-        local cached = shadow_cache.values[key]
-        if cached ~= nil then return cached end
-        local visible = true
-        for sample = 1, 9 do
-            local distance = sample * 0.62
-            if blockAt(world, math.floor(hx + sun_x * distance), math.floor(hz + sun_z * distance), math.floor(hy + sun_y * distance)) then
-                visible = false
-                break
-            end
-        end
-        shadow_cache.values[key] = visible
-        return visible
     end
     -- Camera directions depend on view geometry, not player position. Movement
     -- animates four redraws at the same yaw/pitch, so cache normalized rays and
@@ -2600,11 +2538,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 local material_def = MATERIALS[hit_material]
                 local face_light = top and 1 or (hit_side == 0 and 0.72 or 0.62)
                 local torch_light = torchLightAt(hx, hz, hy)
-                local sunlit = sunReachesVoxel(bx, bz, by, hx, hz, hy)
                 local daylight_light = (0.16 + daylight * 0.84) * face_light
-                -- Keep cast shadows readable but never crush block texture into
-                -- near-black slabs on either monochrome or color E-Ink panels.
-                if daylight > 0.10 and not sunlit then daylight_light = daylight_light * 0.70 end
                 local light = (material_def and material_def.emissive) and 1 or max(torch_light, daylight_light)
                 level = max(0, min(3, math.floor(level * light + 0.5)))
                 if color_mode then
@@ -3503,21 +3437,23 @@ end
 function NavButton:paintTo(bb, x, y)
     local range = self.ges_events.TapMinecraftNav[1].range
     range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
-    -- Minecraft-style 3D bevel: a black lower-right shadow, pale upper edge,
-    -- and a square face stay legible on both Carta and color E-Ink panels.
-    local shadow = math.max(2, math.floor(self.height * 0.13))
+    -- Flat full-size face and crisp border: no offset drop-shadow slab, so the
+    -- larger touch target remains clean and every painted pixel stays in bounds.
     local face = self.primary and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY
     local text_color = self.primary and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
-    bb:paintRect(x + shadow, y + shadow, self.width - shadow, self.height - shadow, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x, y, self.width - shadow, self.height - shadow, face)
-    bb:paintRect(x + 2, y + 2, math.max(1, self.width - shadow - 4), 1, self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
-    bb:paintRect(x + 2, y + 2, 1, math.max(1, self.height - shadow - 4), self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
+    local edge = self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
+    bb:paintRect(x, y, self.width, self.height, face)
+    bb:paintRect(x, y, self.width, 1, edge)
+    bb:paintRect(x, y + self.height - 1, self.width, 1, edge)
+    bb:paintRect(x, y, 1, self.height, edge)
+    bb:paintRect(x + self.width - 1, y, 1, self.height, edge)
+    bb:paintRect(x + 2, y + 2, math.max(1, self.width - 4), 1, self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
     local label = TextWidget:new{
         text = self.title, face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * 0.30))),
-        fgcolor = text_color, bold = true, max_width = math.max(scale(12), self.width - shadow - scale(8)),
+        fgcolor = text_color, bold = true, max_width = math.max(scale(12), self.width - scale(12)),
     }
     local size = label:getSize()
-    label:paintTo(bb, x + math.floor((self.width - shadow - size.w) / 2), y + math.floor((self.height - shadow - size.h) / 2))
+    label:paintTo(bb, x + math.floor((self.width - size.w) / 2), y + math.floor((self.height - size.h) / 2))
     return true
 end
 
@@ -3762,8 +3698,12 @@ local function menuButton(title, width, height, x, y, callback, primary)
 end
 
 local function buildSplashPane(state, context, width, height)
-    local button_w, button_h = math.min(math.floor(width * 0.66), 350), math.max(40, math.floor(height * 0.078))
-    local x, y, gap = math.floor((width - button_w) / 2), math.floor(height * 0.43), math.max(8, math.floor(height * 0.020))
+    local button_w = math.min(math.floor(width * 0.78), 420)
+    local button_h = math.max(46, math.min(66, math.floor(height * 0.10)))
+    local gap = math.max(8, math.floor(height * 0.024))
+    local stack_h = button_h * 3 + gap * 2
+    local x = math.floor((width - button_w) / 2)
+    local y = math.max(0, math.min(math.floor(height * 0.42), height - stack_h - 12))
     return menuPane(state, context, width, height, _("SURVIVAL EDITION"), _("Build. Explore. Survive the night."), {
         menuButton(_("PLAY WORLD"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
         menuButton(_("SETTINGS"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
@@ -3875,14 +3815,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.3"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.4"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.3",
+    version = "4.5.4",
     title = "Minecraft 3D",
     subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
@@ -4017,6 +3957,7 @@ return {
         CraftingPanel = CraftingPanel,
         Hotbar = Hotbar,
         EventLine = EventLine,
+        NavButton = NavButton,
         buildWorld = buildWorld,
         findSpawn = findSpawn,
         findVillageSite = findVillageSite,
@@ -4077,7 +4018,7 @@ return {
         AMBIENT_MOB_SECONDS = AMBIENT_MOB_SECONDS,
         MAX_MOBS = MAX_MOBS,
         MAX_RENDERED_MOBS = MAX_RENDERED_MOBS,
-        mobShades = mobShades,
+        numericMoveDirection = numericMoveDirection,
         HOTBAR_SLOTS = HOTBAR_SLOTS,
         INVENTORY_SLOTS = INVENTORY_SLOTS,
         STACK_LIMIT = STACK_LIMIT,
