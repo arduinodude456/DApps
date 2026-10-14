@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.6.1 makes the inventory reliably touch-interactive and labels its item cells. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
+Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -4454,14 +4454,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.6.1"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.6.2"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.6.1",
+    version = "4.6.2",
     title = "Minecraft 3D",
     subtitle = "Survival, Creative & Nether Portals",
     symbol = "M",
@@ -4520,12 +4520,13 @@ return {
         -- tests: overlays must repaint their own region, never the full pane.
         state.canvas, state.hotbar, state.event_line = canvas, hotbar, event_line
         state.inventory_panel, state.crafting_panel = inventory_panel, crafting_panel
-        local pane = WorldPane:new{ dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas }
+        local pane = WorldPane:new{
+            dimen = Geom:new{ w = width, h = height }, session = state.session, canvas = canvas,
+            ges_events = { TapMinecraftModal = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = 0, w = width, h = height } } } },
+        }
         -- The modal overlay sits above the world canvas. Route a screen-sized
         -- tap range through the pane as a fallback so KOReader cannot deliver
         -- the tap to a covered canvas/joystick instead of the open inventory.
-        pane.ges_events = pane.ges_events or {}
-        pane.ges_events.TapMinecraftModal = { GestureRange:new{ ges = "tap", range = Geom:new{ x = 0, y = 0, w = width, h = height } } }
         function pane:onTapMinecraftModal(first, second)
             if not state.session.inventory_open then return false end
             return inventory_panel:onTapMinecraftInventory(first, second)
