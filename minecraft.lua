@@ -1498,7 +1498,8 @@ end
 function VoxelSession:tickAmbientMobs()
     if not self.world or not self.world.mobs then return end
     self:advanceEnvironment(0.55)
-    if self.canvas then self.canvas:refreshFast() end
+    -- Keep simulating under a modal inventory, but never repaint the world over it.
+    if self.canvas and not self.inventory_open and not self.crafting_open then self.canvas:refreshFast() end
     UIManager:scheduleIn(AMBIENT_MOB_SECONDS, self._ambientMobTick)
 end
 
@@ -2622,6 +2623,16 @@ end
 
 function VoxelCanvas:refreshFast()
     if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
+    local session = self.session
+    local overlay = session and session.inventory_open and self.inventory_panel
+        or (session and session.crafting_open and self.crafting_panel)
+    if overlay then
+        local ox, oy = overlay._origin_x or 0, overlay._origin_y or 0
+        UIManager:widgetRepaint(overlay, ox, oy)
+        UIManager:setDirty(nil, "ui", Geom:new{ x = ox, y = oy, w = overlay.width, h = overlay.height })
+        if UIManager.forceRePaint then UIManager:forceRePaint() end
+        return true
+    end
     self._refresh_count = (self._refresh_count or 0) + 1
     UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
     -- Fast waveforms are intentionally used for motion, but they accumulate
@@ -3133,47 +3144,122 @@ function EventLine:refresh()
     return true
 end
 
--- Inventory screen: 36 slots in four rows, Bedrock-style tap to move stacks.
-local InventoryPanel = InputContainer:extend{ session = nil, canvas = nil, width = nil, height = nil, dimen = nil, _origin_x = 0, _origin_y = 0 }
+-- Full-screen Bedrock-style inventory overlay with the item catalogue on the
+-- left, category rail and a separate 2x2 crafting area on the right.
+local InventoryPanel = InputContainer:extend{ session = nil, canvas = nil, width = nil, height = nil, dimen = nil, _origin_x = 0, _origin_y = 0, active_category = 1 }
+local INVENTORY_CATEGORIES = {
+    { label = "Alle", icon = "stone" },
+    { label = "Blöcke", icon = "planks" },
+    { label = "Natur", icon = "leaves" },
+    { label = "Licht", icon = "torch" },
+    { label = "Erze", icon = "diamond" },
+}
 
 function InventoryPanel:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.ges_events = { TapMinecraftInventory = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 
-function InventoryPanel:headerHeight() return scale(26) end
-function InventoryPanel:footerHeight() return scale(20) end
-function InventoryPanel:slotHeight()
-    return math.max(scale(16), math.floor((self.height - self:headerHeight() - self:footerHeight() - scale(10)) / 4))
+function InventoryPanel:layout()
+    local margin = math.max(scale(5), math.floor(math.min(self.width, self.height) * 0.008))
+    local rail_w = math.max(scale(36), math.min(scale(50), math.floor(self.width * 0.075)))
+    local bar_h = math.max(scale(42), math.min(scale(58), math.floor(self.height * 0.065)))
+    local outer_x, outer_y = margin, margin
+    local outer_w = math.max(scale(120), self.width - margin * 2)
+    local outer_h = math.max(scale(100), self.height - bar_h - margin * 3)
+    local rail_x, rail_y = outer_x, outer_y
+    local left_x = rail_x + rail_w + scale(4)
+    local panels_w = math.max(scale(100), outer_w - rail_w - scale(10))
+    local left_w = math.floor(panels_w * 0.51)
+    local divider_w = math.max(3, scale(4))
+    local right_x = left_x + left_w + divider_w
+    local right_w = math.max(scale(80), outer_x + outer_w - right_x)
+    local header_h = math.max(scale(34), math.min(scale(48), math.floor(outer_h * 0.065)))
+    local search_h = math.max(scale(24), math.min(scale(34), math.floor(outer_h * 0.045)))
+    local grid_x = left_x + scale(6)
+    local grid_y = outer_y + header_h + search_h + scale(9)
+    local grid_w = math.max(scale(72), left_w - scale(20))
+    local material_count = #MATERIAL_ORDER
+    local shown_rows = math.max(1, math.ceil(material_count / 9))
+    local cell_w = math.max(scale(14), math.floor(grid_w / 9))
+    local grid_h = math.max(1, outer_y + outer_h - grid_y - scale(8))
+    local cell_h = math.max(scale(14), math.min(cell_w, math.floor(grid_h / shown_rows)))
+    local hotbar_w = math.min(math.floor(self.width * 0.62), scale(680))
+    hotbar_w = math.max(math.min(self.width - 2 * margin, scale(220)), hotbar_w)
+    local hotbar_x = math.floor((self.width - hotbar_w) / 2)
+    local hotbar_y = self.height - margin - bar_h
+    local craft_cell = math.max(scale(24), math.min(scale(72), math.floor(math.min(right_w * 0.30, outer_h * 0.12))))
+    local craft_grid = craft_cell * 2 + scale(4)
+    local craft_x = right_x + math.floor((right_w - craft_grid) / 2)
+    local craft_y = outer_y + header_h + scale(10)
+    local output_size = math.max(scale(30), math.min(scale(54), craft_cell))
+    local output_x = right_x + math.floor((right_w - output_size) / 2)
+    local output_y = outer_y + outer_h - output_size - scale(22)
+    return {
+        margin = margin, outer_x = outer_x, outer_y = outer_y, outer_w = outer_w, outer_h = outer_h,
+        rail_x = rail_x, rail_y = rail_y, rail_w = rail_w, left_x = left_x, left_w = left_w,
+        right_x = right_x, right_w = right_w, divider_w = divider_w, header_h = header_h, search_h = search_h,
+        grid_x = grid_x, grid_y = grid_y, grid_w = grid_w, cell_w = cell_w, cell_h = cell_h,
+        material_rows = shown_rows, hotbar_x = hotbar_x, hotbar_y = hotbar_y, hotbar_w = hotbar_w,
+        bar_h = bar_h, craft_cell = craft_cell, craft_grid = craft_grid, craft_x = craft_x, craft_y = craft_y,
+        output_x = output_x, output_y = output_y, output_size = output_size,
+    }
 end
-function InventoryPanel:slotWidth() return (self.width - scale(8)) / 9 end
-function InventoryPanel:mainGridY() return self:headerHeight() + scale(2) end
-function InventoryPanel:hotbarY() return self:mainGridY() + self:slotHeight() * 3 + scale(4) end
+
+function InventoryPanel:visibleMaterials()
+    local result = {}
+    for _, material in ipairs(MATERIAL_ORDER) do
+        local include = self.active_category == 1 or self.active_category == 2
+        if self.active_category == 3 then
+            include = material:find("wood", 1, true) or material:find("leaves", 1, true)
+                or material == "grass" or material == "sand" or material == "water" or material == "wheat"
+                or material == "cactus" or material == "dead_bush"
+        elseif self.active_category == 4 then
+            include = material == "torch" or material == "glass" or material:find("planks", 1, true)
+                or material == "bricks" or material == "crafting_table" or material == "furnace"
+        elseif self.active_category == 5 then
+            include = material == "coal" or material == "iron" or material == "gold" or material == "diamond" or material == "redstone"
+        end
+        if include then result[#result + 1] = material end
+    end
+    return result
+end
 
 function InventoryPanel:hitTest(local_x, local_y)
-    local header_h, footer_h = self:headerHeight(), self:footerHeight()
-    if local_y < header_h then
-        local button_w = math.max(scale(30), math.floor((self.width - scale(12)) / 3))
-        if local_x >= self.width - scale(4) - button_w and local_y > scale(2) then
-            return { kind = "button", id = "close" }
+    local layout = self:layout()
+    if local_x >= self.width - layout.margin - scale(42) and local_y <= layout.outer_y + layout.header_h then return { kind = "close" } end
+    if local_x >= layout.rail_x and local_x < layout.rail_x + layout.rail_w then
+        for category = 1, #INVENTORY_CATEGORIES do
+            local tab_y = layout.rail_y + scale(6) + (category - 1) * (layout.rail_w + scale(5))
+            if local_y >= tab_y and local_y < tab_y + layout.rail_w then return { kind = "category", category = category } end
         end
-        if local_x >= self.width - scale(8) - button_w * 2 and local_y > scale(2) then
-            return { kind = "button", id = "craft" }
-        end
-        return { kind = "header" }
     end
-    if local_y >= self.height - footer_h then return { kind = "footer" } end
-    local slot_h, slot_w = self:slotHeight(), self:slotWidth()
-    local grid_y = self:mainGridY()
-    if local_y >= grid_y and local_y < grid_y + slot_h * 3 then
-        local column = clamp(math.floor((local_x - scale(4)) / slot_w) + 1, 1, 9)
-        local row = clamp(math.floor((local_y - grid_y) / slot_h) + 1, 1, 3)
-        return { kind = "slot", slot = 9 + (row - 1) * 9 + column, row = row, column = column }
-    elseif local_y >= self:hotbarY() and local_y < self:hotbarY() + slot_h then
-        local column = clamp(math.floor((local_x - scale(4)) / slot_w) + 1, 1, 9)
-        return { kind = "slot", slot = column, row = 4, column = column }
+    if local_x >= layout.right_x and local_y >= layout.outer_y and local_y < layout.outer_y + layout.header_h then
+        return { kind = "craft" }
+    end
+    if local_x >= layout.hotbar_x and local_x < layout.hotbar_x + layout.hotbar_w
+        and local_y >= layout.hotbar_y and local_y < layout.hotbar_y + layout.bar_h then
+        local slot_w = layout.hotbar_w / HOTBAR_SLOTS
+        return { kind = "hotbar", slot = clamp(math.floor((local_x - layout.hotbar_x) / slot_w) + 1, 1, HOTBAR_SLOTS) }
+    end
+    if local_x >= layout.grid_x and local_x < layout.grid_x + layout.grid_w
+        and local_y >= layout.grid_y and local_y < layout.grid_y + layout.material_rows * layout.cell_h then
+        local column = math.floor((local_x - layout.grid_x) / layout.cell_w)
+        local row = math.floor((local_y - layout.grid_y) / layout.cell_h)
+        local material = self:visibleMaterials()[row * 9 + column + 1]
+        if material then return { kind = "material", material = material } end
     end
     return { kind = "empty" }
+end
+
+local function paintInventorySearchIcon(bb, x, y, size)
+    local stroke = math.max(2, math.floor(size * 0.14))
+    local ring = math.max(4, math.floor(size * 0.62))
+    bb:paintRect(x, y, ring, stroke, Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(x, y + ring - stroke, ring, stroke, Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(x, y, stroke, ring, Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(x + ring - stroke, y, stroke, ring, Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(x + ring - stroke, y + ring - stroke, size - ring + stroke, stroke, Blitbuffer.COLOR_DARK_GRAY)
 end
 
 function InventoryPanel:paintTo(bb, x, y)
@@ -3182,85 +3268,111 @@ function InventoryPanel:paintTo(bb, x, y)
     if not session or not session.inventory_open then return true end
     local range = self.ges_events.TapMinecraftInventory[1].range
     range.x, range.y, range.w, range.h = x, y, self.width, self.height
-    local header_h, footer_h = self:headerHeight(), self:footerHeight()
-    local slot_h, slot_w = self:slotHeight(), self:slotWidth()
-    bb:paintRect(x, y, self.width, self.height, Blitbuffer.COLOR_BLACK)
-    bb:paintRect(x + 3, y + 3, self.width - 6, self.height - 6, Blitbuffer.COLOR_WHITE)
-    bb:paintRect(x + 3, y + 3, self.width - 6, header_h, Blitbuffer.COLOR_DARK_GRAY)
-    bb:paintRect(x + 5, y + header_h + 2, self.width - 10, self.height - header_h - footer_h - 5, Blitbuffer.COLOR_LIGHT_GRAY)
-    local title = TextWidget:new{
-        text = _("INVENTORY") .. "  ·  " .. tostring(session.used_slots) .. "/" .. tostring(INVENTORY_SLOTS),
-        face = Font:getFace("cfont", math.max(scale(8), scale(10))),
-        fgcolor = Blitbuffer.COLOR_BLACK,
-        bold = true,
-        max_width = math.max(scale(40), self.width - scale(70)),
-    }
-    title:paintTo(bb, x + scale(5), y + scale(4))
-    local button_w = math.max(scale(30), math.floor((self.width - scale(12)) / 3))
-    local button_h = header_h - scale(6)
-    local craft_x = self.width - scale(8) - button_w * 2
-    local close_x = self.width - scale(4) - button_w
-    bb:paintRect(x + craft_x, y + scale(3), button_w, button_h, Blitbuffer.COLOR_LIGHT_GRAY)
-    bb:paintRect(x + close_x, y + scale(3), button_w, button_h, Blitbuffer.COLOR_BLACK)
-    local craft_label = TextWidget:new{
-        text = _("Craft"),
-        face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
-        fgcolor = Blitbuffer.COLOR_BLACK,
-        max_width = button_w - scale(4),
-    }
-    craft_label:paintTo(bb, x + craft_x + scale(3), y + scale(6))
-    local close_label = TextWidget:new{
-        text = _("Done"),
-        face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
-        fgcolor = Blitbuffer.COLOR_WHITE,
-        max_width = button_w - scale(4),
-    }
-    close_label:paintTo(bb, x + close_x + scale(4), y + scale(6))
-    local grid_y = self:mainGridY()
-    local hotbar_y = self:hotbarY()
-    -- Bedrock-style layout: three rows of storage, a visible separator, then
-    -- the nine hotbar slots at the bottom.
-    bb:paintRect(x + scale(3), y + hotbar_y - scale(2), self.width - scale(6), scale(2), Blitbuffer.COLOR_DARK_GRAY)
-    for visual = 1, INVENTORY_SLOTS do
-        local slot, column, row, sy_base
-        if visual <= 27 then
-            slot = visual + 9
-            column = (visual - 1) % 9
-            row = math.floor((visual - 1) / 9)
-            sy_base = grid_y
-        else
-            slot, column, row, sy_base = visual - 27, (visual - 28) % 9, 0, hotbar_y
+    local L = self:layout()
+    -- Leave a slim strip of the world around the opaque panels, as in Bedrock.
+    bb:paintRect(x + L.outer_x, y + L.outer_y, L.outer_w, L.outer_h, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + L.left_x, y + L.outer_y + 2, L.left_w, L.outer_h - 4, Blitbuffer.COLOR_LIGHT_GRAY)
+    bb:paintRect(x + L.right_x, y + L.outer_y + 2, L.right_w, L.outer_h - 4, Blitbuffer.COLOR_LIGHT_GRAY)
+    bb:paintRect(x + L.left_x, y + L.outer_y + L.header_h, L.left_w, L.search_h, Blitbuffer.COLOR_WHITE)
+    paintInventorySearchIcon(bb, x + L.left_x + scale(9), y + L.outer_y + scale(9), math.max(scale(18), L.header_h - scale(14)))
+    local category_title = self.active_category == 1 and _("Alle Gegenstände") or _(INVENTORY_CATEGORIES[self.active_category].label)
+    local heading = TextWidget:new{ text = category_title, face = Font:getFace("cfont", math.max(scale(10), math.floor(L.header_h * 0.40))), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = L.left_w - scale(56) }
+    heading:paintTo(bb, x + L.left_x + scale(48), y + L.outer_y + math.floor((L.header_h - scale(12)) / 2))
+    local search_y = y + L.outer_y + L.header_h
+    bb:paintRect(x + L.left_x + scale(5), search_y + scale(3), L.left_w - scale(10), L.search_h - scale(5), Blitbuffer.COLOR_DARK_GRAY)
+    paintInventorySearchIcon(bb, x + L.left_x + scale(10), search_y + scale(7), math.max(scale(12), L.search_h - scale(13)))
+    local search_label = TextWidget:new{ text = _("Suchen"), face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(L.search_h * 0.34))), fgcolor = Blitbuffer.COLOR_WHITE, max_width = L.left_w - scale(38) }
+    search_label:paintTo(bb, x + L.left_x + scale(34), search_y + scale(5))
+
+    -- Category rail, with block-texture pictograms instead of fragile unicode glyphs.
+    for category, definition in ipairs(INVENTORY_CATEGORIES) do
+        local tab_y = L.rail_y + scale(6) + (category - 1) * (L.rail_w + scale(5))
+        local fill = category == self.active_category and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_DARK_GRAY
+        bb:paintRect(x + L.rail_x, y + tab_y, L.rail_w, L.rail_w, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(x + L.rail_x + 2, y + tab_y + 2, L.rail_w - 4, L.rail_w - 4, fill)
+        local icon = math.max(scale(12), math.floor(L.rail_w * 0.55))
+        paintBlockIcon(bb, x + L.rail_x + math.floor((L.rail_w - icon) / 2), y + tab_y + math.floor((L.rail_w - icon) / 2), icon, definition.icon, session)
+    end
+    -- Small chest button at the bottom of the category rail, mirroring Bedrock.
+    local chest_y = y + L.outer_y + L.outer_h - L.rail_w - scale(8)
+    bb:paintRect(x + L.rail_x, chest_y, L.rail_w, L.rail_w, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + L.rail_x + 3, chest_y + 3, L.rail_w - 6, L.rail_w - 6, Blitbuffer.COLOR_LIGHT_GRAY)
+    bb:paintRect(x + L.rail_x + 9, chest_y + 12, L.rail_w - 18, L.rail_w - 21, Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(x + L.rail_x + math.floor(L.rail_w / 2) - 2, chest_y + 14, 4, 5, Blitbuffer.COLOR_WHITE)
+
+    -- Scroll-like item grid. All catalog blocks are shown; owned counts stay
+    -- accurate, while unowned entries remain browse-only rather than granting items.
+    local materials = self:visibleMaterials()
+    for index, material in ipairs(materials) do
+        local row, column = math.floor((index - 1) / 9), (index - 1) % 9
+        local sx = x + L.grid_x + column * L.cell_w
+        local sy = y + L.grid_y + row * L.cell_h
+        local cell_w, cell_h = math.max(1, L.cell_w - scale(2)), math.max(1, L.cell_h - scale(2))
+        local owned_slot, count = nil, 0
+        for slot = 1, INVENTORY_SLOTS do
+            local item = session.slots[slot]
+            if item and item.material == material then owned_slot, count = owned_slot or slot, count + item.count end
         end
-        local sx = x + scale(4) + math.floor(column * slot_w)
-        local sy = y + sy_base + (row * slot_h)
-        local cell_w = math.max(scale(8), math.floor(slot_w) - scale(2))
-        local cell_h = math.max(scale(8), slot_h - scale(2))
-        local item = session.slots[slot]
-        paintMinecraftSlot(bb, sx, sy, cell_w, cell_h, session, item, slot == session.selected_slot, slot, false)
+        local selected = owned_slot == session.selected_slot
+        paintMinecraftSlot(bb, sx, sy, cell_w, cell_h, session, nil, selected, nil, true)
+        local icon_size = math.max(scale(8), math.min(cell_w - scale(7), cell_h - scale(7)))
+        paintBlockIcon(bb, sx + math.floor((cell_w - icon_size) / 2), sy + math.floor((cell_h - icon_size) / 2), icon_size, material, session)
+        if count > 0 then
+            local count_label = TextWidget:new{ text = tostring(count), face = Font:getFace("smallinfofont", math.max(scale(6), scale(7))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true }
+            local count_size = count_label:getSize()
+            count_label:paintTo(bb, sx + cell_w - count_size.w - scale(2), sy + cell_h - count_size.h - scale(1))
+        end
     end
-    local status
-    if session.held then
-        status = _("In hand: ") .. materialLabel(session.held.material) .. " ×" .. session.held.count .. " — " .. _("Tap a slot to place it")
-    else
-        status = _("Tap a stack to pick it up; select the hotbar above")
+    -- A narrow scrollbar visually anchors the catalogue column.
+    local track_x = x + L.left_x + L.left_w - scale(5)
+    bb:paintRect(track_x, y + L.grid_y, scale(3), math.max(scale(20), L.material_rows * L.cell_h), Blitbuffer.COLOR_DARK_GRAY)
+    bb:paintRect(track_x, y + L.grid_y, scale(3), math.max(scale(18), math.floor(L.cell_h * 1.6)), Blitbuffer.COLOR_WHITE)
+
+    -- Right-hand crafting area: 2×2 grid, down-arrow, and result slot.
+    local craft_title = TextWidget:new{ text = _("Handwerk"), face = Font:getFace("cfont", math.max(scale(11), math.floor(L.header_h * 0.42))), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = L.right_w - scale(16) }
+    local title_size = craft_title:getSize()
+    craft_title:paintTo(bb, x + L.right_x + math.floor((L.right_w - title_size.w) / 2), y + L.outer_y + scale(12))
+    for row = 0, 1 do
+        for column = 0, 1 do
+            local sx = x + L.craft_x + column * (L.craft_cell + scale(4))
+            local sy = y + L.craft_y + row * (L.craft_cell + scale(4))
+            paintMinecraftSlot(bb, sx, sy, L.craft_cell, L.craft_cell, session, nil, false, nil, true)
+        end
     end
-    local footer = TextWidget:new{
-        text = status,
-        face = Font:getFace("smallinfofont", math.max(scale(7), scale(8))),
-        fgcolor = Blitbuffer.COLOR_BLACK,
-        max_width = self.width - scale(8),
-    }
-    footer:paintTo(bb, x + scale(4), y + self.height - footer_h + scale(2))
+    local arrow_cx = x + L.right_x + math.floor(L.right_w / 2)
+    local arrow_y = y + L.outer_y + math.floor(L.outer_h * 0.56)
+    local arrow_w = math.max(scale(12), math.floor(L.right_w * 0.045))
+    bb:paintRect(arrow_cx - math.floor(arrow_w / 4), arrow_y, math.max(2, math.floor(arrow_w / 2)), math.max(scale(22), math.floor(L.outer_h * 0.055)), Blitbuffer.COLOR_LIGHT_GRAY)
+    bb:paintRect(arrow_cx - math.floor(arrow_w / 2), arrow_y + math.max(scale(14), math.floor(L.outer_h * 0.035)), arrow_w, math.max(scale(8), math.floor(L.outer_h * 0.018)), Blitbuffer.COLOR_LIGHT_GRAY)
+    paintMinecraftSlot(bb, x + L.output_x, y + L.output_y, L.output_size, L.output_size, session, nil, false, nil, true)
+    local close_x, close_y = x + self.width - L.margin - scale(38), y + L.outer_y + scale(2)
+    bb:paintRect(close_x, close_y, scale(38), L.header_h - scale(3), Blitbuffer.COLOR_DARK_GRAY)
+    local close_label = TextWidget:new{ text = "X", face = Font:getFace("cfont", math.max(scale(12), math.floor(L.header_h * 0.48))), fgcolor = Blitbuffer.COLOR_WHITE, bold = true }
+    close_label:paintTo(bb, close_x + scale(12), close_y + scale(1))
+
+    -- Nine persistent hotbar slots float at bottom center like the reference.
+    local slot_w = L.hotbar_w / HOTBAR_SLOTS
+    bb:paintRect(x + L.hotbar_x, y + L.hotbar_y, L.hotbar_w, L.bar_h, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x + L.hotbar_x + 3, y + L.hotbar_y + 3, L.hotbar_w - 6, L.bar_h - 6, Blitbuffer.COLOR_LIGHT_GRAY)
+    for slot = 1, HOTBAR_SLOTS do
+        local sx = x + L.hotbar_x + math.floor((slot - 1) * slot_w) + scale(2)
+        local right = x + L.hotbar_x + math.floor(slot * slot_w) - scale(1)
+        paintMinecraftSlot(bb, sx, y + L.hotbar_y + scale(3), math.max(scale(14), right - sx), L.bar_h - scale(6), session, session.slots[slot], slot == session.selected_slot, nil, true)
+    end
     return true
 end
 
 function InventoryPanel:refresh()
     if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
+    if not (self.session and self.session.inventory_open) then
+        if self.canvas then self.canvas:refreshFast() end
+        if self.hotbar then self.hotbar:refresh() end
+        if self.event_line then self.event_line:refresh() end
+        return true
+    end
     UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
     UIManager:setDirty(nil, "ui", Geom:new{ x = self._origin_x, y = self._origin_y, w = self.width, h = self.height })
     if UIManager.forceRePaint then UIManager:forceRePaint() end
-    if self.hotbar then self.hotbar:refresh() end
-    if self.event_line then self.event_line:refresh() end
     return true
 end
 
@@ -3271,16 +3383,27 @@ function InventoryPanel:onTapMinecraftInventory(first, second)
     local pos = gesture and gesture.pos
     if not pos then return true end
     local hit = self:hitTest(pos.x - self._origin_x, pos.y - self._origin_y)
-    if hit.kind == "button" and hit.id == "close" then
+    if hit.kind == "close" then
         session:closeOverlays()
-    elseif hit.kind == "button" and hit.id == "craft" then
+        if self.canvas then self.canvas:refreshFast() end
+    elseif hit.kind == "craft" then
         session:openCrafting()
         if self.crafting_panel then self.crafting_panel:refresh() end
-    elseif hit.kind == "slot" then
-        session:pickSlot(hit.slot)
+        return true
+    elseif hit.kind == "category" then
+        self.active_category = hit.category
+    elseif hit.kind == "hotbar" then
+        session:selectSlot(hit.slot)
+    elseif hit.kind == "material" then
+        local found
+        for slot = 1, INVENTORY_SLOTS do
+            local item = session.slots[slot]
+            if item and item.material == hit.material then found = slot; break end
+        end
+        if found then session:pickSlot(found)
+        else session.last_event = _("You don't have this item yet.") .. " " .. materialLabel(hit.material) end
     end
     self:refresh()
-    if self.crafting_panel then self.crafting_panel:refresh() end
     return true
 end
 
@@ -3813,14 +3936,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.5"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.6"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.5",
+    version = "4.5.6",
     title = "Minecraft 3D",
     subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
@@ -3859,7 +3982,7 @@ return {
         local canvas = VoxelCanvas:new{ width = canvas_w, height = canvas_h, session = state.session }
         local hotbar = Hotbar:new{ width = canvas_w, height = hotbar_h, session = state.session }
         local event_line = EventLine:new{ width = canvas_w, height = px(13), session = state.session }
-        local inventory_panel = InventoryPanel:new{ width = canvas_w, height = canvas_h, session = state.session, canvas = canvas }
+        local inventory_panel = InventoryPanel:new{ width = width, height = height, session = state.session, canvas = canvas }
         local crafting_panel = CraftingPanel:new{ width = canvas_w, height = canvas_h, session = state.session, canvas = canvas }
         inventory_panel.crafting_panel = crafting_panel
         inventory_panel.hotbar = hotbar
@@ -3867,12 +3990,14 @@ return {
         crafting_panel.inventory_panel = inventory_panel
         crafting_panel.event_line = event_line
         hotbar.overlap_offset = { margin, hotbar_y }
-        inventory_panel.overlap_offset = { margin, canvas_y }
+        inventory_panel.overlap_offset = { 0, 0 }
         crafting_panel.overlap_offset = { margin, canvas_y }
         state.session.canvas = canvas
         state.session:startAmbientMobs()
         canvas.hotbar = hotbar
         canvas.event_line = event_line
+        canvas.inventory_panel = inventory_panel
+        canvas.crafting_panel = crafting_panel
         -- Keep the widgets reachable for refresh calls and for the regression
         -- tests: overlays must repaint their own region, never the full pane.
         state.canvas, state.hotbar, state.event_line = canvas, hotbar, event_line
@@ -3921,7 +4046,6 @@ return {
             NavButton:new{ title = _("Menu"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
             hotbar,
-            inventory_panel,
             crafting_panel,
             -- Keep the touch controls last in the overlap stack. Inventory and
             -- crafting repaint the canvas-sized region while open; drawing the
@@ -3942,6 +4066,9 @@ return {
             end, overlap_offset = { margin + (button_w + gap) * 5, controls_y } },
             event_line,
             TextWidget:new{ text = hint_text, face = Font:getFace("smallinfofont", px(8)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = canvas_w, overlap_offset = { margin, height - px(14) } },
+            -- The inventory is the final opaque layer: mob and canvas repaints
+            -- cannot appear over it while it is open.
+            inventory_panel,
         }
         event_line.overlap_offset = { margin, controls_y + controls_h + px(3) }
         return pane
