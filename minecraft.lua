@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.7.0 adds readable lighting, calmer textures, partial mob refreshes and a compact touch HUD. Version 4.6.3 routes taps arriving at the world surface to the open inventory and blocks actions through covered controls. Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
+Version 4.7.0 adds readable lighting, calmer textures, partial mob refreshes and a compact touch HUD. Version 4.7.1 adds a strict black/white E-Ink camera preview with the same ray count. Version 4.6.3 routes taps arriving at the world surface to the open inventory and blocks actions through covered controls. Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -2891,7 +2891,8 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 else bb:paintRect(rx, ry, rr - rx, rb - ry, rect.ink) end
             end
         end
-        local color_mode = session.color_enabled and colorRenderingEnabled()
+        local motion_preview = session.live_look or session.motion
+        local color_mode = session.color_enabled and colorRenderingEnabled() and not motion_preview
         self:_drawMobs(bb, x, y, session, color_mode, self._mob_selected)
         self._mob_selected = nil
         local center_x, center_y = x + math.floor(width / 2), y + math.floor(height / 2)
@@ -2904,9 +2905,12 @@ function VoxelCanvas:_drawScene(bb, x, y)
     bb:paintRect(x, y, width, height, Blitbuffer.COLOR_WHITE)
     if not session then return end
 
-    local color_mode = session.color_enabled and colorRenderingEnabled()
-    -- Keep every frame, including settled frames after pan/movement, on the
-    -- fluid E-Ink preview grid. There is intentionally no high-res switch.
+    -- Fast E-Ink waveforms smear intermediate gray/RGB pixels. During a camera
+    -- gesture render the exact same ray grid as a strict two-ink preview:
+    -- identical geometry and ray count, but much cleaner transitions. The
+    -- settled frame immediately returns to the normal color/gray material path.
+    local motion_preview = session.live_look or session.motion
+    local color_mode = session.color_enabled and colorRenderingEnabled() and not motion_preview
     local sample = MINECRAFT_RENDER_SAMPLE
     -- Geometry uses the same low-resolution grid in both display modes;
     -- native material tones do not require additional terrain rays.
@@ -3117,9 +3121,17 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 local tone = max(0, min(15, floor((texture_tone * light - 0.30) / 0.83 * 15 + 0.5)))
                 if color_mode then
                     ink = level == 0 and "black" or SURFACE_TONES[texture_material].rgb[tone + 1]
+                elseif motion_preview then
+                    -- Avoid gray buildup during fast waveform updates. Keep
+                    -- texture detail only as a stable silhouette/value split.
+                    ink = level == 0 or tone < 8 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
                 else
                     ink = level == 0 and Blitbuffer.COLOR_BLACK or SURFACE_TONES[texture_material].mono[tone + 1]
                 end
+            elseif motion_preview then
+                -- A white sky and black ground/horizon are reliable on fast
+                -- waveforms and avoid the gray wash seen while panning.
+                ink = dir_y < 0 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
             elseif color_mode then
                 local sky_position = ry / math.max(1, rows - 1)
                 if dir_y < 0 then
@@ -3158,6 +3170,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         rects = terrain_spans, world = world, block_flat = world.block_flat, light_sources = world.light_sources,
         x = x, y = y, width = width, height = height, player_x = player_x, player_z = player_z,
         yaw = yaw, pitch = pitch, jump_offset = session.jump_offset or 0, color_mode = color_mode,
+        motion_preview = motion_preview,
         tick_bucket = floor((session.world_ticks or 0) / 8), time_bucket = floor((session:timeOfDay() or 0) * 24),
     }
     self:_drawMobs(bb, x, y, session, color_mode)
@@ -3240,7 +3253,9 @@ function VoxelCanvas:refreshFast()
     end
     self._refresh_count = (self._refresh_count or 0) + 1
     UIManager:widgetRepaint(self, self._origin_x, self._origin_y)
-    local live_preview = self.session and self.session.live_look
+    local live_preview = self.session and (self.session.live_look or self.session.motion)
+    -- Keep the fast waveform for the same frame cadence; the preview itself
+    -- is now strict black/white, so no slower waveform is needed.
     local waveform = live_preview and "fast" or (self._refresh_count % 2 == 0 and "ui" or "fast")
     UIManager:setDirty(nil, waveform, Geom:new{
         x = self._origin_x, y = self._origin_y, w = self.width, h = self.height,
@@ -4629,14 +4644,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.7.0"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.7.1"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.7.0",
+    version = "4.7.1",
     title = "Minecraft 3D",
     subtitle = "Survival, Creative & Nether Portals",
     symbol = "M",

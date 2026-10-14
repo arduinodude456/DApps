@@ -190,4 +190,17 @@ session.mode, session.difficulty = "Survival", "Peaceful"
 assert(#canvas:_visibleMobs(session) == 0, "Peaceful darf keine feindlichen Mobs anzeigen")
 session.difficulty = "Normal"
 assert(#canvas:_visibleMobs(session) == 1, "Survival muss nächtliche Zombies behalten")
-print("minecraft-performance-4.7.0-ok")
+-- Camera motion uses the same sample grid but emits only strict black/white
+-- inks, so fast E-Ink transitions do not accumulate gray/color blur.
+world.mobs = {}
+session.live_look = true
+resetDraws()
+canvas:paintTo(buffer, 13, 7)
+assert(#painted > 0, "Bewegungsvorschau muss weiterhin denselben Renderpfad zeichnen")
+for _, rect in ipairs(painted) do
+    assert(not rect.rgb and (rect.ink == "black" or rect.ink == "white"),
+        "Bewegungsvorschau darf auf schnellen E-Ink-Waveforms nur Schwarz/Weiß schreiben")
+end
+session.live_look = false
+
+print("minecraft-performance-4.7.1-ok")
