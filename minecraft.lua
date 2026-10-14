@@ -392,6 +392,15 @@ local MATERIALS = {
     dead_bush = { label = _("Dead Bush"), color = "yellow", rgb = { 148, 109, 58 }, pattern = "dead_bush" },
     wheat = { label = _("Wheat"), color = "yellow", rgb = { 208, 190, 90 }, pattern = "wheat" },
     torch = { label = _("Torch"), color = "yellow", rgb = { 255, 185, 48 }, pattern = "torch", emissive = true },
+    netherrack = { label = _("Netherrack"), color = "red", rgb = { 137, 54, 49 }, pattern = "netherrack", drop = "netherrack" },
+    soul_sand = { label = _("Soul Sand"), color = "red", rgb = { 83, 55, 45 }, pattern = "soul_sand" },
+    basalt = { label = _("Basalt"), color = "black", rgb = { 75, 73, 78 }, pattern = "basalt" },
+    nether_bricks = { label = _("Nether Bricks"), color = "red", rgb = { 83, 34, 38 }, pattern = "nether_bricks" },
+    nether_quartz_ore = { label = _("Nether Quartz Ore"), color = "white", rgb = { 221, 197, 181 }, pattern = "nether_quartz", drop = "nether_quartz_ore" },
+    glowstone = { label = _("Glowstone"), color = "yellow", rgb = { 245, 190, 82 }, pattern = "glowstone", emissive = true },
+    magma_block = { label = _("Magma Block"), color = "red", rgb = { 191, 67, 28 }, pattern = "magma" },
+    portal = { label = _("Nether Portal"), color = "magenta", rgb = { 111, 38, 148 }, pattern = "portal", emissive = true },
+    flint_and_steel = { label = _("Flint and Steel"), color = "black", rgb = { 105, 105, 108 }, pattern = "flint_and_steel", tool = true },
 }
 
 -- Display and crafting order: natural blocks, ores, wood, foliage, crafted blocks.
@@ -402,6 +411,7 @@ local MATERIAL_ORDER = {
     "wood", "wood_birch", "wood_spruce", "wood_jungle", "wood_acacia",
     "leaves", "leaves_birch", "leaves_spruce", "leaves_jungle", "leaves_acacia",
     "planks", "glass", "crafting_table", "furnace", "cactus", "dead_bush", "wheat", "torch",
+    "netherrack", "soul_sand", "basalt", "nether_bricks", "nether_quartz_ore", "glowstone", "magma_block", "flint_and_steel",
 }
 
 local MATERIAL_COLORS, MATERIAL_TARGET_RGB, MATERIAL_LABELS, MATERIAL_PATTERNS, DROPS = {}, {}, {}, {}, {}
@@ -483,6 +493,11 @@ local MATERIAL_MIX = {
     planks = { "red", "green" }, bricks = { "red", "green" },
     crafting_table = { "red", "green" }, dead_bush = { "black", "yellow" },
     torch = { "red", "yellow" },
+    netherrack = { "black", "red" }, soul_sand = { "black", "red" },
+    basalt = { "black", "white" }, nether_bricks = { "black", "red" },
+    nether_quartz_ore = { "red", "white" }, glowstone = { "red", "yellow" },
+    magma_block = { "red", "yellow" }, portal = { "black", "magenta" },
+    flint_and_steel = { "black", "white" },
 }
 local function paletteMixForMaterial(material, level)
     local shades = material_mix_cache[material]
@@ -585,6 +600,15 @@ local PATTERNS = {
     dead_bush = "10001100" .. "01000100" .. "00100100" .. "01010101" .. "00101010" .. "01000100" .. "00100010" .. "01000100",
     wheat = "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131",
     torch = "00010000" .. "00130000" .. "00010000" .. "00010000" .. "00010000" .. "00010000" .. "00010000" .. "00010000",
+    netherrack = "12111211" .. "21112112" .. "11211121" .. "12121111" .. "21111211" .. "11212111" .. "12111212" .. "21112111",
+    soul_sand = "11011101" .. "11101110" .. "10111011" .. "01110111" .. "11011101" .. "11101110" .. "10111011" .. "01110111",
+    basalt = BASE_STONE_PATTERN,
+    nether_bricks = "11111111" .. "22222222" .. "11111211" .. "22222222" .. "11111111" .. "21122222" .. "11111111" .. "22222212",
+    nether_quartz = orePattern(3),
+    glowstone = "32323232" .. "23232323" .. "32333232" .. "23332323" .. "32323232" .. "23233223" .. "32323232" .. "23232323",
+    magma = "11031103" .. "10311031" .. "03110311" .. "31103110" .. "11031103" .. "10311031" .. "03110311" .. "31103110",
+    portal = "01232120" .. "12321201" .. "23212012" .. "32120123" .. "21201232" .. "12012321" .. "20123212" .. "01232120",
+    flint_and_steel = "00000000" .. "00011000" .. "00122100" .. "01233210" .. "00122100" .. "00011000" .. "00000000" .. "00000000",
 }
 
 local PATTERN_VALUES = {}
@@ -615,6 +639,7 @@ local RECIPES = {
     { result = { "sandstone", 1 }, ingredients = { { "sand", 4 } } },
     { result = { "bricks", 2 }, ingredients = { { "clay", 4 }, { "coal", 1 } } },
     { result = { "obsidian", 1 }, ingredients = { { "water", 1 }, { "lava", 1 } } },
+    { result = { "flint_and_steel", 1 }, ingredients = { { "iron", 1 }, { "gravel", 1 } } },
     { result = { "ice", 2 }, ingredients = { { "water", 1 }, { "snow", 1 } } },
     { result = { "gravel", 2 }, ingredients = { { "cobblestone", 2 } } },
 }
@@ -1274,6 +1299,18 @@ local function rawBlockAt(world, x, z, level)
     local extra = world.extra_blocks and world.extra_blocks[key]
     if extra then return extra end
     if world.removed_blocks and world.removed_blocks[key] then return nil end
+    if world.dimension == "nether" then
+        local height = world.heights[z + 1][x + 1] or 0
+        if level == 0 then return "bedrock" end
+        if level == MAX_COLUMN_HEIGHT - 1 then return "bedrock" end
+        if level == MAX_COLUMN_HEIGHT - 2 then return "netherrack" end
+        if level == MAX_COLUMN_HEIGHT - 3 and blockHash3(world.seed or 1, x, z, level) % 23 == 0 then return "glowstone" end
+        if level >= height then return nil end
+        if level == height - 1 then return world.materials[z + 1][x + 1] or "netherrack" end
+        if level >= height - 5 and blockHash3(world.seed or 1, x, z, level) % 71 < 4 then return "nether_quartz_ore" end
+        if level == height - 2 and blockHash3(world.seed or 1, x, z, level) % 53 == 0 then return "magma_block" end
+        return "netherrack"
+    end
     local height = world.heights[z + 1][x + 1] or 0
     if level >= height then return nil end
     local surface = world.materials[z + 1][x + 1] or "grass"
@@ -1366,6 +1403,184 @@ local function blockAt(world, x, z, level)
     end
     return rawBlockAt(world, x, z, level)
 end
+
+local function frameBlockCoordinates(frame, across, up)
+    if frame.axis == "x" then return frame.start + across, frame.plane, frame.base_y + up end
+    return frame.plane, frame.start + across, frame.base_y + up
+end
+
+local function frameIsComplete(world, frame)
+    for across = 0, 3 do
+        for up = 0, 4 do
+            local x, z, y = frameBlockCoordinates(frame, across, up)
+            if across == 0 or across == 3 or up == 0 or up == 4 then
+                if blockAt(world, x, z, y) ~= "obsidian" then return false end
+            elseif blockAt(world, x, z, y) then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+local function findPortalFrame(world, target)
+    if type(target) ~= "table" or type(target.x) ~= "number" or type(target.z) ~= "number" or type(target.y) ~= "number" then return nil end
+    if blockAt(world, target.x, target.z, target.y) ~= "obsidian" then return nil end
+    local candidates = {}
+    for _, axis in ipairs({ "x", "z" }) do
+        local coordinate = axis == "x" and target.x or target.z
+        local plane = axis == "x" and target.z or target.x
+        for start = coordinate - 3, coordinate do
+            local across = coordinate - start
+            for base_y = target.y - 4, target.y do
+                local up = target.y - base_y
+                local frame = { axis = axis, plane = plane, start = start, base_y = base_y }
+                if across >= 0 and across <= 3 and up >= 0 and up <= 4
+                    and (across == 0 or across == 3 or up == 0 or up == 4)
+                    and frameIsComplete(world, frame) then
+                    candidates[#candidates + 1] = frame
+                end
+            end
+        end
+    end
+    return candidates[1]
+end
+
+local function portalCellCoordinates(frame, across, up)
+    return frameBlockCoordinates(frame, across + 1, up + 1)
+end
+
+local function activatePortalFrame(world, frame)
+    if not frame or not frameIsComplete(world, frame) then return false end
+    if world.portal then
+        local old = world.portal.frame
+        if old and old.axis == frame.axis and old.plane == frame.plane and old.start == frame.start and old.base_y == frame.base_y then return true end
+        return false
+    end
+    world.portal = { frame = { axis = frame.axis, plane = frame.plane, start = frame.start, base_y = frame.base_y } }
+    for across = 0, 1 do
+        for up = 0, 2 do
+            local x, z, y = portalCellCoordinates(frame, across, up)
+            world.extra_blocks[extraBlockKey(x, z, y)] = "portal"
+            rebuildBlockColumn(world, x, z)
+        end
+    end
+    return true
+end
+
+local function deactivatePortal(world)
+    local frame = world and world.portal and world.portal.frame
+    if not frame then return false end
+    for across = 0, 1 do
+        for up = 0, 2 do
+            local x, z, y = portalCellCoordinates(frame, across, up)
+            world.extra_blocks[extraBlockKey(x, z, y)] = nil
+            rebuildBlockColumn(world, x, z)
+        end
+    end
+    world.portal = nil
+    return true
+end
+
+local function isPortalFrameBlock(frame, x, z, y)
+    if not frame then return false end
+    for across = 0, 3 do
+        for up = 0, 4 do
+            if across == 0 or across == 3 or up == 0 or up == 4 then
+                local bx, bz, by = frameBlockCoordinates(frame, across, up)
+                if bx == x and bz == z and by == y then return true end
+            end
+        end
+    end
+    return false
+end
+
+local function portalContains(frame, x, z)
+    if not frame then return false end
+    local cell_x, cell_z = math.floor(x), math.floor(z)
+    if frame.axis == "x" then
+        return cell_z == frame.plane and cell_x >= frame.start + 1 and cell_x <= frame.start + 2
+    end
+    return cell_x == frame.plane and cell_z >= frame.start + 1 and cell_z <= frame.start + 2
+end
+
+local function portalSpawn(frame, outward_sign)
+    outward_sign = outward_sign or -1
+    if frame.axis == "x" then
+        return frame.start + 1.5, frame.plane + outward_sign * 1.5,
+            outward_sign < 0 and 0 or math.pi
+    end
+    return frame.plane + outward_sign * 1.5, frame.start + 1.5,
+        outward_sign < 0 and math.pi / 2 or math.pi * 1.5
+end
+
+local function buildNetherWorld(seed)
+    seed = normalizeSeed(seed + 49381)
+    local world = { size = WORLD_SIZE, seed = seed, dimension = "nether", heights = {}, materials = {},
+        subsurfaces = {}, biomes = {}, extra_blocks = {}, removed_blocks = {}, mobs = {} }
+    local pools = {
+        { 14, 18, 4 }, { 76, 14, 5 }, { 16, 77, 4 }, { 77, 76, 5 },
+        { 47, 16, 4 }, { 19, 48, 3 }, { 78, 49, 4 }, { 50, 81, 4 },
+    }
+    for z = 0, world.size - 1 do
+        world.heights[z + 1], world.materials[z + 1], world.subsurfaces[z + 1], world.biomes[z + 1] = {}, {}, {}, {}
+        for x = 0, world.size - 1 do
+            local height = 4 + math.floor(hash2(seed + 1701, x, z) * 4)
+            local patch = hash2(seed + 211, math.floor(x / 12), math.floor(z / 12))
+            local surface = patch < 0.12 and "soul_sand" or (patch > 0.984 and "basalt" or "netherrack")
+            if hash2(seed + 990, x, z) > 0.992 then surface = "magma_block" end
+            if math.abs(x - 48) <= 6 and math.abs(z - 48) <= 6 then height, surface = 5, "netherrack" end
+            for _, pool in ipairs(pools) do
+                local dx, dz = x - pool[1], z - pool[2]
+                local radius = pool[3] + (hash2(seed + 733, x, z) - 0.5) * 1.4
+                if math.abs(x - 48) > 8 or math.abs(z - 48) > 8 then
+                    if dx * dx + dz * dz < radius * radius then height, surface = 3, "lava"; break end
+                end
+            end
+            world.heights[z + 1][x + 1] = height
+            world.materials[z + 1][x + 1] = surface
+            world.subsurfaces[z + 1][x + 1] = "netherrack"
+            world.biomes[z + 1][x + 1] = patch < 0.12 and "soul_sand_valley" or (surface == "basalt" and "basalt_deltas" or "nether_wastes")
+        end
+    end
+    -- Small ruined brick arches break up the wastes without filling the view with detail.
+    for _, site in ipairs({ { 22, 24 }, { 73, 24 }, { 23, 72 }, { 74, 73 } }) do
+        local cx, cz = site[1], site[2]
+        for z = cz - 2, cz + 2 do
+            for x = cx - 3, cx + 3 do
+                if x > 2 and z > 2 and x < world.size - 3 and z < world.size - 3
+                    and world.materials[z + 1][x + 1] ~= "lava" then
+                    world.heights[z + 1][x + 1], world.materials[z + 1][x + 1] = 5, "netherrack"
+                end
+            end
+        end
+        for _, corner in ipairs({ { -2, -1 }, { -2, 1 }, { 2, -1 }, { 2, 1 } }) do
+            local x, z = cx + corner[1], cz + corner[2]
+            for y = 5, 7 do putExtraBlock(world, x, z, y, "nether_bricks") end
+        end
+        putExtraBlock(world, cx, cz - 1, 7, "nether_bricks")
+        putExtraBlock(world, cx, cz, 7, "nether_bricks")
+        putExtraBlock(world, cx, cz + 1, 7, "nether_bricks")
+    end
+    -- A few ceiling clusters read as glowstone without creating hundreds of costly light sources.
+    for index = 1, 18 do
+        local x = 5 + math.floor(hash2(seed + 5100, index, 2) * (world.size - 10))
+        local z = 5 + math.floor(hash2(seed + 5200, index, 4) * (world.size - 10))
+        if math.abs(x - 48) > 8 or math.abs(z - 48) > 8 then putExtraBlock(world, x, z, MAX_COLUMN_HEIGHT - 4, "glowstone") end
+    end
+    local frame = { axis = "x", plane = 48, start = 46, base_y = 5 }
+    for across = 0, 3 do
+        for up = 0, 4 do
+            if across == 0 or across == 3 or up == 0 or up == 4 then
+                local x, z, y = frameBlockCoordinates(frame, across, up)
+                world.extra_blocks[extraBlockKey(x, z, y)] = "obsidian"
+            end
+        end
+    end
+    activatePortalFrame(world, frame)
+    rebuildWorldBlocks(world)
+    return world
+end
 -- Player session ---------------------------------------------------------------
 
 local VoxelSession = {}
@@ -1398,6 +1613,11 @@ function VoxelSession.new(seed)
     local self = setmetatable({
         seed = seed,
         world = world,
+        overworld_world = world,
+        nether_world = nil,
+        dimension = "overworld",
+        overworld_portal_frame = nil,
+        portal_cooldown = 0,
         player_x = player_x,
         player_z = player_z,
         yaw = yaw,
@@ -1491,15 +1711,17 @@ function VoxelSession:advanceEnvironment(amount)
     if amount <= 0 then return end
     self.world_ticks = (self.world_ticks or 0) + amount
     self.world_time = ((self.world_time or 0.31) + amount / DAY_LENGTH_TICKS) % 1
+    self.portal_cooldown = math.max(0, (self.portal_cooldown or 0) - amount)
     self:tickMobs()
 end
 
 -- Ambient entities keep moving even when the player is standing still.
 function VoxelSession:tickAmbientMobs()
-    if not self.world or not self.world.mobs then return end
+    if not self.world then return end
     self:advanceEnvironment(0.55)
     -- Keep simulating under a modal inventory, but never repaint the world over it.
-    if self.canvas and not self.inventory_open and not self.crafting_open then self.canvas:refreshFast() end
+    if self.canvas and self.world.mobs and #self.world.mobs > 0
+        and not self.inventory_open and not self.crafting_open then self.canvas:refreshFast() end
     UIManager:scheduleIn(AMBIENT_MOB_SECONDS, self._ambientMobTick)
 end
 
@@ -1737,12 +1959,77 @@ end
 
 -- World interaction ------------------------------------------------------------
 
+function VoxelSession:ignitePortal(target)
+    local item = self.slots[self.selected_slot]
+    if not item or item.material ~= "flint_and_steel" then return false end
+    local frame = findPortalFrame(self.world, target)
+    if not frame then
+        self.last_event = _("Build a complete 4x5 obsidian frame and use the lighter on it.")
+        return false
+    end
+    if not activatePortalFrame(self.world, frame) then
+        self.last_event = _("This world already has an active portal.")
+        return false
+    end
+    if self.dimension == "overworld" then self.overworld_portal_frame = self.world.portal.frame end
+    self.last_event = _("The Nether portal is active. Walk into it to travel.")
+    return true
+end
+
+function VoxelSession:travelDimension(destination)
+    if destination == self.dimension then return false end
+    local frame
+    if destination == "nether" and self.dimension == "overworld" then
+        if not self.world.portal then return false end
+        self.overworld_world = self.world
+        self.overworld_portal_frame = self.world.portal.frame
+        if not self.nether_world then self.nether_world = buildNetherWorld(self.seed) end
+        self.world, self.dimension = self.nether_world, "nether"
+        frame = self.world.portal.frame
+    elseif destination == "overworld" and self.dimension == "nether" then
+        self.nether_world = self.world
+        self.world, self.dimension = self.overworld_world, "overworld"
+        frame = self.overworld_portal_frame
+    else
+        return false
+    end
+    if not frame then return false end
+    self.player_x, self.player_z, self.yaw = portalSpawn(frame, -1)
+    self.motion, self.live_look = nil, false
+    self.view_height = self:walkHeight(self.player_x, self.player_z)
+    self.portal_cooldown = 0.55
+    self.last_event = destination == "nether" and _("Entered The Nether.") or _("Returned to the Overworld.")
+    self:refreshWorldStatus()
+    if self.canvas then self.canvas:refreshFast() end
+    return true
+end
+
+function VoxelSession:checkPortalTravel()
+    if (self.portal_cooldown or 0) > 0 or not self.world.portal then return false end
+    if not portalContains(self.world.portal.frame, self.player_x, self.player_z) then return false end
+    return self:travelDimension(self.dimension == "overworld" and "nether" or "overworld")
+end
+
+function VoxelSession:refreshWorldStatus()
+    local widget = self.world_status_widget
+    if not widget then return false end
+    widget.text = _("Seed: ") .. tostring(self.seed) .. " · " .. self:biomeName() .. " · " .. self:timeLabel()
+    if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
+    local x, y = widget._origin_x or 0, widget._origin_y or 0
+    UIManager:widgetRepaint(widget, x, y)
+    UIManager:setDirty(nil, "ui", Geom:new{ x = x, y = y, w = widget._refresh_width or 200, h = widget._refresh_height or scale(16) })
+    if UIManager.forceRePaint then UIManager:forceRePaint() end
+    return true
+end
+
 function VoxelSession:walkHeight(x, z)
     local cell_x, cell_z = math.floor(x), math.floor(z)
     local world = self.world
     if cell_x < 0 or cell_z < 0 or cell_x >= world.size or cell_z >= world.size then return 0 end
+    if world.portal and portalContains(world.portal.frame, x, z) then return world.portal.frame.base_y + 1 end
     for level = MAX_COLUMN_HEIGHT - 1, 0, -1 do
-        if blockAt(world, cell_x, cell_z, level) then return level + 1 end
+        local material = blockAt(world, cell_x, cell_z, level)
+        if material and material ~= "portal" then return level + 1 end
     end
     return 0
 end
@@ -1753,6 +2040,7 @@ function VoxelSession:groundHeightAtPlayer()
 end
 
 function VoxelSession:biomeName()
+    if self.dimension == "nether" then return _("The Nether") end
     local biome = biomeAt(self.world, math.floor(self.player_x), math.floor(self.player_z))
     return (BIOMES[biome] and BIOMES[biome].label) or tostring(biome)
 end
@@ -1762,6 +2050,8 @@ function VoxelSession:newWorld(seed)
     if self.jump_frame then UIManager:unschedule(self._jumpTick) end
     if seed == nil then self.seed = nextWorldSeed(self.seed) else self.seed = normalizeSeed(seed) end
     self.world = buildWorld(self.seed)
+    self.overworld_world, self.nether_world = self.world, nil
+    self.dimension, self.overworld_portal_frame, self.portal_cooldown = "overworld", nil, 0
     self.player_x, self.player_z, self.yaw = findSpawn(self.world)
     self.pitch = 0
     self.motion, self.jump_frame, self.jump_offset = nil, nil, 0
@@ -1773,6 +2063,7 @@ function VoxelSession:newWorld(seed)
 end
 
 function VoxelSession:mineBlock(target)
+    if self:selectedMaterial() == "flint_and_steel" then return self:ignitePortal(target) end
     if type(target) ~= "table" then self.last_event = _("There is no block here."); return false end
     local x, z, y = target.x, target.z, target.y
     if type(x) ~= "number" or type(z) ~= "number" or type(y) ~= "number"
@@ -1783,6 +2074,8 @@ function VoxelSession:mineBlock(target)
     end
     local material = blockAt(self.world, x, z, y)
     if not material then self.last_event = _("There is no block here."); return false end
+    if material == "portal" then self.last_event = _("Break the obsidian frame to deactivate the portal."); return false end
+    if material == "obsidian" and self.world.portal and isPortalFrameBlock(self.world.portal.frame, x, z, y) then deactivatePortal(self.world) end
     local key = extraBlockKey(x, z, y)
     if self.world.extra_blocks[key] then
         self.world.extra_blocks[key] = nil
@@ -1826,6 +2119,11 @@ function VoxelSession:placeBlock(target)
         return false
     end
     local material = item.material
+    if material == "flint_and_steel" then return self:ignitePortal(target) end
+    if self.dimension == "nether" and material == "water" then
+        self.last_event = _("Water evaporates in The Nether.")
+        return false
+    end
     if blockAt(self.world, x, z, y) then self.last_event = _("This space is already occupied."); return false end
     -- Never trap the player inside a placed block, just like Bedrock.
     local cell_x, cell_z = math.floor(self.player_x), math.floor(self.player_z)
@@ -1977,8 +2275,12 @@ function VoxelSession:beginMove(direction)
         self.last_event = _("World boundary reached.")
         return false
     end
-    local from_height = self:groundHeightAtPlayer()
     local to_height = self:walkHeight(next_x, next_z)
+    if blockAt(self.world, math.floor(next_x), math.floor(next_z), to_height - 1) == "lava" then
+        self.last_event = _("Lava blocks the way — build a bridge.")
+        return false
+    end
+    local from_height = self:groundHeightAtPlayer()
     local step = to_height - from_height
     if step > 2 then
         self.last_event = _("This block is too high.")
@@ -2015,6 +2317,7 @@ function VoxelSession:tickMotion()
         self.motion = nil
         self.live_look = false
         self.view_height = self:walkHeight(self.player_x, self.player_z)
+        if self:checkPortalTravel() then return end
         if self.canvas then self.canvas:refreshFast() end
     else
         UIManager:scheduleIn(MOVE_FRAME_SECONDS, self._motionTick)
@@ -2031,6 +2334,7 @@ function VoxelSession:move(direction)
     UIManager:unschedule(self._motionTick)
     self.player_x, self.player_z = motion.to_x, motion.to_z
     self.view_height = self:walkHeight(self.player_x, self.player_z)
+    self:checkPortalTravel()
     return true
 end
 
@@ -2050,6 +2354,7 @@ function VoxelSession:tapActionLabel()
 end
 
 function VoxelSession:tapAction(target)
+    if self:selectedMaterial() == "flint_and_steel" then return self:ignitePortal(target) end
     if self.tap_action == "place" then return self:placeBlock(target) end
     return self:mineBlock(target)
 end
@@ -2358,7 +2663,13 @@ function VoxelCanvas:_drawScene(bb, x, y)
     local yaw = session.yaw
     local camera_y = session:groundHeightAtPlayer() + PLAYER_EYE_HEIGHT + (session.jump_offset or 0)
     local pattern_values = PATTERN_VALUES
-    local scene_palette = scenePaletteForTime(session:timeOfDay())
+    local scene_palette
+    if world.dimension == "nether" then
+        scene_palette = { daylight = 0.72, top = "black", mid = "magenta", horizon = "red",
+            ground = "red", ground_dark = "black", cloud = "magenta" }
+    else
+        scene_palette = scenePaletteForTime(session:timeOfDay())
+    end
     local daylight = scene_palette.daylight
     local function torchLightAt(wx, wz, wy)
         local strongest = 0
@@ -2588,7 +2899,9 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 current_hit_keys[rx] = nil
                 last_hit_key = nil
                 -- Monochrome still signals night through a dense dark sky.
-                ink = daylight < 0.10 and (dither_threshold < 12 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE) or Blitbuffer.COLOR_WHITE
+                ink = world.dimension == "nether"
+                    and (dither_threshold < 10 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE)
+                    or (daylight < 0.10 and (dither_threshold < 12 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE) or Blitbuffer.COLOR_WHITE)
             end
             if edge then
                 -- One dark sample cell is enough to separate adjacent voxel
@@ -3215,7 +3528,8 @@ function InventoryPanel:visibleMaterials()
                 or material == "grass" or material == "sand" or material == "water" or material == "wheat"
                 or material == "cactus" or material == "dead_bush"
         elseif self.active_category == 4 then
-            include = material == "torch" or material == "glass" or material:find("planks", 1, true)
+            include = material == "torch" or material == "glowstone" or material == "flint_and_steel"
+                or material == "glass" or material:find("planks", 1, true)
                 or material == "bricks" or material == "crafting_table" or material == "furnace"
         elseif self.active_category == 5 then
             include = material == "coal" or material == "iron" or material == "gold" or material == "diamond" or material == "redstone"
@@ -3936,16 +4250,16 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.6"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.5.7"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.6",
+    version = "4.5.7",
     title = "Minecraft 3D",
-    subtitle = "Voxel Mobs, Day/Night & Torches",
+    subtitle = "Mobs, Day/Night & Nether Portals",
     symbol = "M",
     logo = "minecraft",
     buildPane = function(instance, context)
@@ -4036,12 +4350,20 @@ return {
         local hint_text = state.session.tap_action == "place"
             and _("Tap: place block · Hold: mine · Swipe: look around")
             or _("Tap: mine · Hold: place block · Swipe: look around")
+        local world_status_widget = TextWidget:new{
+            text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName() .. " · " .. state.session:timeLabel(),
+            face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w,
+            overlap_offset = { margin, px(29) },
+        }
+        world_status_widget._origin_x, world_status_widget._origin_y = margin, px(29)
+        world_status_widget._refresh_width, world_status_widget._refresh_height = heading_w, px(16)
+        state.session.world_status_widget = world_status_widget
         pane[1] = OverlapGroup:new{
             dimen = pane.dimen,
             allow_mirroring = false,
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", heading_size), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = heading_w, overlap_offset = { margin, px(6) } },
-            TextWidget:new{ text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName() .. " · " .. state.session:timeLabel(), face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w, overlap_offset = { margin, px(29) } },
+            world_status_widget,
             NavButton:new{ title = _("Color"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
             NavButton:new{ title = _("Menu"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
@@ -4084,6 +4406,11 @@ return {
         EventLine = EventLine,
         NavButton = NavButton,
         buildWorld = buildWorld,
+        buildNetherWorld = buildNetherWorld,
+        findPortalFrame = findPortalFrame,
+        activatePortalFrame = activatePortalFrame,
+        deactivatePortal = deactivatePortal,
+        portalContains = portalContains,
         findSpawn = findSpawn,
         findVillageSite = findVillageSite,
         hasClearTreeView = hasClearTreeView,
