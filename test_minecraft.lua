@@ -1,5 +1,5 @@
 --[[--
-Regression test for Minecraft 3D 4.7.1.
+Regression test for Minecraft 3D 4.7.2.
 
 Covers the world generator (biomes, trees, villages, ore layers), the
 black-and-white and RGB render paths (including ray-cache reuse), Survival and
@@ -127,7 +127,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.7.1", "Minecraft 3D 4.7.1 must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.7.2", "Minecraft 3D 4.7.2 must publish the splash, world list and creation menus")
 local embedded_logo = test.ensureEmbeddedLogo()
 local embedded_file = assert(io.open(embedded_logo, "rb"), "The installed DApp must materialize its embedded logo")
 assert(embedded_file:read(8) == "\137PNG\13\10\26\10", "The embedded logo must be a valid PNG")
@@ -142,7 +142,7 @@ assert(mix and mix.first and mix.second and mix.second_pixels >= 0 and mix.secon
     "Dither mixes must expose two printable inks and bounded coverage")
 local again = test.paletteMixForRGB(106, 170, 64)
 assert(again == mix, "Equal RGB targets must reuse the mix cache")
-assert(type(test.SURFACE_TONES) == "table", "4.7.1 must publish the cached native RGB and grayscale surface tones")
+assert(type(test.SURFACE_TONES) == "table", "4.7.2 must publish the cached native RGB and grayscale surface tones")
 local grid_cols, grid_rows = test.renderGridFor(210, 126)
 assert(grid_cols > 0 and grid_rows > 0 and grid_cols <= 210 and grid_rows <= 126,
     "The render grid must remain bounded by the canvas")
@@ -336,7 +336,7 @@ assert(canvas._ray_cache == cache, "Repainting an unchanged RGB view must reuse 
 
 -- The ray geometry is independent of output mode: switching B&W/RGB must not
 -- allocate a second camera cache.  Do not pin material shade pixels here;
--- 4.7.1 deliberately changes face lighting while preserving the sky.
+-- 4.7.2 deliberately changes face lighting while preserving the sky.
 color_enabled = false
 session.color_enabled = false
 resetPixels()
@@ -481,7 +481,7 @@ Inventory: finite Survival slots, cursor stack, Creative catalogue and drops
 ]]--
 assert(session.mode == "Survival", "The default session must be Survival")
 assert(session.slots[1].material == "planks" and session.slots[1].count > 0,
-    "The 4.7.1 Survival starter kit must begin with planks")
+    "The 4.7.2 Survival starter kit must begin with planks")
 assert(session.selected_slot == 1 and session:selectedMaterial() == "planks",
     "The first hotbar slot must select the planks starter stack")
 assert(session.hotbar[1] == "planks" and session.inventory.planks == session:countMaterial("planks"),
@@ -723,7 +723,7 @@ assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + crafting_panel.wid
 assert(session.crafting_open == false, "The crafting screen must close")
 
 --[[--
-AppDock pane contract: 4.7.1 touch band, modal routing, and size boundaries
+AppDock pane contract: 4.7.2 touch band, modal routing, and size boundaries
 ]]--
 local function findButton(root, title)
     for _, widget in ipairs(root) do
@@ -780,7 +780,7 @@ local function assertWorldLayout(width, height)
     assert(local_canvas.overlap_offset[2] + local_canvas.height <= touch_top,
         string.format("Gameplay layout %dx%d must not let the world view paint into the touch band", width, height))
     for _, title in ipairs({ "Left", "Forward", "Back", "Right" }) do
-        assert(not findButton(group, title), "4.7.1 must replace the separate " .. title .. " toolbar button with the D-pad")
+        assert(not findButton(group, title), "4.7.2 must replace the separate " .. title .. " toolbar button with the D-pad")
     end
     return local_pane, local_state, local_context
 end
@@ -925,4 +925,4 @@ for _, dimen in ipairs({ { 600, 350 }, { 320, 480 }, { 200, 250 } }) do
     assertWorldLayout(dimen[1], dimen[2])
 end
 
-print("minecraft-4.7.1-ok")
+print("minecraft-4.7.2-ok")
