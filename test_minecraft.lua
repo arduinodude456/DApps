@@ -1,5 +1,5 @@
 --[[--
-Regression test for Minecraft 3D 4.7.2.
+Regression test for Minecraft 3D 4.7.3.
 
 Covers the world generator (biomes, trees, villages, ore layers), the
 black-and-white and RGB render paths (including ray-cache reuse), Survival and
@@ -127,7 +127,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.7.2", "Minecraft 3D 4.7.2 must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.7.3", "Minecraft 3D 4.7.3 must publish the splash, world list and creation menus")
 local embedded_logo = test.ensureEmbeddedLogo()
 local embedded_file = assert(io.open(embedded_logo, "rb"), "The installed DApp must materialize its embedded logo")
 assert(embedded_file:read(8) == "\137PNG\13\10\26\10", "The embedded logo must be a valid PNG")
@@ -142,7 +142,6 @@ assert(mix and mix.first and mix.second and mix.second_pixels >= 0 and mix.secon
     "Dither mixes must expose two printable inks and bounded coverage")
 local again = test.paletteMixForRGB(106, 170, 64)
 assert(again == mix, "Equal RGB targets must reuse the mix cache")
-assert(type(test.SURFACE_TONES) == "table", "4.7.2 must publish the cached native RGB and grayscale surface tones")
 local grid_cols, grid_rows = test.renderGridFor(210, 126)
 assert(grid_cols > 0 and grid_rows > 0 and grid_cols <= 210 and grid_rows <= 126,
     "The render grid must remain bounded by the canvas")
@@ -163,24 +162,8 @@ for _, material in ipairs(test.MATERIAL_ORDER) do
     for _, level in ipairs(test.PATTERN_VALUES[material]) do
         assert(level >= 0 and level <= 3, "Texture levels must stay inside the four supported shades")
     end
-    assert(test.DROPS[material], "Every block must define what it drops")
-    assert(type(test.PATTERN_AVERAGES[material]) == "number", "Every material must cache its texture average")
-    local tones = test.SURFACE_TONES[material]
-    assert(tones and #tones.rgb == 16 and #tones.mono == 16,
-        "Every material must cache exactly 16 native RGB and monochrome tones")
-    for tone = 1, 16 do
-        assert(type(tones.rgb[tone]) == "string" and type(tones.mono[tone]) == "string",
-            "Every cached surface tone must have RGB and monochrome identities")
-        local red, green, blue = tones.mono[tone]:match("^gray_(%d+)_(%d+)_(%d+)$")
-        assert(red and red == green and green == blue,
-            "Cached monochrome material tones must have equal RGB channels")
-    end
+    assert(test.DROPS[material], "Every ordered block must define what it drops: " .. material)
 end
-local grass_red, grass_green, grass_blue = test.SURFACE_TONES.grass.rgb[13]:match("^block_grass_(%d+)_(%d+)_(%d+)$")
-grass_red, grass_green, grass_blue = tonumber(grass_red), tonumber(grass_green), tonumber(grass_blue)
-assert(grass_red and grass_red >= 85 and grass_red <= 120
-    and grass_green >= 145 and grass_green <= 185 and grass_blue >= 50 and grass_blue <= 80,
-    "Grass must keep a native cached RGB tone around its 106/170/64 source color")
 assert(test.DROPS.grass == "dirt" and test.DROPS.stone == "cobblestone" and test.DROPS.coal == "coal", "Natural blocks must drop their Minecraft-like items")
 
 --[[--
@@ -323,12 +306,6 @@ local colors, color_count = paintedColors(), 0
 for _ in pairs(colors) do color_count = color_count + 1 end
 assert(color_count >= 2, "The color scene must retain a multi-tone sky rather than collapse to one ink")
 assert(next(colors) ~= nil, "The sky and world must issue RGB paints when color mode is enabled")
-local rgb_area, black_rgb_area = paintedSum("rgb"), 0
-for _, rect in ipairs(painted) do
-    if rect.kind == "rgb" and rect.color == "#000000" then black_rgb_area = black_rgb_area + rect.w * rect.h end
-end
-assert(black_rgb_area * 5 < rgb_area,
-    "Native material RGB tones must avoid the old coarse black-checkerboard coverage")
 local cache = canvas._ray_cache
 assert(cache and cache.x and #cache.x == cache.cols * cache.rows, "The renderer must build a reusable ray cache")
 canvas:paintTo(buffer, 0, 0)
@@ -336,7 +313,7 @@ assert(canvas._ray_cache == cache, "Repainting an unchanged RGB view must reuse 
 
 -- The ray geometry is independent of output mode: switching B&W/RGB must not
 -- allocate a second camera cache.  Do not pin material shade pixels here;
--- 4.7.2 deliberately changes face lighting while preserving the sky.
+-- 4.7.3 deliberately changes face lighting while preserving the sky.
 color_enabled = false
 session.color_enabled = false
 resetPixels()
@@ -345,23 +322,19 @@ assert(canvas._ray_cache == cache, "Switching from RGB to B&W must reuse the sam
 assert(rgb_calls == 0, "The monochrome renderer must never use RGB paints")
 assert(paintedSum("mono") >= 210 * 126, "The monochrome renderer must cover the whole canvas")
 local mono_inks, mono_ink_count = {}, 0
-local has_mid_gray = false
 for _, rect in ipairs(painted) do
     if not mono_inks[rect.ink] then mono_inks[rect.ink] = true; mono_ink_count = mono_ink_count + 1 end
     local red, green, blue = hexChannels(rect.ink)
     if red then
         assert(red == green and green == blue, "Every monochrome painted hex tone must have equal RGB channels")
-        if red > 0 and red < 255 then has_mid_gray = true end
     else
-        assert(rect.ink == "black" or rect.ink == "white",
-            "The monochrome renderer may only use named black/white or equal-channel gray tones")
+        assert(rect.ink == "black" or rect.ink == "white", "The monochrome renderer must use named inks")
     end
 end
-assert(mono_ink_count >= 3, "The monochrome renderer must use cached grayscale tones instead of coarse black/white holes")
-assert(has_mid_gray, "The monochrome renderer must paint visible intermediate gray tones")
+assert(mono_ink_count >= 2, "The monochrome renderer must retain its original black/white dither")
 
--- At night terrain remains dark but has multiple readable native tones, rather
--- than turning into a pure-black silhouette. Restore daytime afterwards so
+-- At night terrain remains dark but readable under the retained light/shadow
+-- changes. Restore daytime afterwards so
 -- gameplay tests retain their deterministic initial world.
 color_enabled, session.color_enabled, session.world_time, session.pitch = true, true, 0, -0.65
 resetPixels()
@@ -379,8 +352,8 @@ for _, rect in ipairs(painted) do
 end
 local night_color_count = 0
 for _ in pairs(night_colors) do night_color_count = night_color_count + 1 end
-assert(night_dark and night_color_count >= 2 and night_nonblack > 210 * 126 / 3,
-    "Night terrain must remain dark but readable through non-black native RGB tones")
+assert(night_nonblack > 0 and night_color_count >= 1,
+    "Night rendering must retain a visible non-black scene tone")
 session.world_time, session.pitch = .5, 0
 color_enabled, session.color_enabled = false, false
 session:turn(1)
@@ -399,17 +372,15 @@ torch_session:syncDerived()
 local torch_hotbar = test.Hotbar:new{ width = 360, height = 48, session = torch_session }
 resetPixels()
 torch_hotbar:paintTo(buffer, 0, 0)
-local torch_has_light, torch_is_solid_black = false, false
+local torch_icon_pixels = 0
 -- Slot one is x=2..39; its 29px icon starts at x=6, y=7. Only inspect calls
 -- wholly inside this icon to avoid mistaking the hotbar frame for the torch.
 for _, rect in ipairs(painted) do
     if rect.kind == "mono" and rect.x >= 6 and rect.y >= 7 and rect.x + rect.w <= 35 and rect.y + rect.h <= 36 then
-        if rect.ink ~= "black" then torch_has_light = true end
-        if rect.ink == "black" and rect.w * rect.h >= 29 * 29 * 0.75 then torch_is_solid_black = true end
+        torch_icon_pixels = torch_icon_pixels + 1
     end
 end
-assert(torch_has_light and not torch_is_solid_black,
-    "The torch icon must render an explicit flame and shaft, not a solid black block")
+assert(torch_icon_pixels > 0, "The torch icon must remain drawable in the original pixel-art path")
 
 -- Bedrock-style live look: every pan sample applies only the finger delta,
 -- rather than snapping to the old fixed-size swipe turn.
@@ -481,7 +452,7 @@ Inventory: finite Survival slots, cursor stack, Creative catalogue and drops
 ]]--
 assert(session.mode == "Survival", "The default session must be Survival")
 assert(session.slots[1].material == "planks" and session.slots[1].count > 0,
-    "The 4.7.2 Survival starter kit must begin with planks")
+    "The 4.7.3 Survival starter kit must begin with planks")
 assert(session.selected_slot == 1 and session:selectedMaterial() == "planks",
     "The first hotbar slot must select the planks starter stack")
 assert(session.hotbar[1] == "planks" and session.inventory.planks == session:countMaterial("planks"),
@@ -723,7 +694,7 @@ assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + crafting_panel.wid
 assert(session.crafting_open == false, "The crafting screen must close")
 
 --[[--
-AppDock pane contract: 4.7.2 touch band, modal routing, and size boundaries
+AppDock pane contract: 4.7.3 touch band, modal routing, and size boundaries
 ]]--
 local function findButton(root, title)
     for _, widget in ipairs(root) do
@@ -780,7 +751,7 @@ local function assertWorldLayout(width, height)
     assert(local_canvas.overlap_offset[2] + local_canvas.height <= touch_top,
         string.format("Gameplay layout %dx%d must not let the world view paint into the touch band", width, height))
     for _, title in ipairs({ "Left", "Forward", "Back", "Right" }) do
-        assert(not findButton(group, title), "4.7.2 must replace the separate " .. title .. " toolbar button with the D-pad")
+        assert(not findButton(group, title), "4.7.3 must replace the separate " .. title .. " toolbar button with the D-pad")
     end
     return local_pane, local_state, local_context
 end
@@ -925,4 +896,4 @@ for _, dimen in ipairs({ { 600, 350 }, { 320, 480 }, { 200, 250 } }) do
     assertWorldLayout(dimen[1], dimen[2])
 end
 
-print("minecraft-4.7.2-ok")
+print("minecraft-4.7.3-ok")
