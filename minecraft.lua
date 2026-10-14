@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
+Version 4.6.3 routes taps arriving at the world surface to the open inventory and blocks actions through covered controls. Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -1999,6 +1999,7 @@ end
 function VoxelSession:toggleInventory()
     self.inventory_open = not self.inventory_open
     if self.inventory_open then
+        self:stopHeldMove()
         self.crafting_open = false
         local selected_item = self.slots[self.selected_slot]
         self.inventory_item_label = selected_item and materialLabel(selected_item.material) or nil
@@ -3175,10 +3176,23 @@ end
 
 function VoxelCanvas:act(action, target)
     if not self.session then return false end
+    if (self.session.inventory_open or self.session.crafting_open) and action ~= "inventory" then return false end
     local result = self.session:act(action, target)
     self:refreshFast()
     if self.hotbar and (action == "mine" or action == "place" or action == "tap" or action == "hold") then self.hotbar:refresh() end
     return result ~= false
+end
+
+function VoxelCanvas:routeModalTap(first, second)
+    local session = self.session
+    if session and session.inventory_open and self.inventory_panel then
+        self.inventory_panel:onTapMinecraftInventory(first, second)
+        return true
+    elseif session and session.crafting_open and self.crafting_panel then
+        self.crafting_panel:onTapMinecraftCrafting(first, second)
+        return true
+    end
+    return false
 end
 
 -- OverlapGroup dispatch order differs slightly between KOReader builds. Keep
@@ -3217,6 +3231,7 @@ function VoxelCanvas:_controlActionAt(screen_x, screen_y)
 end
 
 function VoxelCanvas:onTapMinecraftExplore(first, second)
+    if self:routeModalTap(first, second) then return true end
     local gesture = second or first
     if not gesture or not gesture.pos then return true end
     local control_action = self:_controlActionAt(gesture.pos.x, gesture.pos.y)
@@ -3248,6 +3263,7 @@ function VoxelCanvas:onTapMinecraftExplore(first, second)
 end
 
 function VoxelCanvas:onHoldMinecraftAction(first, second)
+    if self.session and (self.session.inventory_open or self.session.crafting_open) then return true end
     local gesture = second or first
     local pos = gesture and gesture.pos
     if not pos then return true end
@@ -3269,6 +3285,10 @@ function VoxelCanvas:onHoldMinecraftAction(first, second)
 end
 
 function VoxelCanvas:_panLook(gesture, finish)
+    if self.session and (self.session.inventory_open or self.session.crafting_open) then
+        self._look_pan_last = nil
+        return true
+    end
     local pos = gesture and (gesture.pos or gesture)
     if not pos then return false end
     if self:_controlActionAt(pos.x, pos.y) then
@@ -3307,6 +3327,7 @@ end
 function VoxelCanvas:onSwipeMinecraftLook(first, second)
     local gesture = second or first
     if not self.session then return false end
+    if self.session.inventory_open or self.session.crafting_open then return true end
     local direction = gesture and gesture.direction
     if direction == "west" then
         self.session:turn(-3)
@@ -3406,6 +3427,7 @@ function Joystick:_heldAction(gesture)
 end
 
 function Joystick:onHoldMinecraftJoystick(first, second)
+    if self.canvas and self.canvas.session and (self.canvas.session.inventory_open or self.canvas.session.crafting_open) then return true end
     local action = self:_heldAction(second or first)
     if action and self.canvas and self.canvas.session then
         self.canvas.session:startHeldMove(action)
@@ -3414,6 +3436,10 @@ function Joystick:onHoldMinecraftJoystick(first, second)
 end
 
 function Joystick:onPanMinecraftJoystick(first, second)
+    if self.canvas and self.canvas.session and (self.canvas.session.inventory_open or self.canvas.session.crafting_open) then
+        self.canvas.session:stopHeldMove()
+        return true
+    end
     local action = self:_heldAction(second or first)
     local session = self.canvas and self.canvas.session
     if action and session then
@@ -3435,11 +3461,13 @@ function Joystick:onHoldReleaseMinecraftJoystick()
 end
 
 function Joystick:onTapMinecraftJoystick(first, second)
+    if self.canvas and self.canvas:routeModalTap(first, second) then return true end
     if self.canvas and self.canvas.session then self.canvas.session:stopHeldMove() end
     return self:_steer(second or first)
 end
 function Joystick:onSwipeMinecraftJoystick(first, second)
     if not self.canvas then return false end
+    if self.canvas.session and (self.canvas.session.inventory_open or self.canvas.session.crafting_open) then return true end
     local gesture = second or first
     local direction = gesture and gesture.direction
     if direction == "west" then self.canvas:act("left")
@@ -3555,6 +3583,7 @@ function Hotbar:refresh()
 end
 
 function Hotbar:onTapMinecraftHotbar(first, second)
+    if self.canvas and self.canvas:routeModalTap(first, second) then return true end
     local gesture = second or first
     local pos = gesture and gesture.pos
     if not pos or not self.session then return true end
@@ -4046,7 +4075,8 @@ function NavButton:paintTo(bb, x, y)
     return true
 end
 
-function NavButton:onTapMinecraftNav()
+function NavButton:onTapMinecraftNav(first, second)
+    if self.canvas and self.canvas:routeModalTap(first, second) then return true end
     if self.callback then self.callback() end
     return true
 end
@@ -4081,7 +4111,8 @@ function JumpControl:paintTo(bb, x, y)
     return true
 end
 
-function JumpControl:onTapMinecraftJump()
+function JumpControl:onTapMinecraftJump(first, second)
+    if self.canvas and self.canvas:routeModalTap(first, second) then return true end
     if self.callback then self.callback() end
     return true
 end
@@ -4454,14 +4485,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.6.2"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.6.3"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.6.2",
+    version = "4.6.3",
     title = "Minecraft 3D",
     subtitle = "Survival, Creative & Nether Portals",
     symbol = "M",
@@ -4511,6 +4542,7 @@ return {
         inventory_panel.overlap_offset = { 0, 0 }
         crafting_panel.overlap_offset = { margin, canvas_y }
         state.session.canvas = canvas
+        hotbar.canvas = canvas
         state.session:startAmbientMobs()
         canvas.hotbar = hotbar
         canvas.event_line = event_line
@@ -4555,7 +4587,7 @@ return {
         local joystick = Joystick:new{ width = joystick_size, height = joystick_size, canvas = canvas }
         joystick.overlap_offset = { margin + px(6), touch_band_y + math.floor((touch_band_h - joystick_size) / 2) }
         state.joystick = joystick
-        local jump = JumpControl:new{ title = _("Jump"), width = jump_w, height = jump_h, callback = function() canvas:act("jump") end }
+        local jump = JumpControl:new{ title = _("Jump"), width = jump_w, height = jump_h, canvas = canvas, callback = function() canvas:act("jump") end }
         jump.overlap_offset = { margin + canvas_w - jump_w - px(8), touch_band_y + math.floor((touch_band_h - jump_h) / 2) }
         canvas.control_dpad_region = { x = joystick.overlap_offset[1], y = joystick.overlap_offset[2], w = joystick_size, h = joystick_size }
         canvas.control_jump_region = { x = jump.overlap_offset[1], y = jump.overlap_offset[2], w = jump_w, h = jump_h }
@@ -4578,8 +4610,8 @@ return {
             FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = Blitbuffer.COLOR_WHITE, emptySizedWidget(width, height) },
             TextWidget:new{ text = "MINECRAFT 3D", face = Font:getFace("cfont", heading_size), fgcolor = Blitbuffer.COLOR_BLACK, bold = true, max_width = heading_w, overlap_offset = { margin, px(6) } },
             world_status_widget,
-            NavButton:new{ title = _("Color"), width = color_button_w, height = px(25), callback = function() canvas:act("color") end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
-            NavButton:new{ title = _("Menu"), width = world_button_w, height = px(25), callback = function() WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
+            NavButton:new{ title = _("Color"), width = color_button_w, height = px(25), canvas = canvas, callback = function() if not state.session.inventory_open and not state.session.crafting_open then canvas:act("color") end end, overlap_offset = { margin + canvas_w - color_button_w, px(6) } },
+            NavButton:new{ title = _("Menu"), width = world_button_w, height = px(25), canvas = canvas, callback = function() if not state.session.inventory_open and not state.session.crafting_open then WorldStore.save(state.world_store); rebuildScreen(state, context, "worlds") end end, overlap_offset = { margin + canvas_w - color_button_w - header_gap - world_button_w, px(6) } },
             canvas,
             hotbar,
             crafting_panel,
@@ -4588,15 +4620,15 @@ return {
             -- D-pad afterwards prevents them from visually covering it.
             joystick,
             jump,
-            NavButton:new{ title = _("Left"), width = button_w, height = controls_h, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
-            NavButton:new{ title = _("Forward"), width = button_w, height = controls_h, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
-            NavButton:new{ title = _("Back"), width = button_w, height = controls_h, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
-            NavButton:new{ title = _("Right"), width = button_w, height = controls_h, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
-            NavButton:new{ title = _("Inventory"), width = button_w, height = controls_h, callback = function()
+            NavButton:new{ title = _("Left"), width = button_w, height = controls_h, canvas = canvas, callback = function() canvas:act("left") end, overlap_offset = { margin, controls_y } },
+            NavButton:new{ title = _("Forward"), width = button_w, height = controls_h, canvas = canvas, primary = true, callback = function() canvas:act("forward") end, overlap_offset = { margin + (button_w + gap), controls_y } },
+            NavButton:new{ title = _("Back"), width = button_w, height = controls_h, canvas = canvas, callback = function() canvas:act("back") end, overlap_offset = { margin + (button_w + gap) * 2, controls_y } },
+            NavButton:new{ title = _("Right"), width = button_w, height = controls_h, canvas = canvas, callback = function() canvas:act("right") end, overlap_offset = { margin + (button_w + gap) * 3, controls_y } },
+            NavButton:new{ title = _("Inventory"), width = button_w, height = controls_h, canvas = canvas, callback = function()
                 canvas:act("inventory")
                 inventory_panel:refresh()
             end, overlap_offset = { margin + (button_w + gap) * 4, controls_y } },
-            NavButton:new{ title = mode_label, width = button_w, height = controls_h, callback = function()
+            NavButton:new{ title = mode_label, width = button_w, height = controls_h, canvas = canvas, callback = function()
                 canvas:act("mode")
                 if context.requestRebuild then context.requestRebuild("ui") end
             end, overlap_offset = { margin + (button_w + gap) * 5, controls_y } },
