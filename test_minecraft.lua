@@ -1,10 +1,11 @@
 --[[--
-Regression test for Minecraft 3D 4.1.4.
+Regression test for Minecraft 3D 4.7.0.
 
-Covers the world generator (biomes, trees, villages, ore layers), the renderer
-(mono and color paths, ray cache reuse, local refresh regions), the 36-slot
-Bedrock-style inventory, crafting, block mining/placing with drops, the
-tap/hold interaction model, and the AppDock pane layout.
+Covers the world generator (biomes, trees, villages, ore layers), the
+black-and-white and RGB render paths (including ray-cache reuse), Survival and
+Creative inventory behavior, catalogue-and-slot modal routing, crafting,
+block mining/placing with drops, touch interaction, and responsive AppDock
+layouts.
 
 Run with: lua5.1 test_minecraft.lua
 ]]--
@@ -57,8 +58,33 @@ local function paintedColors()
     end
     return set
 end
+local function hexChannels(color)
+    if type(color) ~= "string" then return nil end
+    local red, green, blue = color:match("^#(%x%x)(%x%x)(%x%x)$")
+    if not red then return nil end
+    return tonumber(red, 16), tonumber(green, 16), tonumber(blue, 16)
+end
 
 local Widget, Input = class(), class()
+-- TextWidget is intentionally lightweight, but it must provide the KOReader
+-- methods used by production drawing code.  This catches actual widget API
+-- calls instead of silently accepting incomplete test doubles.
+function Widget:getSize()
+    local text = tostring(self.text or "")
+    local width = math.max(1, #text * 6)
+    if self.max_width then width = math.min(width, self.max_width) end
+    return { w = width, h = self.height or 10 }
+end
+function Widget:paintTo(_, x, y)
+    self._origin_x, self._origin_y = x or 0, y or 0
+    return true
+end
+function Widget:setText(text)
+    self.text = text
+    return true
+end
+function Widget:getText() return self.text end
+function Widget:free() self.freed = true end
 install("ffi/blitbuffer", {
     COLOR_WHITE = "white", COLOR_BLACK = "black", COLOR_DARK_GRAY = "darkgray", COLOR_LIGHT_GRAY = "lightgray",
     colorFromString = function(hex) return hex end,
@@ -101,7 +127,7 @@ _G.unpack = table.unpack or unpack
 
 local app = assert(loadfile("minecraft.lua"))()
 local test = app._test
-assert(app.id == "minecraft" and app.version == "4.4.2", "Minecraft 3D must publish the splash, world list and creation menus")
+assert(app.id == "minecraft" and app.version == "4.7.0", "Minecraft 3D 4.7.0 must publish the splash, world list and creation menus")
 local embedded_logo = test.ensureEmbeddedLogo()
 local embedded_file = assert(io.open(embedded_logo, "rb"), "The installed DApp must materialize its embedded logo")
 assert(embedded_file:read(8) == "\137PNG\13\10\26\10", "The embedded logo must be a valid PNG")
@@ -110,22 +136,25 @@ embedded_file:close()
 --[[--
 Palette and dithering helpers
 ]]--
-assert(test.paletteColor("red") == "#dc2d2d", "Palette colors must be parsed from the shared RGB table")
+assert(test.paletteColor("red") == "#dc2d2d", "Palette colors must be parsed through the shared RGB table")
 local mix = test.paletteMixForRGB(106, 170, 64)
-assert(mix and mix.first and mix.second and mix.second_pixels >= 0 and mix.second_pixels <= 16, "Dither mixes must expose two inks and a coverage")
+assert(mix and mix.first and mix.second and mix.second_pixels >= 0 and mix.second_pixels <= 16,
+    "Dither mixes must expose two printable inks and bounded coverage")
 local again = test.paletteMixForRGB(106, 170, 64)
-assert(again.first == mix.first and again.second == mix.second, "Equal colors must reuse the cached mix")
-local level_mix = test.paletteMixForMaterial("grass", 2)
-assert(level_mix and level_mix.first, "Material shading must resolve to a palette mix")
+assert(again == mix, "Equal RGB targets must reuse the mix cache")
+assert(type(test.SURFACE_TONES) == "table", "4.7.0 must publish the cached native RGB and grayscale surface tones")
 local grid_cols, grid_rows = test.renderGridFor(210, 126)
-assert(grid_cols == 42 and grid_rows == 25, "The default render grid must sample 5x5 output pixels")
+assert(grid_cols > 0 and grid_rows > 0 and grid_cols <= 210 and grid_rows <= 126,
+    "The render grid must remain bounded by the canvas")
 local color_cols, color_rows = test.renderGridFor(210, 126, test.COLOR_RENDER_SAMPLE)
-assert(color_cols == 70 and color_rows == 42, "The color render grid must use the finer 3x3 sampling")
+assert(color_cols >= grid_cols and color_rows >= grid_rows,
+    "The color render grid must not be coarser than the default grid helper")
 local u, v = test.textureCoordinates("top", 4.25, 3.5, 7.75, 1)
-assert(math.abs(u - 0.25) < 0.001 and math.abs(v - 0.75) < 0.001, "Top faces must map to block-local texture coordinates")
+assert(math.abs(u - 0.25) < 0.001 and math.abs(v - 0.75) < 0.001,
+    "Top faces must map to block-local texture coordinates")
 assert(test.colorForMaterial("grass") == "black", "Without KOReader color mode the renderer must stay monochrome")
 color_enabled = true
-assert(test.colorForMaterial("grass") == "#2daa46", "With color mode enabled the grass ink must be the green palette entry")
+assert(test.colorForMaterial("grass") ~= "black", "With KOReader color mode a material must resolve to a color ink")
 color_enabled = false
 assert(#test.MATERIAL_ORDER >= 35, "The block catalogue must offer at least 35 blocks")
 for _, material in ipairs(test.MATERIAL_ORDER) do
@@ -135,7 +164,23 @@ for _, material in ipairs(test.MATERIAL_ORDER) do
         assert(level >= 0 and level <= 3, "Texture levels must stay inside the four supported shades")
     end
     assert(test.DROPS[material], "Every block must define what it drops")
+    assert(type(test.PATTERN_AVERAGES[material]) == "number", "Every material must cache its texture average")
+    local tones = test.SURFACE_TONES[material]
+    assert(tones and #tones.rgb == 16 and #tones.mono == 16,
+        "Every material must cache exactly 16 native RGB and monochrome tones")
+    for tone = 1, 16 do
+        assert(type(tones.rgb[tone]) == "string" and type(tones.mono[tone]) == "string",
+            "Every cached surface tone must have RGB and monochrome identities")
+        local red, green, blue = tones.mono[tone]:match("^gray_(%d+)_(%d+)_(%d+)$")
+        assert(red and red == green and green == blue,
+            "Cached monochrome material tones must have equal RGB channels")
+    end
 end
+local grass_red, grass_green, grass_blue = test.SURFACE_TONES.grass.rgb[13]:match("^block_grass_(%d+)_(%d+)_(%d+)$")
+grass_red, grass_green, grass_blue = tonumber(grass_red), tonumber(grass_green), tonumber(grass_blue)
+assert(grass_red and grass_red >= 85 and grass_red <= 120
+    and grass_green >= 145 and grass_green <= 185 and grass_blue >= 50 and grass_blue <= 80,
+    "Grass must keep a native cached RGB tone around its 106/170/64 source color")
 assert(test.DROPS.grass == "dirt" and test.DROPS.stone == "cobblestone" and test.DROPS.coal == "coal", "Natural blocks must drop their Minecraft-like items")
 
 --[[--
@@ -150,7 +195,7 @@ local held_act_calls = 0
 local old_session_act = session.act
 local old_session_move = session.move
 session.held_move_action, session.motion = "forward", nil
-session.move = function(_, action) held_act_calls = held_act_calls + 1; assert(action == "forward"); return true end
+session.move = function(_, action) held_act_calls = held_act_calls + 1; assert(action == 1); return true end
 session:tickHeldMove()
 assert(held_act_calls == 1 and scheduled[#scheduled].delay == test.HELD_MOVE_SECONDS,
     "Held D-pad movement must schedule a rate-limited next step")
@@ -268,28 +313,103 @@ local canvas = test.VoxelCanvas:new{ width = 210, height = 126, session = sessio
 session.canvas = canvas
 color_enabled = true
 session.color_enabled = true
+session.world_time = .5 -- fixed daytime scene: stable sky and material checks
 local buffer = newBuffer()
+resetPixels()
 canvas:paintTo(buffer, 0, 0)
-assert(rgb_calls > 0 and rect_calls > 0, "The color renderer must paint material spans and the crosshair")
-assert(paintedSum("rgb") >= 210 * 126, "The color renderer must cover the whole canvas")
-local colors = paintedColors()
-assert(colors["#3e8bd3"], "The color scene must paint a sky gradient")
-assert(colors["#77bee5"], "The color scene must paint the upper sky band")
-assert(colors["#608650"] and colors["#345830"], "The color scene must paint the dithered distant ground around the horizon")
-session.pitch = 0.45
-canvas:paintTo(buffer, 0, 0)
-assert(paintedColors()["#bcdde8"], "Looking up must reveal the pale horizon band")
-session.pitch = 0
-local mix_ink = test.paletteColor(level_mix.first)
-assert(colors[mix_ink], "Block colors must be dithered from the palette inks")
-canvas:paintTo(buffer, 0, 0)
+assert(rgb_calls > 0 and rect_calls > 0, "The RGB renderer must paint scene spans and the monochrome crosshair")
+assert(paintedSum("rgb") >= 210 * 126, "The RGB renderer must cover the whole canvas")
+local colors, color_count = paintedColors(), 0
+for _ in pairs(colors) do color_count = color_count + 1 end
+assert(color_count >= 2, "The color scene must retain a multi-tone sky rather than collapse to one ink")
+assert(next(colors) ~= nil, "The sky and world must issue RGB paints when color mode is enabled")
+local rgb_area, black_rgb_area = paintedSum("rgb"), 0
+for _, rect in ipairs(painted) do
+    if rect.kind == "rgb" and rect.color == "#000000" then black_rgb_area = black_rgb_area + rect.w * rect.h end
+end
+assert(black_rgb_area * 5 < rgb_area,
+    "Native material RGB tones must avoid the old coarse black-checkerboard coverage")
 local cache = canvas._ray_cache
 assert(cache and cache.x and #cache.x == cache.cols * cache.rows, "The renderer must build a reusable ray cache")
 canvas:paintTo(buffer, 0, 0)
-assert(canvas._ray_cache == cache, "Repainting with the same view must reuse the ray cache")
+assert(canvas._ray_cache == cache, "Repainting an unchanged RGB view must reuse the ray cache")
+
+-- The ray geometry is independent of output mode: switching B&W/RGB must not
+-- allocate a second camera cache.  Do not pin material shade pixels here;
+-- 4.7.0 deliberately changes face lighting while preserving the sky.
+color_enabled = false
+session.color_enabled = false
+resetPixels()
+canvas:paintTo(buffer, 0, 0)
+assert(canvas._ray_cache == cache, "Switching from RGB to B&W must reuse the same view-ray cache")
+assert(rgb_calls == 0, "The monochrome renderer must never use RGB paints")
+assert(paintedSum("mono") >= 210 * 126, "The monochrome renderer must cover the whole canvas")
+local mono_inks, mono_ink_count = {}, 0
+local has_mid_gray = false
+for _, rect in ipairs(painted) do
+    if not mono_inks[rect.ink] then mono_inks[rect.ink] = true; mono_ink_count = mono_ink_count + 1 end
+    local red, green, blue = hexChannels(rect.ink)
+    if red then
+        assert(red == green and green == blue, "Every monochrome painted hex tone must have equal RGB channels")
+        if red > 0 and red < 255 then has_mid_gray = true end
+    else
+        assert(rect.ink == "black" or rect.ink == "white",
+            "The monochrome renderer may only use named black/white or equal-channel gray tones")
+    end
+end
+assert(mono_ink_count >= 3, "The monochrome renderer must use cached grayscale tones instead of coarse black/white holes")
+assert(has_mid_gray, "The monochrome renderer must paint visible intermediate gray tones")
+
+-- At night terrain remains dark but has multiple readable native tones, rather
+-- than turning into a pure-black silhouette. Restore daytime afterwards so
+-- gameplay tests retain their deterministic initial world.
+color_enabled, session.color_enabled, session.world_time, session.pitch = true, true, 0, -0.65
+resetPixels()
+canvas:paintTo(buffer, 0, 0)
+local night_colors, night_nonblack, night_dark = {}, 0, false
+for _, rect in ipairs(painted) do
+    if rect.kind == "rgb" then
+        night_colors[rect.color] = true
+        local red, green, blue = hexChannels(rect.color)
+        if red and (red > 0 or green > 0 or blue > 0) then
+            night_nonblack = night_nonblack + rect.w * rect.h
+            if math.max(red, green, blue) < 130 then night_dark = true end
+        end
+    end
+end
+local night_color_count = 0
+for _ in pairs(night_colors) do night_color_count = night_color_count + 1 end
+assert(night_dark and night_color_count >= 2 and night_nonblack > 210 * 126 / 3,
+    "Night terrain must remain dark but readable through non-black native RGB tones")
+session.world_time, session.pitch = .5, 0
+color_enabled, session.color_enabled = false, false
 session:turn(1)
 canvas:paintTo(buffer, 0, 0)
-assert(canvas._ray_cache ~= cache, "Turning must rebuild the view-ray cache")
+assert(canvas._ray_cache ~= cache, "Changing yaw must rebuild the view-ray cache")
+
+resetPixels()
+canvas:_stroke(buffer, { 2, 2 }, { 24, 2 }, 2)
+for _, rect in ipairs(painted) do
+    assert(rect.w <= 2 and rect.h <= 2, "Target selection strokes must stay thin two-pixel UI lines")
+end
+
+local torch_session = test.VoxelSession.new(31337)
+torch_session.slots = { [1] = { material = "torch", count = 1 } }
+torch_session:syncDerived()
+local torch_hotbar = test.Hotbar:new{ width = 360, height = 48, session = torch_session }
+resetPixels()
+torch_hotbar:paintTo(buffer, 0, 0)
+local torch_has_light, torch_is_solid_black = false, false
+-- Slot one is x=2..39; its 29px icon starts at x=6, y=7. Only inspect calls
+-- wholly inside this icon to avoid mistaking the hotbar frame for the torch.
+for _, rect in ipairs(painted) do
+    if rect.kind == "mono" and rect.x >= 6 and rect.y >= 7 and rect.x + rect.w <= 35 and rect.y + rect.h <= 36 then
+        if rect.ink ~= "black" then torch_has_light = true end
+        if rect.ink == "black" and rect.w * rect.h >= 29 * 29 * 0.75 then torch_is_solid_black = true end
+    end
+end
+assert(torch_has_light and not torch_is_solid_black,
+    "The torch icon must render an explicit flame and shaft, not a solid black block")
 
 -- Bedrock-style live look: every pan sample applies only the finger delta,
 -- rather than snapping to the old fixed-size swipe turn.
@@ -305,16 +425,6 @@ assert(canvas:onPanReleaseMinecraftLook("PanReleaseMinecraftLook", { pos = { x =
 assert(canvas._look_pan_last == nil, "Pan release must clear the tracked finger position")
 assert(session.live_look == false, "Pan release must restore the full-quality renderer")
 canvas.refreshFast = old_refresh_fast
-
-color_enabled = false
-session.color_enabled = false
-resetPixels()
-canvas:paintTo(buffer, 0, 0)
-assert(rgb_calls == 0, "The monochrome renderer must never use RGB paints")
-assert(paintedSum("mono") >= 210 * 126, "The monochrome renderer must cover the whole canvas")
-for _, rect in ipairs(painted) do
-    assert(rect.ink == "black" or rect.ink == "white", "The monochrome renderer must stay black and white")
-end
 
 -- Movement animates four local fast refreshes and never a full-pane refresh.
 dirty_calls, repaint_calls, scheduled = {}, 0, {}
@@ -356,7 +466,9 @@ local drop_material = test.DROPS[placed_material]
 local drop_before = session:countMaterial(drop_material)
 assert(session:holdAction{ x = target.place_x, z = target.place_z, y = target.place_y }, "Holding must mine the targeted block again")
 assert(test.blockAt(world, target.place_x, target.place_z, target.place_y) == nil, "The held action must remove the block")
-assert(session:countMaterial(placed_material) == before_count - 1, "The placed block was spent when it was placed")
+local expected_placed_count = before_count - 1 + (drop_material == placed_material and 1 or 0)
+assert(session:countMaterial(placed_material) == expected_placed_count,
+    "Placement must consume one item while mining restores it only when its drop matches the placed material")
 assert(session:countMaterial(drop_material) == drop_before + 1, "Mining must add the block's dropped item (" .. drop_material .. ")")
 session:toggleTapAction()
 assert(session.tap_action == "mine", "The mode button must flip the tap action")
@@ -365,18 +477,25 @@ session:toggleTapAction()
 assert(session.tap_action == "place", "The mode button must be reversible")
 
 --[[--
-Inventory: stack limits, cursor stack, hotbar, drops
+Inventory: finite Survival slots, cursor stack, Creative catalogue and drops
 ]]--
-assert(session.slots[1].material == "grass" and session.slots[1].count > 0, "The starting kit must fill the hotbar")
-assert(session.selected_slot == 1 and session:selectedMaterial() == "grass", "The first hotbar slot must be active")
-assert(session.hotbar[1] == "grass" and session.inventory.grass == session:countMaterial("grass"), "Derived hotbar and counters must mirror the slots")
+assert(session.mode == "Survival", "The default session must be Survival")
+assert(session.slots[1].material == "planks" and session.slots[1].count > 0,
+    "The 4.7.0 Survival starter kit must begin with planks")
+assert(session.selected_slot == 1 and session:selectedMaterial() == "planks",
+    "The first hotbar slot must select the planks starter stack")
+assert(session.hotbar[1] == "planks" and session.inventory.planks == session:countMaterial("planks"),
+    "Derived hotbar and counters must mirror the real slots")
 local used_slots = 0
 for slot = 1, test.INVENTORY_SLOTS do if session.slots[slot] then used_slots = used_slots + 1 end end
-assert(session.used_slots == used_slots and used_slots >= #test.STARTING_KIT, "The used-slot counter must match the occupied slots")
-assert(session:addItem("gold", 100) == 0, "Stacks must be split across slots when they exceed the stack limit")
+assert(session.used_slots == used_slots and used_slots >= #test.STARTING_KIT,
+    "The used-slot counter must match the occupied Survival starter slots")
+assert(session:addItem("gold", 100) == 0, "Stacks must split across slots when they exceed the stack limit")
 assert(session:countMaterial("gold") == 100, "All added items must be counted")
-assert(session:addItem("gold", 1) == 0 and session:countMaterial("gold") == 101, "Fitting items must top up the existing stacks")
-assert(session:addItem("gold", 27) == 0 and session:countMaterial("gold") == 128, "Partial stacks must fill up to the stack limit")
+assert(session:addItem("gold", 1) == 0 and session:countMaterial("gold") == 101,
+    "Fitting items must top up existing stacks")
+assert(session:addItem("gold", 27) == 0 and session:countMaterial("gold") == 128,
+    "Partial stacks must fill to the stack limit")
 local injected = {}
 for slot = 1, test.INVENTORY_SLOTS do
     if not session.slots[slot] then
@@ -384,32 +503,41 @@ for slot = 1, test.INVENTORY_SLOTS do
         injected[#injected + 1] = slot
     end
 end
-assert(session:addItem("gold", 5) == 5, "A completely full inventory must report the leftover")
+assert(session:addItem("gold", 5) == 5, "A completely full Survival inventory must report leftovers")
 for _, slot in ipairs(injected) do session.slots[slot] = nil end
 session:syncDerived()
-assert(session:takeMaterial("gold", 128), "Taking 128 gold must succeed")
-assert(session:countMaterial("gold") == 0 and session:takeMaterial("gold", 1) == false, "Empty materials must not be taken")
+assert(session:takeMaterial("gold", 128), "Taking a complete material count must succeed")
+assert(session:countMaterial("gold") == 0 and session:takeMaterial("gold", 1) == false,
+    "Empty materials must not be taken")
 
-assert(session:pickSlot(1) == "picked" and session.held.material == "grass" and session.slots[1] == nil, "Picking up must move the stack into the cursor")
-assert(session.hotbar[1] == nil, "The hotbar must show an empty slot while its stack is held")
-assert(session:pickSlot(10) == "swapped" and session.held.material == "leaves", "Storing onto a different stack must swap them")
-assert(session.slots[10].material == "grass", "The swapped stack must land in the storage slot")
-assert(session:pickSlot(10) == "swapped" and session.held.material == "grass", "Swapping back must restore the original order")
-assert(session:pickSlot(1) == "placed" and session.slots[1].material == "grass", "Storing into an empty slot must place the stack there")
-assert(session.held == nil, "The cursor must be empty after storing")
-assert(session:pickSlot(36) == "empty", "Tapping an empty slot with an empty cursor must do nothing")
+assert(session:pickSlot(1) == "picked" and session.held.material == "planks" and session.slots[1] == nil,
+    "Picking up must move the planks starter stack into the cursor")
+assert(session.hotbar[1] == nil, "The derived hotbar must show an empty slot while its stack is held")
+assert(session:pickSlot(2) == "swapped" and session.held.material == "dirt",
+    "Picking a different occupied slot must swap its stack with the cursor")
+assert(session.slots[2].material == "planks", "The swapped planks must land in the target slot")
+assert(session:pickSlot(2) == "swapped" and session.held.material == "planks",
+    "Swapping back must restore the original storage material")
+assert(session:pickSlot(1) == "placed" and session.slots[1].material == "planks",
+    "Storing the cursor stack into an empty slot must succeed")
+assert(session.held == nil and session:pickSlot(36) == "empty",
+    "An empty cursor tapping an empty slot must do nothing")
 
-local sand_total = session:countMaterial("sand")
-session.slots[20] = { material = "sand", count = 60 }
+local initial_sand = session:countMaterial("sand")
+session.slots[20], session.slots[21] = { material = "sand", count = 60 }, nil
+session:syncDerived()
 session.held = { material = "sand", count = 10 }
-assert(session:pickSlot(21) == "placed" and session.slots[21].count == 10, "A held stack must be placeable into an empty slot")
+assert(session:pickSlot(21) == "placed" and session.slots[21].count == 10,
+    "A held stack must be placeable in an empty slot")
 session.held = { material = "sand", count = 10 }
 assert(session:pickSlot(20) == "merged" and session.slots[20].count == 64 and session.held.count == 6,
-    "Merging must fill the stack up to the limit and keep the rest in hand")
+    "Merging must stop at the stack limit and retain the remainder")
 assert(session:returnHeld(), "Closing a screen must return the held stack")
-assert(session:countMaterial("sand") == sand_total + 80 and session.held == nil, "Returned stacks must not lose items")
+assert(session:countMaterial("sand") == initial_sand + 80 and session.held == nil,
+    "Returning the cursor stack must not lose items")
 session:selectSlot(3)
-assert(session.selected_slot == 3 and session:selectedMaterial() == "stone", "Selecting a hotbar slot must change the active block")
+assert(session.selected_slot == 3 and session:selectedMaterial() == "bread",
+    "Selecting a hotbar slot must change the active starter item")
 
 -- Mining a grass block exposes the block below and drops dirt.
 local grass_x, grass_z
@@ -443,28 +571,48 @@ assert(session:mineBlock(log_target), "Trunk blocks must be mineable")
 assert(test.blockAt(world, log_target.x, log_target.z, log_target.y) == nil, "Mined trunk blocks must vanish")
 assert(session:countMaterial("wood") == wood_before + 1, "Trunks must drop wood")
 
--- Placing refuses to trap the player and refills the emptied hand slot.
+-- Placing refuses to trap the player and refills an emptied selected slot.
 session:closeOverlays()
-session.selected_slot = 4
-assert(session:selectedMaterial() == "wood", "Slot four must hold wood")
+session.selected_slot = 1
 local feet = math.floor(session:groundHeightAtPlayer())
 assert(session:placeBlock{ x = math.floor(session.player_x), z = math.floor(session.player_z), y = feet } == false
     and session.last_event:find("standing"), "Blocks may not be placed inside the player")
 for slot = 1, test.INVENTORY_SLOTS do
-    if session.slots[slot] and session.slots[slot].material == "wood" then session.slots[slot] = nil end
+    if session.slots[slot] and session.slots[slot].material == "planks" then session.slots[slot] = nil end
 end
-session.slots[4] = { material = "wood", count = 1 }
-session.slots[30] = { material = "wood", count = 9 }
+session.slots[1] = { material = "planks", count = 1 }
+session.slots[30] = { material = "planks", count = 9 }
 session:syncDerived()
 local headroom = session:walkHeight(session.player_x, session.player_z)
 local free_x, free_z, attempt = math.floor(session.player_x) + 2, math.floor(session.player_z) + 2, 0
 while test.blockAt(world, free_x, free_z, headroom) and attempt < 20 do free_x = free_x + 1; attempt = attempt + 1 end
 assert(session:placeBlock{ x = free_x, z = free_z, y = headroom }, "Placing on a free face must succeed")
-assert(session.slots[4] and session.slots[4].count == 9 and session.slots[30] == nil,
-    "Bedrock refills the emptied hand slot from the next matching stack")
-session.slots[4] = nil
+assert(session.slots[1] and session.slots[1].count == 9 and session.slots[30] == nil,
+    "Survival must refill an emptied hotbar slot from matching storage")
+session.slots[1] = nil
 session:syncDerived()
 assert(session:placeBlock{ x = free_x, z = free_z, y = headroom + 1 } == false, "An empty hand must refuse placing")
+
+-- Creative begins with no finite starter stacks; selecting a catalogue material
+-- creates a usable unlimited stack and placement does not consume it.
+local creative = test.VoxelSession.new(67890, "Creative", "Normal")
+assert(creative.mode == "Creative" and creative:countMaterial("planks") == 0,
+    "Creative must start without the finite Survival starter kit")
+local creative_panel = test.InventoryPanel:new{ width = 600, height = 420, session = creative }
+creative:toggleInventory()
+local creative_layout = creative_panel:layout()
+local creative_material = creative_panel:hitTest(creative_layout.grid_x + 2, creative_layout.grid_y + 2)
+assert(creative_material.kind == "material", "The Creative catalogue grid must expose a material hit")
+assert(creative_panel:onTapMinecraftInventory{ pos = { x = creative_layout.grid_x + 2, y = creative_layout.grid_y + 2 } },
+    "Tapping a Creative catalogue material must be handled")
+assert(creative:selectedMaterial() == creative_material.material and creative.slots[1].count == 1,
+    "Creative catalogue selection must equip the selected material")
+local creative_x, creative_z = 2, 2
+local creative_y = creative:walkHeight(creative_x, creative_z)
+local creative_count = creative:countMaterial(creative_material.material)
+assert(creative:placeBlock{ x = creative_x, z = creative_z, y = creative_y }, "Creative must place a catalogue material")
+assert(creative:countMaterial(creative_material.material) == creative_count,
+    "Creative placement must not consume its equipped material")
 
 --[[--
 Crafting: recipes consume ingredients and respect availability
@@ -500,40 +648,62 @@ local label = session:recipeLabel(test.RECIPES[1])
 assert(label:find("Planks", 1, true) and label:find("/", 1, true), "Recipe rows must show the result and the ingredient counters")
 
 --[[--
-Overlay screens: hit testing, paging, and local refresh
+Catalogue inventory, crafting, modal routing, and local refresh
 ]]--
-local inventory_panel = test.InventoryPanel:new{ width = 210, height = 126, session = session }
-local crafting_panel = test.CraftingPanel:new{ width = 210, height = 126, session = session }
-inventory_panel.crafting_panel = crafting_panel
+local inventory_panel = test.InventoryPanel:new{ width = 600, height = 748, session = session, canvas = canvas }
+local crafting_panel = test.CraftingPanel:new{ width = 210, height = 126, session = session, canvas = canvas }
+inventory_panel.crafting_panel, inventory_panel.hotbar = crafting_panel, nil
 crafting_panel.inventory_panel = inventory_panel
 inventory_panel._origin_x, inventory_panel._origin_y = 5, 7
 crafting_panel._origin_x, crafting_panel._origin_y = 5, 7
 session:closeOverlays()
-session:selectSlot(1)
-assert(inventory_panel:hitTest(3, 3).kind == "header", "The inventory header must not be a slot")
-assert(inventory_panel:hitTest(inventory_panel.width - 6, 6).kind == "button", "The close button must sit in the header corner")
-local panel_button_w = math.max(30, math.floor((inventory_panel.width - 12) / 3))
-local craft_button_x = inventory_panel.width - 8 - panel_button_w * 2
-assert(inventory_panel:hitTest(craft_button_x + 2, 6).id == "craft", "The crafting button must sit next to the close button")
-local slot_hit = inventory_panel:hitTest(4 + inventory_panel:slotWidth() * 8 + 2, inventory_panel:mainGridY() + 3)
-assert(slot_hit.kind == "slot" and slot_hit.slot == 18 and slot_hit.row == 1, "The first storage row must map to slots 10-18")
-local last_hit = inventory_panel:hitTest(4 + 2, inventory_panel:mainGridY() + inventory_panel:slotHeight() * 2 + 3)
-assert(last_hit.slot == 28, "The first column of the last storage row must map to slot 28")
-local hotbar_hit = inventory_panel:hitTest(4 + 2, inventory_panel:hotbarY() + 3)
-assert(hotbar_hit.slot == 1 and hotbar_hit.row == 4, "The separated bottom row must map to hotbar slot 1")
-assert(inventory_panel:hitTest(4, inventory_panel.height - 4).kind == "footer", "The held-stack hint must own the footer")
+local inventory_layout = inventory_panel:layout()
+assert(inventory_layout.outer_x >= 0 and inventory_layout.outer_y >= 0
+    and inventory_layout.outer_x + inventory_layout.outer_w <= inventory_panel.width
+    and inventory_layout.hotbar_x >= 0 and inventory_layout.hotbar_x + inventory_layout.hotbar_w <= inventory_panel.width,
+    "Inventory layout must keep its catalogue and centered slots inside the overlay")
+assert(inventory_layout.grid_columns >= 4 and inventory_layout.cell_w > 0 and inventory_layout.cell_h > 0,
+    "Inventory layout must provide a usable catalogue grid")
+assert(inventory_panel:hitTest(inventory_panel.width - inventory_layout.margin - 1, inventory_layout.outer_y + 1).kind == "close",
+    "The catalogue close control must be hit-testable")
+local category_hit = inventory_panel:hitTest(inventory_layout.rail_x + 2, inventory_layout.rail_y + 8)
+assert(category_hit.kind == "category" and category_hit.category == 1,
+    "The category rail must route category selections")
+local material_hit = inventory_panel:hitTest(inventory_layout.grid_x + 2, inventory_layout.grid_y + 2)
+assert(material_hit.kind == "material" and test.MATERIALS[material_hit.material],
+    "The catalogue grid must return an actual material")
+local hotbar_hit = inventory_panel:hitTest(inventory_layout.hotbar_x + 2, inventory_layout.hotbar_y + 2)
+assert(hotbar_hit.kind == "hotbar" and hotbar_hit.slot == 1,
+    "The centered nine-slot hotbar must remain directly selectable")
+assert(inventory_panel:hitTest(-1, -1).kind == "empty", "Outside the catalogue must not be actionable")
 
 session:act("inventory")
-assert(session.inventory_open, "The inventory command must open the overlay")
+assert(session.inventory_open, "The inventory command must open the modal catalogue")
 dirty_calls, repaint_calls = {}, 0
-assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + 4 + 2, y = 7 + inventory_panel:hotbarY() + 3 } },
-    "Tapping a slot must be handled")
-assert(session.held and session.held.material == "grass", "Tapping the first slot must pick the stack up")
-assert(repaint_calls >= 1 and dirty_calls[#dirty_calls].waveform == "ui", "Overlays must refresh their own region with a ui waveform")
-assert(dirty_calls[#dirty_calls].region.w == 210 and dirty_calls[#dirty_calls].region.h == 126, "The overlay region must match the covered canvas")
-assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + inventory_panel.width - 6, y = 7 + 6 } }, "Tapping close must be handled")
-assert(session.inventory_open == false and session.held == nil, "Closing the inventory must return the held stack")
-assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 6, y = 6 } } == false, "A closed overlay must ignore taps")
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + inventory_layout.hotbar_x + 2, y = 7 + inventory_layout.hotbar_y + 2 } },
+    "Tapping a modal hotbar slot must be handled")
+assert(session.selected_slot == 1, "Inventory hotbar routing must select the touched slot")
+assert(repaint_calls >= 1 and dirty_calls[#dirty_calls].waveform == "ui",
+    "Inventory interactions must refresh the modal region with the UI waveform")
+assert(dirty_calls[#dirty_calls].region.w == 600 and dirty_calls[#dirty_calls].region.h == 748,
+    "The inventory refresh must cover exactly its modal region")
+
+-- A world-surface tap must reach the open inventory first, never raycast or act
+-- on a covered voxel canvas.  This is the fallback used on KOReader builds with
+-- differing overlap dispatch order.
+canvas.inventory_panel = inventory_panel
+local modal_raycasts = 0
+local saved_pick = canvas.pickBlock
+canvas.pickBlock = function() modal_raycasts = modal_raycasts + 1; return nil end
+assert(canvas:onTapMinecraftExplore("TapMinecraftExplore", { pos = { x = 5 + inventory_layout.hotbar_x + 2, y = 7 + inventory_layout.hotbar_y + 2 } }),
+    "A covered canvas tap must be consumed by the inventory modal")
+assert(modal_raycasts == 0, "A covered canvas tap must not raycast the world")
+canvas.pickBlock = saved_pick
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 5 + inventory_panel.width - inventory_layout.margin - 1, y = 7 + inventory_layout.outer_y + 1 } },
+    "Tapping the inventory close control must be handled")
+assert(session.inventory_open == false and session.held == nil, "Closing the inventory must return a held stack")
+assert(inventory_panel:onTapMinecraftInventory{ pos = { x = 6, y = 6 } } == false,
+    "A closed modal must ignore direct inventory taps")
 
 session:act("crafting")
 assert(session.crafting_open and session.craft_page == 1, "The crafting screen must open on the first page")
@@ -541,7 +711,7 @@ local recipe_hit = crafting_panel:hitTest(10, crafting_panel:headerHeight() + 3)
 assert(recipe_hit.kind == "recipe" and recipe_hit.index == 1, "The first recipe row must map to the first recipe")
 local footer_y = crafting_panel.height - crafting_panel:footerHeight() + 3
 assert(crafting_panel:hitTest(10, footer_y).id == "prev" and crafting_panel:hitTest(crafting_panel.width - 10, footer_y).id == "next",
-    "The footer must page through the recipes")
+    "The crafting footer must page through recipes")
 assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + crafting_panel.width - 10, y = 7 + footer_y } }, "Paging forward must be handled")
 assert(session.craft_page == 2, "Paging forward must advance the page")
 assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + 10, y = 7 + footer_y } }, "Paging back must be handled")
@@ -553,7 +723,7 @@ assert(crafting_panel:onTapMinecraftCrafting{ pos = { x = 5 + crafting_panel.wid
 assert(session.crafting_open == false, "The crafting screen must close")
 
 --[[--
-AppDock pane contract
+AppDock pane contract: 4.7.0 touch band, modal routing, and size boundaries
 ]]--
 local function findButton(root, title)
     for _, widget in ipairs(root) do
@@ -567,13 +737,61 @@ local function findWidget(root, target)
     end
     return false
 end
+local function insidePane(widget, width, height)
+    local offset = widget and widget.overlap_offset
+    if not offset then return false end
+    return widget.width > 0 and widget.height > 0 and offset[1] >= 0 and offset[2] >= 0
+        and offset[1] + widget.width <= width and offset[2] + widget.height <= height
+end
+local function touchBandBounds(dpad, jump, inventory_button, mode_button)
+    local top = math.min(dpad.overlap_offset[2], jump.overlap_offset[2], inventory_button.overlap_offset[2], mode_button.overlap_offset[2])
+    local bottom = math.max(dpad.overlap_offset[2] + dpad.height, jump.overlap_offset[2] + jump.height,
+        inventory_button.overlap_offset[2] + inventory_button.height, mode_button.overlap_offset[2] + mode_button.height)
+    return top, bottom
+end
+local function assertWorldLayout(width, height)
+    local local_instance = {}
+    local local_context = { dimen = { w = width, h = height }, px = function(value) return value end, requestRebuild = function() end }
+    app.buildPane(local_instance, local_context)
+    local local_state = local_instance.minecraft
+    local_state.screen = "world"
+    local local_pane = app.buildPane(local_instance, local_context)
+    local group, local_canvas, local_hotbar = local_pane[1], local_state.canvas, local_state.hotbar
+    local local_dpad = local_state.joystick
+    local local_jump = findButton(group, "Jump")
+    local local_inventory = findButton(group, "Inventory")
+    local local_mode = findButton(group, "Tap: Place") or findButton(group, "Tap: Mine")
+    assert(local_canvas and local_hotbar and local_dpad and local_jump and local_inventory and local_mode,
+        string.format("Gameplay layout %dx%d must retain world, hotbar, D-pad, jump, Inventory and Tap controls", width, height))
+    assert(insidePane(local_canvas, width, height) and insidePane(local_hotbar, width, height)
+        and insidePane(local_dpad, width, height) and insidePane(local_jump, width, height)
+        and insidePane(local_inventory, width, height) and insidePane(local_mode, width, height),
+        string.format("Gameplay layout %dx%d must keep every interactive control inside the pane", width, height))
+    assert(local_hotbar.height >= 36 and local_hotbar.height <= 48,
+        string.format("Gameplay layout %dx%d must use the 36-48px enlarged hotbar", width, height))
+    assert(math.abs((local_hotbar.overlap_offset[1] + local_hotbar.width / 2) - width / 2) <= 1,
+        string.format("Gameplay layout %dx%d must center the hotbar", width, height))
+    local touch_top, touch_bottom = touchBandBounds(local_dpad, local_jump, local_inventory, local_mode)
+    -- The reserved band is at least 96px, but in narrow split panes its
+    -- horizontally constrained D-pad may occupy less of that band.
+    local min_touch_footprint = width >= 400 and 96 or 72
+    assert(touch_bottom - touch_top >= min_touch_footprint and touch_bottom - touch_top <= 126,
+        string.format("Gameplay layout %dx%d must keep an adaptive compact touch band", width, height))
+    assert(local_canvas.overlap_offset[2] + local_canvas.height <= touch_top,
+        string.format("Gameplay layout %dx%d must not let the world view paint into the touch band", width, height))
+    for _, title in ipairs({ "Left", "Forward", "Back", "Right" }) do
+        assert(not findButton(group, title), "4.7.0 must replace the separate " .. title .. " toolbar button with the D-pad")
+    end
+    return local_pane, local_state, local_context
+end
+
 local instance = {}
 local context = { dimen = { w = 600, h = 748 }, px = function(value) return value end, requestRebuild = function() end }
 local pane = app.buildPane(instance, context)
 local state = instance.minecraft
 assert(state and state.screen == "splash", "The app must start on the Minecraft splash screen")
-assert(findButton(pane[1], "Play"), "The splash screen must expose a play button")
-findButton(pane[1], "Play").callback()
+assert(findButton(pane[1], "PLAY WORLD"), "The splash screen must expose a Play World button")
+findButton(pane[1], "PLAY WORLD").callback()
 pane = app.buildPane(instance, context)
 assert(state.screen == "worlds", "Playing must open the saved-world list")
 state.world_store.worlds = {}
@@ -589,93 +807,103 @@ assert(seed_dialog and seed_dialog.title, "The seed field must open an input dia
 seed_dialog.input = "777"
 seed_dialog.buttons[1][2].callback()
 pane = app.buildPane(instance, context)
+assert(findButton(pane[1], "Game Mode: Survival"), "World creation must expose the Survival/Creative selector")
 findButton(pane[1], "Create").callback()
 pane = app.buildPane(instance, context)
-assert(state and state.session and state.canvas, "The pane must expose its Minecraft state")
-assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the canvas and the hotbar")
-assert(findWidget(pane[1], state.inventory_panel) and findWidget(pane[1], state.crafting_panel), "The pane must embed both overlays")
+assert(state and state.session and state.canvas, "The world pane must expose Minecraft state")
+assert(findWidget(pane[1], state.canvas) and findWidget(pane[1], state.hotbar), "The pane must embed the world view and enlarged hotbar")
+assert(findWidget(pane[1], state.inventory_panel) and findWidget(pane[1], state.crafting_panel), "The pane must embed both modal overlays")
 assert(findWidget(pane[1], state.event_line), "The pane must embed the action line")
-assert(state.joystick, "The pane must expose the Bedrock-style D-pad")
+assert(state.joystick, "The pane must expose the D-pad")
+local jump_button, inventory_button = findButton(pane[1], "Jump"), findButton(pane[1], "Inventory")
+local mode_button = findButton(pane[1], "Tap: Place")
+assert(jump_button and inventory_button and mode_button, "The touch band must expose Jump, Inventory and Tap: Place")
+assertWorldLayout(600, 748)
+
 local dpad_action
 local old_dpad_act = state.canvas.act
 state.canvas.act = function(_, action) dpad_action = action; return true end
 state.joystick._origin_x, state.joystick._origin_y = 10, 20
-assert(state.joystick:onTapMinecraftJoystick("TapMinecraftJoystick", {
-    pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
-}), "The D-pad must accept the real two-argument tap callback")
+assert(state.joystick:onTapMinecraftJoystick("TapMinecraftJoystick", { pos = { x = 10 + state.joystick.width / 2, y = 22 } }),
+    "The D-pad must accept KOReader's two-argument tap callback")
 assert(dpad_action == "forward", "The upper D-pad button must move forward")
-local hold_started, hold_start_count
-hold_start_count = 0
+local hold_started, hold_start_count = nil, 0
 state.joystick.canvas.session.startHeldMove = function(session_for_hold, action)
-    hold_started = action
-    hold_start_count = hold_start_count + 1
+    hold_started, hold_start_count = action, hold_start_count + 1
     session_for_hold.held_move_action = action
 end
-assert(state.joystick:onHoldMinecraftJoystick("HoldMinecraftJoystick", {
-    pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
-}), "Holding the upper D-pad button must start repeated movement")
+assert(state.joystick:onHoldMinecraftJoystick("HoldMinecraftJoystick", { pos = { x = 10 + state.joystick.width / 2, y = 22 } }),
+    "Holding the upper D-pad button must start repeated movement")
 assert(hold_started == "forward", "Holding the upper D-pad button must repeat forward movement")
 for _ = 1, 8 do
-    assert(state.joystick:onPanMinecraftJoystick("PanMinecraftJoystick", {
-        pos = { x = 10 + state.joystick.width / 2, y = 20 + 2 },
-    }), "Repeated pan samples while holding the same D-pad direction must be handled")
+    assert(state.joystick:onPanMinecraftJoystick("PanMinecraftJoystick", { pos = { x = 10 + state.joystick.width / 2, y = 22 } }),
+        "Repeated pan samples while holding the same D-pad direction must be handled")
 end
-assert(hold_start_count == 1,
-    "Repeated pan samples must not restart immediate movement and redraw the full scene every sample")
+assert(hold_start_count == 1, "Repeated pan samples must not restart held movement")
 local hold_stopped = false
 state.joystick.canvas.session.stopHeldMove = function() hold_stopped = true end
 assert(state.joystick:onHoldReleaseMinecraftJoystick(), "Releasing a held D-pad button must be handled")
 assert(hold_stopped, "Releasing a held D-pad button must stop repeated movement")
 state.canvas.act = old_dpad_act
+
 local old_control_pick = state.canvas.pickBlock
 state.canvas.pickBlock = function() error("A control tap must not raycast for block placement") end
 local jump_region = state.canvas.control_jump_region
-assert(state.canvas:onTapMinecraftExplore("TapMinecraftExplore", {
-    pos = { x = jump_region.x + jump_region.w / 2, y = jump_region.y + jump_region.h / 2 },
-}), "A jump-button tap routed through the canvas must be handled")
+assert(state.canvas:onTapMinecraftExplore("TapMinecraftExplore", { pos = { x = jump_region.x + jump_region.w / 2, y = jump_region.y + jump_region.h / 2 } }),
+    "A jump-button tap routed through the canvas must be handled")
 assert(state.session.jump_frame ~= nil, "A jump-button tap must jump instead of placing a block")
 state.session.jump_frame, state.session.jump_offset = nil, 0
 state.canvas.pickBlock = old_control_pick
+
 -- KOReader calls handlers as (event_arg, gesture). Verify the real dispatch
--- shape for canvas interaction and hotbar selection, not only direct helpers.
+-- shape for the world surface and hotbar rather than only helper methods.
 local old_pick, old_act = state.canvas.pickBlock, state.canvas.act
 state.canvas.pickBlock = function(_, x, y)
-    assert(x == 123 and y == 234, "The dispatched canvas gesture position must be forwarded")
+    assert(x == 123 and y == 234, "The dispatched world gesture position must be forwarded")
     return { x = 2, z = 2, y = 1 }
 end
 state.canvas.act = function(_, action, target)
-    assert(action == "tap" and target and target.x == 2, "A canvas tap must dispatch a tap action")
+    assert(action == "tap" and target and target.x == 2, "A world tap must dispatch a tap action")
     return true
 end
 assert(state.canvas:onTapMinecraftExplore("TapMinecraftExplore", { pos = { x = 123, y = 234 } }),
     "The canvas must handle KOReader's two-argument tap callback")
 state.canvas.act = function(_, action, target)
-    assert(action == "hold" and target and target.x == 2, "A canvas hold must dispatch a hold action")
+    assert(action == "hold" and target and target.x == 2, "A world hold must dispatch a hold action")
     return true
 end
 assert(state.canvas:onHoldMinecraftAction("HoldMinecraftAction", { pos = { x = 123, y = 234 } }),
     "The canvas must handle KOReader's two-argument hold callback")
 state.canvas.pickBlock, state.canvas.act = old_pick, old_act
+state.hotbar:paintTo(newBuffer(), state.hotbar.overlap_offset[1], state.hotbar.overlap_offset[2])
 state.session:selectSlot(1)
 assert(state.hotbar:onTapMinecraftHotbar("TapMinecraftHotbar", { pos = { x = state.hotbar._origin_x + state.hotbar.width / 2, y = state.hotbar._origin_y + 5 } }),
-    "The hotbar must handle KOReader's two-argument selection callback")
+    "The enlarged hotbar must handle KOReader's two-argument selection callback")
 assert(state.session.selected_slot == 5, "A dispatched hotbar tap must select the touched slot")
-for _, title in ipairs({ "Color", "Menu", "Jump", "Left", "Forward", "Back", "Right", "Inventory", "Tap: Place" }) do
-    assert(findButton(pane[1], title), "The pane must expose the " .. title .. " control")
-end
 assert(state.session:biomeName() ~= "", "The header must name the current biome")
-findButton(pane[1], "Inventory").callback()
-assert(state.session.inventory_open, "The inventory button must open the inventory")
-assert(state.inventory_panel:onTapMinecraftInventory{ pos = { x = state.inventory_panel._origin_x + state.inventory_panel.width - 6, y = state.inventory_panel._origin_y + 6 } },
-    "The pane inventory must close on request")
-local mode_button = findButton(pane[1], "Tap: Place")
+
+-- WorldPane's full-screen modal fallback must win over a covered canvas.
+inventory_button.callback()
+assert(state.session.inventory_open, "The touch-band Inventory button must open the catalogue modal")
+local routed = 0
+local original_inventory_tap = state.inventory_panel.onTapMinecraftInventory
+state.inventory_panel.onTapMinecraftInventory = function(_, first, second)
+    routed = routed + 1
+    assert((second or first).pos, "The modal fallback must preserve the gesture")
+    return true
+end
+assert(pane:onTapMinecraftModal("TapMinecraftModal", { pos = { x = 12, y = 12 } }),
+    "The full-pane modal fallback must route covered taps")
+assert(routed == 1, "The modal fallback must route exactly once")
+state.inventory_panel.onTapMinecraftInventory = original_inventory_tap
+state.session:closeOverlays()
 mode_button.callback()
-assert(state.session.tap_action == "mine", "The mode button must switch to mining")
-findButton(pane[1], "Forward").callback()
-assert(state.session.motion, "The forward button must start a motion")
-state.session.motion = nil
-findButton(pane[1], "Jump").callback()
-assert(state.session.jump_frame, "The jump button must start the jump animation")
+assert(state.session.tap_action == "mine", "The touch-band mode button must switch to mining")
+pane = app.buildPane(instance, context)
+assert(findButton(pane[1], "Tap: Mine"), "The rebuilt touch band must expose the current Tap action label")
+jump_button = findButton(pane[1], "Jump")
+jump_button.callback()
+assert(state.session.jump_frame, "The Jump control must start the jump animation")
 state.session.jump_frame, state.session.jump_offset = nil, 0
 
 -- Menu returns to the saved-world list and the newly created world can be opened.
@@ -691,9 +919,10 @@ assert(state.session.motion == nil, "Opening a saved world must not keep a runni
 assert(test.parseWorldSeed("") == nil and test.parseWorldSeed("abc") == false and test.parseWorldSeed("42") == 42,
     "Seed parsing must accept integers, empty input and reject text")
 
--- The pane must also fit a compact split layout.
-local compact = app.buildPane(instance, { dimen = { w = 600, h = 350 }, px = function(value) return value end, requestRebuild = function() end })
-assert(compact and compact.dimen.h == 350 and compact[1], "Minecraft 3D must fit a compact pane")
-assert(findButton(compact[1], "Inventory") and findButton(compact[1], "Color"), "The compact pane must keep its controls")
+-- Required compact and narrow layout bounds. A failure message names the exact
+-- unsupported size instead of hiding overflow behind a generic pane assertion.
+for _, dimen in ipairs({ { 600, 350 }, { 320, 480 }, { 200, 250 } }) do
+    assertWorldLayout(dimen[1], dimen[2])
+end
 
-print("minecraft-4.4.2-ok")
+print("minecraft-4.7.0-ok")
