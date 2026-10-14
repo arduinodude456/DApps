@@ -203,4 +203,4 @@ for _, rect in ipairs(painted) do if rect.rgb then rgb_writes = rgb_writes + 1 e
 assert(rgb_writes > 0, "Farb-E-Ink-Bewegung muss das Farbdithering beibehalten")
 session.live_look = false
 
-print("minecraft-performance-4.7.2-ok")
+print("minecraft-performance-4.7.3-ok")

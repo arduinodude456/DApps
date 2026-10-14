@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.7.0 adds readable lighting, calmer textures, partial mob refreshes and a compact touch HUD. Version 4.7.2 adds a strict black/white E-Ink camera preview with the same ray count. Version 4.6.3 routes taps arriving at the world surface to the open inventory and blocks actions through covered controls. Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
+Version 4.7.0 adds readable lighting, calmer textures, partial mob refreshes and a compact touch HUD. Version 4.7.3 adds a strict black/white E-Ink camera preview with the same ray count. Version 4.6.3 routes taps arriving at the world surface to the open inventory and blocks actions through covered controls. Version 4.6.2 registers the modal inventory tap range during pane initialization. Version 4.6.1 adds item labels and a full-name detail line. Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -175,7 +175,7 @@ local BAYER8 = {
     { 0, 48, 12, 60, 3, 51, 15, 63 }, { 32, 16, 44, 28, 35, 19, 47, 31 },
     { 8, 56, 4, 52, 11, 59, 7, 55 }, { 40, 24, 36, 20, 43, 27, 39, 23 },
     { 2, 50, 14, 62, 1, 49, 13, 61 }, { 34, 18, 46, 30, 33, 17, 45, 29 },
-    { 10, 58, 6, 54, 9, 57, 5, 53 }, { 42, 26, 38, 22, 41, 25, 37, 21 },
+    { 10, 58, 6, 54, 9, 57, 5, 53 }, { 42, 26, 36, 22, 41, 25, 45, 21 },
 }
 local COLOR_PALETTE = {
     black = { 0, 0, 0 },
@@ -235,7 +235,6 @@ local SCENE_COLORS = {
     sky_top = { 62, 139, 211 }, sky_mid = { 119, 190, 229 },
     sky_horizon = { 188, 221, 232 }, cloud = { 246, 247, 238 },
     distant_ground = { 96, 134, 80 }, distant_ground_dark = { 52, 88, 48 },
-    mono_ground = { 153, 153, 153 }, mono_night = { 68, 68, 68 }, mono_nether = { 102, 102, 102 },
 }
 local scene_rgb_colors = {}
 local function sceneColor(name)
@@ -614,7 +613,7 @@ local PATTERNS = {
     flint_and_steel = "00000000" .. "00011000" .. "00122100" .. "01233210" .. "00122100" .. "00011000" .. "00000000" .. "00000000",
 }
 
-local PATTERN_VALUES, PATTERN_AVERAGES = {}, {}
+local PATTERN_VALUES = {}
 for material, pattern_name in pairs(MATERIAL_PATTERNS) do
     local source = PATTERNS[pattern_name] or BASE_STONE_PATTERN
     local values = {}
@@ -623,28 +622,6 @@ for material, pattern_name in pairs(MATERIAL_PATTERNS) do
         values[index] = digit or 2
     end
     PATTERN_VALUES[material] = values
-    local total = 0
-    for index = 1, 64 do total = total + values[index] end
-    PATTERN_AVERAGES[material] = total / 64
-end
-
--- The ray grid controls geometric resolution, not the palette's dither grid.
--- Emit real cached RGB / gray tones, like the sky already does. KOReader and
--- the display handle native ink conversion at physical-pixel resolution;
--- choosing one ink per 6x6 ray made every surface a coarse checkerboard.
-local SURFACE_TONES = {}
-for material, source in pairs(MATERIAL_TARGET_RGB) do
-    local tones = { rgb = {}, mono = {} }
-    local luminance = source[1] * 0.299 + source[2] * 0.587 + source[3] * 0.114
-    for tone = 0, 15 do
-        local factor = 0.30 + tone / 15 * 0.83
-        tones.rgb[tone + 1] = dynamicSceneColor("block_" .. material, source[1] * factor, source[2] * factor, source[3] * factor)
-        local gray = clamp(math.floor(48 + luminance * factor * 0.80 + 0.5), 0, 255)
-        -- 16 native gray levels remain stable and cheap on monochrome E-Ink.
-        gray = math.floor(gray / 17 + 0.5) * 17
-        tones.mono[tone + 1] = dynamicSceneColor("gray", gray, gray, gray)
-    end
-    SURFACE_TONES[material] = tones
 end
 
 -- Crafting recipes -------------------------------------------------------------
@@ -3032,10 +3009,16 @@ function VoxelCanvas:_drawScene(bb, x, y)
             end
         end
     end
-    -- Face tones, rather than thick black cell borders, carry voxel depth.
+    -- Keep the hit voxel from the previous screen sample in both directions.
+    -- A change here is a real voxel boundary, not just a color change caused
+    -- by Bayer dithering; it lets a raised grass block separate from the grass
+    -- field behind it.
+    local previous_hit_keys = {}
     for ry = 0, rows - 1 do
         local bayer_row = BAYER8[(ry % 8) + 1]
         local row_ink, row_start
+        local current_hit_keys = {}
+        local last_hit_key
         for rx = 0, cols - 1 do
             local bayer_col = rx % 8
             -- BAYER8 is 0..63 like AppDock YouTube; coverage in the material
@@ -3054,7 +3037,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
             local next_z = step_z < 0 and fraction_z * delta_z or (1 - fraction_z) * delta_z
             local next_y = step_y < 0 and fraction_y * delta_y or (1 - fraction_y) * delta_y
             local dist, side, bx, bz, by, hit_dist, hit_side, hit_material = 0, 0
-            for ray_step = 1, 48 do
+            for ray_step = 1, 24 do
                 local material
                 if cell_y >= 0 and cell_y < MAX_COLUMN_HEIGHT then
                     material = voxel_flat[voxel_index]
@@ -3076,7 +3059,16 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 if dist > MAX_VIEW_DISTANCE then break end
             end
             local ink
+            local edge = false
             if bx then
+                -- Adjacent blocks on one continuous grass plane should blend;
+                -- a height or material change should not. Ignoring x/z here
+                -- avoids a heavy black checkerboard over every meadow tile
+                -- while retaining the contour around a raised block.
+                local hit_key = by * 64 + (MATERIAL_EDGE_IDS[hit_material] or 0)
+                edge = last_hit_key ~= hit_key or previous_hit_keys[rx] ~= hit_key
+                last_hit_key = hit_key
+                current_hit_keys[rx] = hit_key
                 local hx = player_x + dir_x * hit_dist
                 local hy = camera_y + dir_y * hit_dist
                 local hz = player_z + dir_z * hit_dist
@@ -3096,32 +3088,55 @@ function VoxelCanvas:_drawScene(bb, x, y)
                 end
                 local u = max(0, min(7, floor(fu * 8)))
                 local v = max(0, min(7, floor(fv * 8)))
-                -- Green grass cap also wraps a little way down the sides.
-                if hit_material == "grass" and not top and fv >= 0.80 then
-                    texture_material, pattern = "grass", pattern_values.grass
-                end
                 local level = pattern[v * 8 + u + 1]
-                -- Texture minification: distant 8x8 patterns otherwise alias
-                -- into noisy checkerboards. Silhouettes keep the same low-res grid.
-                if hit_dist > 7 then
-                    local blend = min(1, (hit_dist - 7) / 7)
-                    level = level + ((PATTERN_AVERAGES[texture_material] or 2) - level) * blend
+                -- A top face is brighter. Both vertical face orientations are
+                -- shaded (the old code only darkened one of them), while both
+                -- keep one texture step of color so wood does not turn into a
+                -- black silhouette on a color panel.
+                if color_mode then
+                    -- Color panels shape the surface with its dithered color: a
+                    -- top face is one step brighter, but the base texture step
+                    -- stays visible on side faces instead of collapsing into a
+                    -- solid black surface.
+                    if top then
+                        if level > 0 then level = level + 1 end
+                    elseif hit_side == 0 then
+                        level = level - 1
+                    elseif hit_side == 2 then
+                        level = level - 1
+                    end
+                elseif hit_side == 0 and level > 1 then
+                    -- Monochrome panels keep the raw texture density for tops so
+                    -- a bright grass cap never turns into blank white paper.
+                    level = level - 1
                 end
                 local material_def = MATERIALS[hit_material]
-                -- One gentle directional shade only. Night stays recognisable,
-                -- but even unlit sides retain readable material and geometry.
                 local face_light = top and 1 or (hit_side == 0 and 0.94 or 0.86)
+                local torch_light = torchLightAt(hx, hz, hy)
                 local daylight_light = (0.62 + daylight * 0.38) * face_light
-                local torch_light = #visible_lights > 0 and torchLightAt(hx, hz, hy) or 0
                 local light = (material_def and material_def.emissive) and 1 or max(torch_light, daylight_light)
-                local texture_tone = 0.78 + level * 0.11
-                local tone = max(0, min(15, floor((texture_tone * light - 0.30) / 0.83 * 15 + 0.5)))
+                level = max(0, min(3, math.floor(level * light + 0.5)))
                 if color_mode then
-                    ink = level == 0 and "black" or SURFACE_TONES[texture_material].rgb[tone + 1]
+                    local mix = material_mix_cache[texture_material][level + 1]
+                    ink = dither_threshold < mix.second_pixels and mix.second or mix.first
+                elseif level <= 0 then
+                    ink = Blitbuffer.COLOR_BLACK
+                elseif level == 1 then
+                    ink = dither_threshold < 5 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
+                elseif level == 2 then
+                    ink = dither_threshold < 2 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
                 else
-                    ink = level == 0 and Blitbuffer.COLOR_BLACK or SURFACE_TONES[texture_material].mono[tone + 1]
+                    ink = Blitbuffer.COLOR_WHITE
+                end
+                -- Do not replace an RGB material color with monochrome
+                -- black/white shading. Keep the material color intact.
+                if not color_mode and hit_side == 0 and (bx + bz) % 2 == 0 then
+                    ink = ink == Blitbuffer.COLOR_BLACK and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
                 end
             elseif color_mode then
+                edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
+                current_hit_keys[rx] = nil
+                last_hit_key = nil
                 local sky_position = ry / math.max(1, rows - 1)
                 if dir_y < 0 then
                     ink = dither_threshold < 7 and scene_palette.ground_dark or scene_palette.ground
@@ -3136,13 +3151,25 @@ function VoxelCanvas:_drawScene(bb, x, y)
                     ink = scene_palette.horizon
                 end
             elseif dir_y < 0 then
-                -- Native mid-gray keeps the far ground calm and distinct from sky.
-                ink = "mono_ground"
+                -- Distant terrain as a mid-gray dither: on monochrome panels the
+                -- sky stays light while the far ground stays visibly darker.
+                edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
+                current_hit_keys[rx] = nil
+                last_hit_key = nil
+                ink = dither_threshold < 6 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE
             else
+                edge = last_hit_key ~= nil or previous_hit_keys[rx] ~= nil
+                current_hit_keys[rx] = nil
+                last_hit_key = nil
                 -- Monochrome still signals night through a dense dark sky.
                 ink = world.dimension == "nether"
-                    and "mono_nether"
-                    or (daylight < 0.10 and "mono_night" or Blitbuffer.COLOR_WHITE)
+                    and (dither_threshold < 10 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE)
+                    or (daylight < 0.10 and (dither_threshold < 12 and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE) or Blitbuffer.COLOR_WHITE)
+            end
+            if edge then
+                -- One dark sample cell is enough to separate adjacent voxel
+                -- faces without turning the whole scene into a heavy outline.
+                ink = color_mode and "black" or Blitbuffer.COLOR_BLACK
             end
             if rx == 0 then
                 row_ink, row_start = ink, rx
@@ -3154,6 +3181,7 @@ function VoxelCanvas:_drawScene(bb, x, y)
         if row_ink then
             paintSpan(row_start, cols, ry, row_ink)
         end
+        previous_hit_keys = current_hit_keys
     end
     self._terrain_cache = {
         rects = terrain_spans, world = world, block_flat = world.block_flat, light_sources = world.light_sources,
@@ -3630,21 +3658,6 @@ end
 -- recognizable Bedrock character without relying on external image assets.
 local function paintBlockIcon(bb, x, y, size, material, session)
     local color_mode = session and session.color_enabled and colorRenderingEnabled() and bb.paintRectRGB32
-    if material == "torch" then
-        local unit = math.max(1, math.floor(size / 8))
-        local cx = x + math.floor(size / 2)
-        local shaft = color_mode and sceneColor(SURFACE_TONES.wood.rgb[14]) or Blitbuffer.COLOR_DARK_GRAY
-        local flame = color_mode and sceneColor(SURFACE_TONES.torch.rgb[16]) or Blitbuffer.COLOR_LIGHT_GRAY
-        if color_mode then
-            bb:paintRectRGB32(cx - unit, y + unit * 3, unit * 2, math.max(1, size - unit * 3), shaft)
-            bb:paintRectRGB32(cx - unit * 2, y, unit * 4, unit * 4, flame)
-        else
-            bb:paintRect(cx - unit, y + unit * 3, unit * 2, math.max(1, size - unit * 3), shaft)
-            bb:paintRect(cx - unit * 2, y, unit * 4, unit * 4, Blitbuffer.COLOR_BLACK)
-            bb:paintRect(cx - unit, y + unit, unit * 2, unit * 2, flame)
-        end
-        return
-    end
     local pattern = PATTERN_VALUES[material] or PATTERN_VALUES.stone
     local pixels = 4
     local pixel = math.max(1, math.floor(size / pixels))
@@ -3654,12 +3667,12 @@ local function paintBlockIcon(bb, x, y, size, material, session)
             local px, py = x + column * pixel, y + row * pixel
             local width = column == pixels - 1 and size - column * pixel or pixel
             local height = row == pixels - 1 and size - row * pixel or pixel
-            local tones = SURFACE_TONES[material] or SURFACE_TONES.stone
-            local tone = clamp(math.floor((0.78 + level * 0.11 - 0.30) / 0.83 * 15 + 0.5), 0, 15)
             if color_mode then
-                bb:paintRectRGB32(px, py, width, height, level == 0 and paletteColor("black") or sceneColor(tones.rgb[tone + 1]))
+                local mix = material_mix_cache[material] and material_mix_cache[material][level + 1]
+                local ink = mix and paletteColor((row + column) % 2 == 0 and mix.first or mix.second) or paletteColor("black")
+                bb:paintRectRGB32(px, py, width, height, ink)
             else
-                bb:paintRect(px, py, width, height, level == 0 and Blitbuffer.COLOR_BLACK or sceneColor(tones.mono[tone + 1]))
+                bb:paintRect(px, py, width, height, level >= 2 and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK)
             end
         end
     end
@@ -4632,14 +4645,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.7.2"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.7.3"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.7.2",
+    version = "4.7.3",
     title = "Minecraft 3D",
     subtitle = "Survival, Creative & Nether Portals",
     symbol = "M",
@@ -4836,8 +4849,6 @@ return {
         DROPS = DROPS,
         PATTERNS = PATTERNS,
         PATTERN_VALUES = PATTERN_VALUES,
-        PATTERN_AVERAGES = PATTERN_AVERAGES,
-        SURFACE_TONES = SURFACE_TONES,
         RECIPES = RECIPES,
         RECIPE_PAGES = RECIPE_PAGES,
         BIOMES = BIOMES,
