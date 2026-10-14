@@ -7,7 +7,7 @@ renderer uses a voxel-space DDA raycaster so movement only redraws the game
 canvas, never the full AppDock pane. Every interactive redraw goes through
 UIManager:setDirty(..., "waveform", region).
 
-Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
+Version 4.6.0 adds Survival and Creative modes, world-list pagination and larger world-creation controls. Version 4.5.0 adds a time-of-day cycle, voxel mobs, torch lighting and a Bedrock-inspired UI refresh.
   * a real 36-slot inventory (9 hotbar + 27 storage) with stack limits,
     a Bedrock-style cursor stack, automatic refilling and block drops,
   * a crafting screen with Minecraft-like recipes and ingredient checks,
@@ -218,7 +218,7 @@ local HOTBAR_SLOTS = 9
 local INVENTORY_SLOTS = 36
 local STACK_LIMIT = 64
 local CRAFT_ROWS_PER_PAGE = 4
-local CRAFT_PAGES_MAX = 4
+local CRAFT_PAGES_MAX = 5
 -- Time advances with player actions rather than an always-running redraw timer:
 -- this keeps the day/night cycle responsive without wasting E-Ink refreshes.
 local DAY_LENGTH_TICKS = 144
@@ -391,6 +391,7 @@ local MATERIALS = {
     cactus = { label = _("Cactus"), color = "green", rgb = { 74, 140, 62 }, pattern = "cactus" },
     dead_bush = { label = _("Dead Bush"), color = "yellow", rgb = { 148, 109, 58 }, pattern = "dead_bush" },
     wheat = { label = _("Wheat"), color = "yellow", rgb = { 208, 190, 90 }, pattern = "wheat" },
+    bread = { label = _("Bread"), color = "yellow", rgb = { 194, 143, 72 }, pattern = "bread" },
     torch = { label = _("Torch"), color = "yellow", rgb = { 255, 185, 48 }, pattern = "torch", emissive = true },
     netherrack = { label = _("Netherrack"), color = "red", rgb = { 137, 54, 49 }, pattern = "netherrack", drop = "netherrack" },
     soul_sand = { label = _("Soul Sand"), color = "red", rgb = { 83, 55, 45 }, pattern = "soul_sand" },
@@ -411,7 +412,7 @@ local MATERIAL_ORDER = {
     "wood", "wood_birch", "wood_spruce", "wood_jungle", "wood_acacia",
     "leaves", "leaves_birch", "leaves_spruce", "leaves_jungle", "leaves_acacia",
     "planks", "glass", "crafting_table", "furnace", "cactus", "dead_bush", "wheat", "torch",
-    "netherrack", "soul_sand", "basalt", "nether_bricks", "nether_quartz_ore", "glowstone", "magma_block", "flint_and_steel",
+    "netherrack", "soul_sand", "basalt", "nether_bricks", "nether_quartz_ore", "glowstone", "magma_block", "flint_and_steel", "bread",
 }
 
 local MATERIAL_COLORS, MATERIAL_TARGET_RGB, MATERIAL_LABELS, MATERIAL_PATTERNS, DROPS = {}, {}, {}, {}, {}
@@ -599,6 +600,7 @@ local PATTERNS = {
     cactus = "11221122" .. "11121112" .. "11221122" .. "11121112" .. "11221122" .. "11121112" .. "11221122" .. "11121112",
     dead_bush = "10001100" .. "01000100" .. "00100100" .. "01010101" .. "00101010" .. "01000100" .. "00100010" .. "01000100",
     wheat = "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131" .. "21312131",
+    bread = "22222222" .. "22333222" .. "23333332" .. "23333332" .. "22333222" .. "22222222" .. "22222222" .. "22222222",
     torch = "00010000" .. "00130000" .. "00010000" .. "00010000" .. "00010000" .. "00010000" .. "00010000" .. "00010000",
     netherrack = "12111211" .. "21112112" .. "11211121" .. "12121111" .. "21111211" .. "11212111" .. "12111212" .. "21112111",
     soul_sand = "11011101" .. "11101110" .. "10111011" .. "01110111" .. "11011101" .. "11101110" .. "10111011" .. "01110111",
@@ -642,6 +644,7 @@ local RECIPES = {
     { result = { "flint_and_steel", 1 }, ingredients = { { "iron", 1 }, { "gravel", 1 } } },
     { result = { "ice", 2 }, ingredients = { { "water", 1 }, { "snow", 1 } } },
     { result = { "gravel", 2 }, ingredients = { { "cobblestone", 2 } } },
+    { result = { "bread", 1 }, ingredients = { { "wheat", 3 } } },
 }
 local RECIPE_PAGES = math.max(1, math.min(CRAFT_PAGES_MAX, math.ceil(#RECIPES / CRAFT_ROWS_PER_PAGE)))
 
@@ -1585,33 +1588,41 @@ end
 
 local VoxelSession = {}
 VoxelSession.__index = VoxelSession
+VoxelSession.MAX_HEALTH, VoxelSession.MAX_HUNGER = 20, 20
+function VoxelSession.normalizeGameMode(mode) return mode == "Creative" and "Creative" or "Survival" end
+function VoxelSession.normalizeDifficulty(difficulty)
+    return ({ Peaceful = true, Easy = true, Normal = true, Hard = true })[difficulty] and difficulty or "Normal"
+end
 
 local function newSlot(material, count)
     return { material = material, count = count }
 end
 
--- Starting kit: the hotbar and the first storage slots hold the most useful
--- building blocks, so a fresh world can be explored and reshaped immediately.
-local STARTING_KIT = {
-    "grass", "dirt", "stone", "wood", "planks", "cobblestone", "sand", "glass", "torch",
-    "bricks", "leaves", "snow", "ice", "sandstone", "clay", "gravel", "obsidian", "coal", "iron",
-}
-local STARTING_COUNTS = { 64, 64, 64, 64, 64, 64, 64, 32, 16, 32, 32, 32, 16, 32, 32, 32, 16, 32, 16 }
-
-local function startingSlots()
+-- A compact starter kit keeps Survival finite; Creative uses the catalogue.
+local STARTING_KIT = { "planks", "dirt", "bread", "torch" }
+local STARTING_COUNTS = { 16, 16, 4, 4 }
+local function startingSlots(mode)
     local slots = {}
+    if VoxelSession.normalizeGameMode(mode) == "Creative" then return slots end
     for index, material in ipairs(STARTING_KIT) do
-        if MATERIALS[material] then slots[index] = newSlot(material, STARTING_COUNTS[index] or 32) end
+        if MATERIALS[material] then slots[index] = newSlot(material, STARTING_COUNTS[index] or 1) end
     end
     return slots
 end
-
-function VoxelSession.new(seed)
+function VoxelSession.new(seed, mode, difficulty)
     seed = normalizeSeed(seed)
     local world = buildWorld(seed)
     local player_x, player_z, yaw = findSpawn(world)
     local self = setmetatable({
         seed = seed,
+        mode = VoxelSession.normalizeGameMode(mode),
+        difficulty = VoxelSession.normalizeDifficulty(difficulty),
+        health = VoxelSession.MAX_HEALTH,
+        hunger = VoxelSession.MAX_HUNGER,
+        hunger_clock = 0,
+        healing_clock = 0,
+        starvation_clock = 0,
+        mob_attack_cooldown = 0,
         world = world,
         overworld_world = world,
         nether_world = nil,
@@ -1632,7 +1643,7 @@ function VoxelSession.new(seed)
         crafting_open = false,
         craft_page = 1,
         held = nil,
-        slots = startingSlots(),
+        slots = startingSlots(mode),
         selected_slot = 1,
         tap_action = "place",
         color_enabled = true,
@@ -1687,10 +1698,20 @@ function VoxelSession:tickMobs()
     for index, mob in ipairs(world.mobs) do
         local definition = MOB_DEFS[mob.kind]
         if definition then
-            local active = not mob.nocturnal or daylight < 0.23
+            local hostile_enabled = self.mode == "Survival" and self.difficulty ~= "Peaceful"
+            local active = not mob.nocturnal or (daylight < 0.23 and (mob.kind ~= "zombie" or hostile_enabled))
             if active then
                 local phase = (mob.phase or index) + self.mob_clock * (0.13 + (mob.gait or 0) * 0.05)
-                mob.heading = wrapAngle((mob.heading or phase) + math.sin(phase) * 0.10 + math.sin(phase * 0.41) * 0.035)
+                if mob.kind == "zombie" and hostile_enabled then
+                    local dx, dz = self.player_x - mob.x, self.player_z - mob.z
+                    if math.abs(dx) + math.abs(dz) > 0.01 then
+                        if math.atan2 then mob.heading = math.atan2(dx, dz)
+                        elseif dz == 0 then mob.heading = dx >= 0 and math.pi / 2 or -math.pi / 2
+                        else mob.heading = math.atan(dx / dz) + (dz < 0 and math.pi or 0) end
+                    end
+                else
+                    mob.heading = wrapAngle((mob.heading or phase) + math.sin(phase) * 0.10 + math.sin(phase * 0.41) * 0.035)
+                end
                 local speed = definition.speed * (0.72 + (mob.gait or 0) * 0.55)
                 local nx, nz = mob.x + math.sin(mob.heading) * speed, mob.z + math.cos(mob.heading) * speed
                 local next_ground = self:mobGroundAt(nx, nz)
@@ -1702,17 +1723,110 @@ function VoxelSession:tickMobs()
                 mob.walk_cycle = (mob.walk_cycle or 0) + speed * 26
             end
             mob.head_bob = math.sin((mob.walk_cycle or 0) * 0.72) * (active and 0.035 or 0.012)
+            if mob.kind == "zombie" and active and self.mode == "Survival" and self.difficulty ~= "Peaceful"
+                and daylight < 0.23 and self.mob_attack_cooldown <= 0 then
+                local dx, dz = self.player_x - mob.x, self.player_z - mob.z
+                if dx * dx + dz * dz <= 1.44 then
+                    local damage = self.difficulty == "Easy" and 1 or (self.difficulty == "Hard" and 3 or 2)
+                    self:takeDamage(damage, _("A zombie attacked you."))
+                    self.mob_attack_cooldown = 8
+                end
+            end
         end
     end
 end
-
+function VoxelSession:takeDamage(amount, reason)
+    if self.mode ~= "Survival" or self.difficulty == "Peaceful" then return false end
+    self.health = math.max(0, (self.health or VoxelSession.MAX_HEALTH) - math.max(1, math.floor(tonumber(amount) or 1)))
+    if self.health <= 0 then
+        local died_in_nether = self.dimension == "nether"
+        if died_in_nether then self.nether_world = self.world end
+        self.world, self.dimension = self.overworld_world or self.world, "overworld"
+        self.player_x, self.player_z, self.yaw = findSpawn(self.world)
+        self.view_height = self:walkHeight(self.player_x, self.player_z)
+        self.health, self.hunger = VoxelSession.MAX_HEALTH, 10
+        self.motion, self.live_look, self.portal_cooldown = nil, false, 0
+        self.last_event = _("You were defeated and respawned. Your inventory was kept.")
+    else
+        self.last_event = reason or _("You took damage.")
+    end
+    self:refreshWorldStatus()
+    return true
+end
+function VoxelSession:eatSelectedFood()
+    local item = self.slots[self.selected_slot]
+    if not item or item.material ~= "bread" then
+        self.last_event = _("Select bread to eat.")
+        return false
+    end
+    if self.mode == "Creative" then
+        self.last_event = _("Creative mode has no hunger.")
+        return false
+    end
+    if self.hunger >= VoxelSession.MAX_HUNGER then
+        self.last_event = _("You are not hungry yet.")
+        return false
+    end
+    item.count = item.count - 1
+    if item.count <= 0 then self.slots[self.selected_slot] = nil end
+    self.hunger = math.min(VoxelSession.MAX_HUNGER, self.hunger + 7)
+    self:syncDerived()
+    self.last_event = _("Ate bread. Hunger restored.")
+    self:refreshWorldStatus()
+    return true
+end
+function VoxelSession:updateSurvival(amount)
+    local old_health, old_hunger = self.health, self.hunger
+    if self.mode ~= "Survival" then
+        self.health, self.hunger = VoxelSession.MAX_HEALTH, VoxelSession.MAX_HUNGER
+        return old_health ~= self.health or old_hunger ~= self.hunger
+    end
+    if self.difficulty == "Peaceful" then
+        self.hunger = VoxelSession.MAX_HUNGER
+        self.healing_clock = (self.healing_clock or 0) + amount
+        if self.healing_clock >= 10 then
+            self.healing_clock = self.healing_clock - 10
+            self.health = math.min(VoxelSession.MAX_HEALTH, (self.health or VoxelSession.MAX_HEALTH) + 1)
+        end
+        self.hunger_clock, self.starvation_clock = 0, 0
+        return old_health ~= self.health or old_hunger ~= self.hunger
+    end
+    self.hunger_clock = (self.hunger_clock or 0) + amount
+    while self.hunger_clock >= 16 do
+        self.hunger_clock = self.hunger_clock - 16
+        self.hunger = math.max(0, (self.hunger or VoxelSession.MAX_HUNGER) - 1)
+    end
+    if self.hunger >= 18 and self.health < VoxelSession.MAX_HEALTH then
+        self.healing_clock = (self.healing_clock or 0) + amount
+        if self.healing_clock >= 12 then
+            self.healing_clock = self.healing_clock - 12
+            self.health = math.min(VoxelSession.MAX_HEALTH, self.health + 1)
+            self.hunger = math.max(0, self.hunger - 1)
+        end
+    else
+        self.healing_clock = 0
+    end
+    if self.hunger <= 0 then
+        self.starvation_clock = (self.starvation_clock or 0) + amount
+        if self.starvation_clock >= 12 then
+            self.starvation_clock = self.starvation_clock - 12
+            self:takeDamage(1, _("You are starving. Eat bread."))
+        end
+    else
+        self.starvation_clock = 0
+    end
+    return old_health ~= self.health or old_hunger ~= self.hunger
+end
 function VoxelSession:advanceEnvironment(amount)
     amount = tonumber(amount) or DAY_TICK_PER_ACTION
     if amount <= 0 then return end
     self.world_ticks = (self.world_ticks or 0) + amount
     self.world_time = ((self.world_time or 0.31) + amount / DAY_LENGTH_TICKS) % 1
     self.portal_cooldown = math.max(0, (self.portal_cooldown or 0) - amount)
+    self.mob_attack_cooldown = math.max(0, (self.mob_attack_cooldown or 0) - amount)
+    local status_changed = self:updateSurvival(amount)
     self:tickMobs()
+    if status_changed or self._last_status_time_label ~= self:timeLabel() then self:refreshWorldStatus() end
 end
 
 -- Ambient entities keep moving even when the player is standing still.
@@ -1890,6 +2004,7 @@ function VoxelSession:toggleInventory()
     else
         self:returnHeld()
         self.last_event = _("Inventory closed.")
+        self:refreshWorldStatus()
     end
     return self.inventory_open
 end
@@ -1905,6 +2020,7 @@ end
 function VoxelSession:closeOverlays()
     self:returnHeld()
     self.inventory_open, self.crafting_open = false, false
+    self:refreshWorldStatus()
     return true
 end
 
@@ -2010,10 +2126,21 @@ function VoxelSession:checkPortalTravel()
     return self:travelDimension(self.dimension == "overworld" and "nether" or "overworld")
 end
 
+function VoxelSession:statusText()
+    local text = _("Seed: ") .. tostring(self.seed) .. " · " .. self:biomeName() .. " · " .. self:timeLabel() .. " · " .. _(self.mode)
+    if self.mode == "Survival" then
+        text = text .. " · HP " .. tostring(self.health or VoxelSession.MAX_HEALTH) .. "/20 · Food " .. tostring(self.hunger or VoxelSession.MAX_HUNGER) .. "/20"
+    else
+        text = text .. " · " .. _("Unlimited blocks")
+    end
+    return text
+end
 function VoxelSession:refreshWorldStatus()
     local widget = self.world_status_widget
     if not widget then return false end
-    widget.text = _("Seed: ") .. tostring(self.seed) .. " · " .. self:biomeName() .. " · " .. self:timeLabel()
+    widget.text = self:statusText()
+    self._last_status_time_label = self:timeLabel()
+    if self.inventory_open or self.crafting_open then return false end
     if not UIManager.widgetRepaint or not UIManager.setDirty then return false end
     local x, y = widget._origin_x or 0, widget._origin_y or 0
     UIManager:widgetRepaint(widget, x, y)
@@ -2045,9 +2172,11 @@ function VoxelSession:biomeName()
     return (BIOMES[biome] and BIOMES[biome].label) or tostring(biome)
 end
 
-function VoxelSession:newWorld(seed)
+function VoxelSession:newWorld(seed, mode, difficulty)
     if self.motion then UIManager:unschedule(self._motionTick) end
     if self.jump_frame then UIManager:unschedule(self._jumpTick) end
+    self.mode = VoxelSession.normalizeGameMode(mode or self.mode)
+    self.difficulty = VoxelSession.normalizeDifficulty(difficulty or self.difficulty)
     if seed == nil then self.seed = nextWorldSeed(self.seed) else self.seed = normalizeSeed(seed) end
     self.world = buildWorld(self.seed)
     self.overworld_world, self.nether_world = self.world, nil
@@ -2057,8 +2186,12 @@ function VoxelSession:newWorld(seed)
     self.motion, self.jump_frame, self.jump_offset = nil, nil, 0
     self.steps = 0
     self.world_time, self.world_ticks, self.mob_clock = 0.31, 0, 0
+    self.health, self.hunger = VoxelSession.MAX_HEALTH, VoxelSession.MAX_HUNGER
+    self.hunger_clock, self.healing_clock, self.starvation_clock, self.mob_attack_cooldown = 0, 0, 0, 0
+    self.slots, self.held, self.selected_slot = startingSlots(self.mode), nil, 1
+    self:syncDerived()
     self.view_height = self:walkHeight(self.player_x, self.player_z)
-    self.last_event = _("New world created. Seed: ") .. tostring(self.seed)
+    self.last_event = _("New ") .. _(self.mode) .. _(" world created. Seed: ") .. tostring(self.seed)
     return true
 end
 
@@ -2094,8 +2227,9 @@ function VoxelSession:mineBlock(target)
     end
     rebuildBlockColumn(self.world, x, z)
     local drop = DROPS[material] or material
-    local leftover = self:addItem(drop, 1)
-    self.last_event = leftover > 0 and _("The inventory is full.") or (_("Mined: ") .. materialLabel(drop))
+    local leftover = self.mode == "Creative" and 0 or self:addItem(drop, 1)
+    self.last_event = self.mode == "Creative" and (_("Removed: ") .. materialLabel(material))
+        or (leftover > 0 and _("The inventory is full.") or (_("Mined: ") .. materialLabel(drop)))
     self.view_height = self:walkHeight(self.player_x, self.player_z)
     self:advanceEnvironment(0.55)
     return true
@@ -2119,6 +2253,7 @@ function VoxelSession:placeBlock(target)
         return false
     end
     local material = item.material
+    if material == "bread" then return self:eatSelectedFood() end
     if material == "flint_and_steel" then return self:ignitePortal(target) end
     if self.dimension == "nether" and material == "water" then
         self.last_event = _("Water evaporates in The Nether.")
@@ -2138,8 +2273,8 @@ function VoxelSession:placeBlock(target)
     self.world.extra_blocks[key] = material
     self.world.removed_blocks[key] = nil
     rebuildBlockColumn(self.world, x, z)
-    item.count = item.count - 1
-    if item.count <= 0 then
+    if self.mode ~= "Creative" then item.count = item.count - 1 end
+    if self.mode ~= "Creative" and item.count <= 0 then
         self.slots[self.selected_slot] = nil
         -- Bedrock moves the next matching stack into the emptied hand slot.
         for slot = HOTBAR_SLOTS + 1, INVENTORY_SLOTS do
@@ -2276,7 +2411,7 @@ function VoxelSession:beginMove(direction)
         return false
     end
     local to_height = self:walkHeight(next_x, next_z)
-    if blockAt(self.world, math.floor(next_x), math.floor(next_z), to_height - 1) == "lava" then
+    if self.mode ~= "Creative" and blockAt(self.world, math.floor(next_x), math.floor(next_z), to_height - 1) == "lava" then
         self.last_event = _("Lava blocks the way — build a bridge.")
         return false
     end
@@ -2329,6 +2464,7 @@ function VoxelSession:move(direction)
     direction = numericMoveDirection(direction)
     if not direction or not self:beginMove(direction) then return false end
     local motion = self.motion
+    if not motion then return true end
     self.motion = nil
     self.live_look = false
     UIManager:unschedule(self._motionTick)
@@ -2355,6 +2491,7 @@ end
 
 function VoxelSession:tapAction(target)
     if self:selectedMaterial() == "flint_and_steel" then return self:ignitePortal(target) end
+    if self:selectedMaterial() == "bread" then return self:eatSelectedFood() end
     if self.tap_action == "place" then return self:placeBlock(target) end
     return self:mineBlock(target)
 end
@@ -3374,7 +3511,7 @@ local function paintMinecraftSlot(bb, x, y, width, height, session, item, select
         local icon_size = math.max(compact and scale(9) or scale(12), math.min(width - scale(8), height - (compact and scale(7) or scale(12))))
         paintBlockIcon(bb, x + math.floor((width - icon_size) / 2), y + (compact and scale(3) or scale(5)), icon_size, item.material, session)
         local count = TextWidget:new{
-            text = tostring(item.count), face = Font:getFace("smallinfofont", math.max(scale(6), compact and scale(7) or scale(8))),
+            text = session and session.mode == "Creative" and "∞" or tostring(item.count), face = Font:getFace("smallinfofont", math.max(scale(6), compact and scale(7) or scale(8))),
             fgcolor = Blitbuffer.COLOR_BLACK, bold = true, padding = 0,
         }
         local count_size = count:getSize()
@@ -3590,7 +3727,7 @@ function InventoryPanel:paintTo(bb, x, y)
     bb:paintRect(x + L.left_x, y + L.outer_y + L.header_h, L.left_w, L.search_h, Blitbuffer.COLOR_WHITE)
     paintInventorySearchIcon(bb, x + L.left_x + scale(9), y + L.outer_y + scale(9), math.max(scale(18), L.header_h - scale(14)))
     local category_title = self.active_category == 1 and _("Alle Gegenstände") or _(INVENTORY_CATEGORIES[self.active_category].label)
-    local heading = TextWidget:new{ text = category_title, face = Font:getFace("cfont", math.max(scale(10), math.floor(L.header_h * 0.40))), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = L.left_w - scale(56) }
+    local heading = TextWidget:new{ text = session.mode == "Creative" and (category_title .. " · ∞") or category_title, face = Font:getFace("cfont", math.max(scale(10), math.floor(L.header_h * 0.40))), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = L.left_w - scale(56) }
     heading:paintTo(bb, x + L.left_x + scale(48), y + L.outer_y + math.floor((L.header_h - scale(12)) / 2))
     local search_y = y + L.outer_y + L.header_h
     bb:paintRect(x + L.left_x + scale(5), search_y + scale(3), L.left_w - scale(10), L.search_h - scale(5), Blitbuffer.COLOR_DARK_GRAY)
@@ -3631,8 +3768,8 @@ function InventoryPanel:paintTo(bb, x, y)
         paintMinecraftSlot(bb, sx, sy, cell_w, cell_h, session, nil, selected, nil, true)
         local icon_size = math.max(scale(8), math.min(cell_w - scale(7), cell_h - scale(7)))
         paintBlockIcon(bb, sx + math.floor((cell_w - icon_size) / 2), sy + math.floor((cell_h - icon_size) / 2), icon_size, material, session)
-        if count > 0 then
-            local count_label = TextWidget:new{ text = tostring(count), face = Font:getFace("smallinfofont", math.max(scale(6), scale(7))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true }
+        if count > 0 or session.mode == "Creative" then
+            local count_label = TextWidget:new{ text = session.mode == "Creative" and "∞" or tostring(count), face = Font:getFace("smallinfofont", math.max(scale(6), scale(7))), fgcolor = Blitbuffer.COLOR_BLACK, bold = true }
             local count_size = count_label:getSize()
             count_label:paintTo(bb, sx + cell_w - count_size.w - scale(2), sy + cell_h - count_size.h - scale(1))
         end
@@ -3709,13 +3846,19 @@ function InventoryPanel:onTapMinecraftInventory(first, second)
     elseif hit.kind == "hotbar" then
         session:selectSlot(hit.slot)
     elseif hit.kind == "material" then
-        local found
-        for slot = 1, INVENTORY_SLOTS do
-            local item = session.slots[slot]
-            if item and item.material == hit.material then found = slot; break end
+        if session.mode == "Creative" then
+            session.slots[session.selected_slot] = newSlot(hit.material, 1)
+            session:syncDerived()
+            session.last_event = materialLabel(hit.material) .. " · " .. _("unlimited")
+        else
+            local found
+            for slot = 1, INVENTORY_SLOTS do
+                local item = session.slots[slot]
+                if item and item.material == hit.material then found = slot; break end
+            end
+            if found then session:pickSlot(found)
+            else session.last_event = _("You don't have this item yet.") .. " " .. materialLabel(hit.material) end
         end
-        if found then session:pickSlot(found)
-        else session.last_event = _("You don't have this item yet.") .. " " .. materialLabel(hit.material) end
     end
     self:refresh()
     return true
@@ -3978,6 +4121,7 @@ function WorldPane:onMinecraftLeft() return self:_act("left") end
 function WorldPane:onMinecraftRight() return self:_act("right") end
 
 local WorldStore = {}
+WorldStore.WORLDS_PER_PAGE = 6
 
 local function stateFor(instance)
     if instance.minecraft then return instance.minecraft end
@@ -4139,7 +4283,7 @@ local function buildSplashPane(state, context, width, height)
     local stack_h = button_h * 3 + gap * 2
     local x = math.floor((width - button_w) / 2)
     local y = math.max(0, math.min(math.floor(height * 0.42), height - stack_h - 12))
-    return menuPane(state, context, width, height, _("SURVIVAL EDITION"), _("Build. Explore. Survive the night."), {
+    return menuPane(state, context, width, height, _("SURVIVAL + CREATIVE"), _("Build. Explore. Choose your mode."), {
         menuButton(_("PLAY WORLD"), button_w, button_h, x, y, function() rebuildScreen(state, context, "worlds") end, true),
         menuButton(_("SETTINGS"), button_w, button_h, x, y + button_h + gap, function() rebuildScreen(state, context, "settings") end),
         menuButton(_("ABOUT"), button_w, button_h, x, y + 2 * (button_h + gap), function() rebuildScreen(state, context, "about") end),
@@ -4148,24 +4292,67 @@ end
 
 local function openSavedWorld(state, context, world)
     state.active_world = world
-    state.session:newWorld(world.seed)
+    state.session:newWorld(world.seed, world.mode, world.difficulty)
     rebuildScreen(state, context, "world")
 end
 
+WorldStore.pageCount = function(world_count)
+    return math.max(1, math.ceil((tonumber(world_count) or 0) / WorldStore.WORLDS_PER_PAGE))
+end
+WorldStore.pageRange = function(world_count, page)
+    local pages = WorldStore.pageCount(world_count)
+    page = clamp(math.floor(tonumber(page) or 1), 1, pages)
+    local first = (page - 1) * WorldStore.WORLDS_PER_PAGE + 1
+    return page, first, math.min(tonumber(world_count) or 0, first + WorldStore.WORLDS_PER_PAGE - 1), pages
+end
+WorldStore.createMenuMetrics = function(width, height)
+    local gap = clamp(math.floor(height * 0.015), 6, 10)
+    local left = math.max(10, math.floor(width * 0.08))
+    local button_w = math.min(420, width - 2 * left)
+    local y = math.max(120, math.floor(height * 0.30))
+    local row_h = clamp(math.floor((height - y - 12 - 5 * gap) / 6), 40, 64)
+    return { gap = gap, left = left, button_w = button_w, y = y, row_h = row_h, footer_y = height - row_h - 12 }
+end
 local function buildWorldsPane(state, context, width, height)
     local gap = math.max(6, math.floor(width * 0.015))
-    local card_w, card_h = math.floor((width - 3 * gap) / 2), math.max(62, math.floor(height * 0.14))
-    local items = {
-        menuButton(_("Create New World"), math.min(260, width - 2 * gap), 38, width - math.min(260, width - 2 * gap) - gap, math.max(10, math.floor(height * 0.30)), function() rebuildScreen(state, context, "create") end, true),
-        menuButton(_("Back"), math.min(130, width / 3), 32, gap, height - 42, function() rebuildScreen(state, context, "splash") end),
-    }
     local worlds = state.world_store.worlds
+    local page, first, last, pages = WorldStore.pageRange(#worlds, state.worlds_page)
+    state.worlds_page = page
+    local control_y, control_h = height - 40, 32
+    local back_w = math.min(82, math.floor(width * 0.20))
+    local nav_w = math.min(64, math.floor(width * 0.15))
+    local prev_x = gap + back_w + gap
+    local next_x = width - nav_w - gap
+    local page_left, page_right = prev_x + nav_w + gap, next_x - gap
+    local page_w = math.max(1, math.min(42, page_right - page_left))
+    local page_x = math.floor((page_left + page_right - page_w) / 2)
+    local create_w = math.min(260, width - 2 * gap)
+    local list_top = math.floor(height * 0.39)
+    local row_gap = math.max(4, math.floor(height * 0.012))
+    local card_h = clamp(math.floor((control_y - list_top - 2 * row_gap) / 3 - row_gap), 38, 78)
+    local card_w = math.floor((width - 3 * gap) / 2)
+    local items = {
+        menuButton(_("Create New World"), create_w, 46, width - create_w - gap, math.max(10, math.floor(height * 0.30)), function() rebuildScreen(state, context, "create") end, true),
+        menuButton(_("Back"), back_w, control_h, gap, control_y, function() rebuildScreen(state, context, "splash") end),
+        menuButton(_("Prev"), nav_w, control_h, prev_x, control_y, function()
+            state.worlds_page = math.max(1, (state.worlds_page or 1) - 1)
+            rebuildScreen(state, context, "worlds")
+        end),
+        TextWidget:new{ text = tostring(page) .. " / " .. tostring(pages), face = Font:getFace("smallinfofont", 12), fgcolor = Blitbuffer.COLOR_WHITE, max_width = page_w,
+            overlap_offset = { page_x, control_y + 8 } },
+        menuButton(_("Next"), nav_w, control_h, next_x, control_y, function()
+            state.worlds_page = math.min(pages, (state.worlds_page or 1) + 1)
+            rebuildScreen(state, context, "worlds")
+        end),
+    }
     if #worlds == 0 then
-        items[#items + 1] = TextWidget:new{ text = _("No saved worlds yet."), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * gap, overlap_offset = { gap, math.floor(height * 0.47) } }
+        items[#items + 1] = TextWidget:new{ text = _("No saved worlds yet."), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = width - 2 * gap, overlap_offset = { gap, math.floor(height * 0.50) } }
     else
-        for index, world in ipairs(worlds) do
-            local column, row = (index - 1) % 2, math.floor((index - 1) / 2)
-            local x, y = gap + column * (card_w + gap), math.floor(height * 0.39) + row * (card_h + gap)
+        for index = first, last do
+            local world = worlds[index]
+            local local_index = index - first
+            local column, row = local_index % 2, math.floor(local_index / 2)
+            local x, y = gap + column * (card_w + gap), list_top + row * (card_h + row_gap)
             local label = world.name .. "\n" .. world.mode .. " · " .. world.difficulty .. "\nSeed: " .. tostring(world.seed)
             items[#items + 1] = menuButton(label, card_w, card_h, x, y, function() openSavedWorld(state, context, world) end, false)
         end
@@ -4196,6 +4383,10 @@ local function promptWorldField(state, context, field, title, hint)
 end
 
 local function createWorld(state, context)
+    if #state.world_store.worlds >= 32 then
+        UIManager:show(InfoMessage:new{ text = _("World limit reached (32). Delete or replace a save before creating another world.") })
+        return
+    end
     local seed = parseWorldSeed(state.create.seed)
     if state.create.seed ~= "" and seed == false then
         UIManager:show(InfoMessage:new{ text = _("The seed must be a valid integer.") })
@@ -4212,15 +4403,17 @@ local function createWorld(state, context)
         created = os.date("%d.%m.%y"),
     }
     state.world_store.worlds[#state.world_store.worlds + 1] = world
+    state.worlds_page = math.ceil(#state.world_store.worlds / WorldStore.WORLDS_PER_PAGE)
     WorldStore.save(state.world_store)
     state.create.seed = ""
     openSavedWorld(state, context, world)
 end
 
 local function buildCreatePane(state, context, width, height)
-    local gap, left, row_h = 8, math.max(10, math.floor(width * 0.08)), 40
-    local button_w = math.min(420, width - 2 * left)
-    local y = math.floor(height * 0.32)
+    local layout = WorldStore.createMenuMetrics(width, height)
+    local gap, left, row_h, button_w, y = layout.gap, layout.left, layout.row_h, layout.button_w, layout.y
+    local create_w = math.floor((button_w - gap) * 0.60)
+    local back_w = button_w - gap - create_w
     local items = {
         menuButton(_("Name: ") .. state.create.name, button_w, row_h, left, y, function() promptWorldField(state, context, "name", _("World Name"), _("e.g. My World")) end),
         menuButton(_("Seed: ") .. (state.create.seed ~= "" and state.create.seed or _("Random")), button_w, row_h, left, y + row_h + gap, function() promptWorldField(state, context, "seed", _("World Seed"), _("Empty = random seed")) end),
@@ -4231,8 +4424,8 @@ local function buildCreatePane(state, context, width, height)
             rebuildScreen(state, context, "create")
         end),
         menuButton(_("Cheats: ") .. (state.create.cheats and _("On") or _("Off")), button_w, row_h, left, y + 4 * (row_h + gap), function() state.create.cheats = not state.create.cheats; rebuildScreen(state, context, "create") end),
-        menuButton(_("Create"), math.floor(button_w * 0.58), row_h, left, height - row_h - 12, function() createWorld(state, context) end, true),
-        menuButton(_("Back"), math.floor(button_w * 0.38), row_h, left + math.floor(button_w * 0.62), height - row_h - 12, function() rebuildScreen(state, context, "worlds") end),
+        menuButton(_("Create"), create_w, row_h, left, layout.footer_y, function() createWorld(state, context) end, true),
+        menuButton(_("Back"), back_w, row_h, left + create_w + gap, layout.footer_y, function() rebuildScreen(state, context, "worlds") end),
     }
     return menuPane(state, context, width, height, _("Create New World"), _("Set the name, seed, and game rules."), items)
 end
@@ -4250,16 +4443,16 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.5.7"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Survival · Creative · Voxel Mobs · Day & Night · Nether Portals\n\nMinecraft 3D 4.6.0"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.7",
+    version = "4.6.0",
     title = "Minecraft 3D",
-    subtitle = "Mobs, Day/Night & Nether Portals",
+    subtitle = "Survival, Creative & Nether Portals",
     symbol = "M",
     logo = "minecraft",
     buildPane = function(instance, context)
@@ -4351,7 +4544,7 @@ return {
             and _("Tap: place block · Hold: mine · Swipe: look around")
             or _("Tap: mine · Hold: place block · Swipe: look around")
         local world_status_widget = TextWidget:new{
-            text = _("Seed: ") .. tostring(state.session.seed) .. " · " .. state.session:biomeName() .. " · " .. state.session:timeLabel(),
+            text = state.session:statusText(),
             face = Font:getFace("smallinfofont", px(9)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = heading_w,
             overlap_offset = { margin, px(29) },
         }
@@ -4397,6 +4590,10 @@ return {
     end,
     _test = {
         VoxelSession = VoxelSession,
+        WorldStore = WorldStore,
+        worldPageCount = WorldStore.pageCount,
+        worldPageRange = WorldStore.pageRange,
+        createMenuMetrics = WorldStore.createMenuMetrics,
         VoxelCanvas = VoxelCanvas,
         Joystick = Joystick,
         JumpControl = JumpControl,
@@ -4407,6 +4604,8 @@ return {
         NavButton = NavButton,
         buildWorld = buildWorld,
         buildNetherWorld = buildNetherWorld,
+        buildWorldsPane = buildWorldsPane,
+        buildCreatePane = buildCreatePane,
         findPortalFrame = findPortalFrame,
         activatePortalFrame = activatePortalFrame,
         deactivatePortal = deactivatePortal,
@@ -4450,6 +4649,10 @@ return {
         scenePaletteForTime = scenePaletteForTime,
         TREE_DEFS = TREE_DEFS,
         STARTING_KIT = STARTING_KIT,
+        STARTING_COUNTS = STARTING_COUNTS,
+        WORLDS_PER_PAGE = WorldStore.WORLDS_PER_PAGE,
+        MAX_HEALTH = VoxelSession.MAX_HEALTH,
+        MAX_HUNGER = VoxelSession.MAX_HUNGER,
         WORLD_SIZE = WORLD_SIZE,
         WATER_LEVEL = WATER_LEVEL,
         MAX_TERRAIN_HEIGHT = MAX_TERRAIN_HEIGHT,
