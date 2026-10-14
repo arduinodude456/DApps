@@ -3437,23 +3437,21 @@ end
 function NavButton:paintTo(bb, x, y)
     local range = self.ges_events.TapMinecraftNav[1].range
     range.x, range.y, range.w, range.h = x, y, self.dimen.w, self.dimen.h
-    -- Flat full-size face and crisp border: no offset drop-shadow slab, so the
-    -- larger touch target remains clean and every painted pixel stays in bounds.
+    -- Minecraft-style 3D bevel: a black lower-right shadow, pale upper edge,
+    -- and a square face stay legible on both Carta and color E-Ink panels.
+    local shadow = math.max(2, math.floor(self.height * 0.13))
     local face = self.primary and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_LIGHT_GRAY
     local text_color = self.primary and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK
-    local edge = self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
-    bb:paintRect(x, y, self.width, self.height, face)
-    bb:paintRect(x, y, self.width, 1, edge)
-    bb:paintRect(x, y + self.height - 1, self.width, 1, edge)
-    bb:paintRect(x, y, 1, self.height, edge)
-    bb:paintRect(x + self.width - 1, y, 1, self.height, edge)
-    bb:paintRect(x + 2, y + 2, math.max(1, self.width - 4), 1, self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
+    bb:paintRect(x + shadow, y + shadow, self.width - shadow, self.height - shadow, Blitbuffer.COLOR_BLACK)
+    bb:paintRect(x, y, self.width - shadow, self.height - shadow, face)
+    bb:paintRect(x + 2, y + 2, math.max(1, self.width - shadow - 4), 1, self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
+    bb:paintRect(x + 2, y + 2, 1, math.max(1, self.height - shadow - 4), self.primary and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_WHITE)
     local label = TextWidget:new{
         text = self.title, face = Font:getFace("smallinfofont", math.max(scale(8), math.floor(self.height * 0.30))),
-        fgcolor = text_color, bold = true, max_width = math.max(scale(12), self.width - scale(12)),
+        fgcolor = text_color, bold = true, max_width = math.max(scale(12), self.width - shadow - scale(8)),
     }
     local size = label:getSize()
-    label:paintTo(bb, x + math.floor((self.width - size.w) / 2), y + math.floor((self.height - size.h) / 2))
+    label:paintTo(bb, x + math.floor((self.width - shadow - size.w) / 2), y + math.floor((self.height - shadow - size.h) / 2))
     return true
 end
 
@@ -3815,14 +3813,14 @@ local function buildAboutPane(state, context, width, height)
     local button_w, button_h = math.min(360, math.floor(width * 0.66)), 42
     local x = math.floor((width - button_w) / 2)
     return menuPane(state, context, width, height, _("About the Game"), _("Offline voxel sandbox for AppDock"), {
-        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.4"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
+        TextWidget:new{ text = _("Biomes · Villages · Voxel Mobs · Day & Night\n\nMinecraft 3D 4.5.5"), face = Font:getFace("smallinfofont", 13), fgcolor = Blitbuffer.COLOR_WHITE, max_width = button_w, overlap_offset = { x, math.floor(height * 0.37) } },
         menuButton(_("Back"), button_w, button_h, x, height - button_h - 18, function() rebuildScreen(state, context, "splash") end),
     })
 end
 
 return {
     id = "minecraft",
-    version = "4.5.4",
+    version = "4.5.5",
     title = "Minecraft 3D",
     subtitle = "Voxel Mobs, Day/Night & Torches",
     symbol = "M",
