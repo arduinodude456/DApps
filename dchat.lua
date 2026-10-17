@@ -283,8 +283,22 @@ local function cloneStore(raw)
     }
 end
 
+local function tbsDisplayName()
+    local settings = G_reader_settings:readSetting("appdock_homescreen", {})
+    local account = type(settings) == "table" and settings.tbs_account or nil
+    if type(account) == "table" and account.enabled == true then
+        local name = safeText(account.display_name or account.username, MAX_NAME_BYTES)
+        if name then return name end
+    end
+    return ""
+end
+
 local function loadStore()
-    return cloneStore(G_reader_settings:readSetting(SETTINGS_KEY, {}))
+    local store = cloneStore(G_reader_settings:readSetting(SETTINGS_KEY, {}))
+    -- A TBS profile is optional. Existing DChat identities always win; a new
+    -- identity created from DChat will use the TBS public name as its handle.
+    if store.display_name == "" then store.display_name = tbsDisplayName() end
+    return store
 end
 
 local function saveStore(store)
