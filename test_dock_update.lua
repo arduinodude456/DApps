@@ -42,13 +42,13 @@ local log = { shown = nil, rebuilds = 0, requests = {} }
 
 local required = {
     "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
-    "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
+    "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_suggestions.db",
+    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_suggestions.db",
 }
 local optional_sources = {
     "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
@@ -68,6 +68,7 @@ local png_assets = {
     "assets/screensaver/happy_ereader_01.png", "assets/screensaver/happy_ereader_02.png",
     "assets/screensaver/happy_ereader_03.png", "assets/screensaver/happy_ereader_04.png",
 }
+local svg_assets = { "assets/wallpaper/appdock_default.svg" }
 local sources = {}
 for _, name in ipairs(required) do
     sources[name] = "-- staged " .. name .. "\nreturn {}\n"
@@ -87,6 +88,8 @@ packaged_sources["_meta.lua"] = "return { version = '7.9.21' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
+local svg_wallpaper = "<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>"
+for _, asset in ipairs(svg_assets) do packaged_sources[asset] = svg_wallpaper end
 local feed = [[<feed><entry>
 <id>tag:github.com,2008:Repository/1345844414/v7.9.21</id>
 <updated>2026-10-11T07:53:22Z</updated>
@@ -136,7 +139,7 @@ package.preload["ssl.https"] = function()
         if request.url:find("releases.atom", 1, true) then request.sink(feed)
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
-            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.db)$")
+            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.svg)$") or request.url:match("/([^/]+%.db)$")
             local relative = request.url:match("/v7%.9%.21/appdock%.koplugin/(.+)$")
             local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
@@ -160,6 +163,9 @@ local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded AppDock package")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
+assert(dock_update_source:find('["appdock_tbs_account.lua"] = true', 1, true), "DockUpdate must allow the TBS account client")
+assert(dock_update_source:find('["appdock_groups.lua"] = true', 1, true), "DockUpdate must allow the AppDock group model")
+assert(dock_update_source:find('assets/wallpaper/appdock_default.svg', 1, true), "DockUpdate must allow the bundled default wallpaper")
 assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage data files without Lua execution")
     for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua" }) do
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
@@ -205,13 +211,15 @@ for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_yt
 end
 local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
 assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")
+local new_wallpaper = assert(io.open(active .. "/assets/wallpaper/appdock_default.svg", "rb")):read("*a")
+assert(new_wallpaper == svg_wallpaper, "DockUpdate must stage the bundled static SVG wallpaper")
 local new_database = assert(io.open(active .. "/appdock_suggestions.db", "rb")):read("*a")
 assert(new_database:find("# AppDock offline suggestion database", 1, true) and new_database:find("de\t7.4", 1, true) and new_database:find("en\t7.4", 1, true), "DockUpdate must atomically install the current keyboard suggestion database")
 local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 1 + #required + #optional_sources + #png_assets,
+assert(#log.requests == 1 + #required + #optional_sources + #png_assets + #svg_assets,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")

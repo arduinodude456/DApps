@@ -52,19 +52,19 @@ local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
-    "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_homescreen.lua",
+    "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_suggestions.db",
+    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_suggestions.db",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
     ["appdock_appstore.lua"] = true, ["appdock_boot.lua"] = true,
     ["appdock_browser.lua"] = true, ["appdock_dapps.lua"] = true,
-    ["appdock_filemanager.lua"] = true, ["appdock_help.lua"] = true,
+    ["appdock_filemanager.lua"] = true, ["appdock_groups.lua"] = true, ["appdock_help.lua"] = true,
     ["appdock_homescreen.lua"] = true, ["appdock_keyboard.lua"] = true,
     ["appdock_layout.lua"] = true, ["appdock_lockscreen.lua"] = true,
     ["appdock_logo.lua"] = true, ["appdock_manager.lua"] = true,
@@ -77,7 +77,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
     ["appdock_dialogs.lua"] = true, ["appdock_draw.lua"] = true,
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
-    ["appdock_suggestions.lua"] = true,
+    ["appdock_suggestions.lua"] = true, ["appdock_tbs_account.lua"] = true,
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -93,6 +93,7 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
     ["assets/logos/music.png"] = true, ["assets/logos/dchat.png"] = true,
     ["assets/logos/dockupdate.png"] = true, ["assets/logos/minecraft.png"] = true,
+    ["assets/wallpaper/appdock_default.svg"] = true,
     ["assets/screensaver/happy_ereader_01.png"] = true,
     ["assets/screensaver/happy_ereader_02.png"] = true,
     ["assets/screensaver/happy_ereader_03.png"] = true,
@@ -279,6 +280,24 @@ end
 local function isPng(content)
     return type(content) == "string" and content:sub(1, 8) == "\137PNG\r\n\26\n"
 end
+local function isSafeSvg(content)
+    if type(content) ~= "string" or #content == 0 or #content > MAX_ASSET_BYTES then return false end
+    local lower = content:lower()
+    if not lower:match("^%s*<%?xml[^>]*>%s*<svg[%s>]") and not lower:match("^%s*<svg[%s>]") then return false end
+    -- The bundled wallpaper is deliberately static. Do not permit executable,
+    -- event-bound or remotely fetched SVG content through the update channel.
+    return not lower:find("<script", 1, true)
+        and not lower:find("<foreignobject", 1, true)
+        and not lower:find("href%s*=%s*[\"']https?://")
+        and not lower:find("url%s*%(%s*[\"']?https?://")
+        and not lower:find("on[%a_%-]+%s*=")
+end
+local function validAsset(path, content)
+    if type(path) ~= "string" then return false end
+    if path:match("%.png$") then return isPng(content) end
+    if path == "assets/wallpaper/appdock_default.svg" then return isSafeSvg(content) end
+    return false
+end
 
 local function isSuggestionDatabase(content)
     return type(content) == "string"
@@ -311,12 +330,12 @@ local function stageRelease(release, entries, target)
         local is_asset = entry.kind == "asset"
         local is_data = entry.kind == "data"
         local max_size = is_asset and MAX_ASSET_BYTES or (is_data and MAX_DATA_BYTES or MAX_FILE_BYTES)
-        local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
+        local accept = is_asset and "image/png,image/svg+xml,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
         if entry.size and #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
         if is_asset then
-            if not isPng(source) then removeTree(stage); return nil, _("Downloaded PNG asset has an invalid signature: ") .. entry.path end
+            if not validAsset(entry.path, source) then removeTree(stage); return nil, _("Downloaded asset is invalid: ") .. entry.path end
         elseif is_data then
             if not isSuggestionDatabase(source) then
                 removeTree(stage); return nil, _("Downloaded suggestion database has an invalid format: ") .. entry.path
@@ -337,9 +356,9 @@ local function stageRelease(release, entries, target)
             local file = io.open(stage .. "/" .. entry.path, "rb")
             local content = file and file:read("*a") or nil
             if file then file:close() end
-            if not content or (entry.size and #content ~= entry.size) or not isPng(content) then
+            if not content or (entry.size and #content ~= entry.size) or not validAsset(entry.path, content) then
                 removeTree(stage)
-                return nil, _("Staged PNG asset validation failed: ") .. entry.path
+                return nil, _("Staged asset validation failed: ") .. entry.path
             end
         elseif entry.kind == "data" then
             local file = io.open(stage .. "/" .. entry.path, "rb")
