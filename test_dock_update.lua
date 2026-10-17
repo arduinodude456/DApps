@@ -49,11 +49,14 @@ local required = {
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_suggestions.db",
+    "appdock_suggestions.lua", "appdock_tbs_account.lua",
+    "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
+    "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
+    "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua",
+    "appdock_suggestions.db",
 }
 local optional_sources = {
     "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
-    "appdock_sleepscreen.lua",
 }
 local png_assets = {
     "assets/lockscreen/appdock_lockscreen_hero.png",
@@ -80,23 +83,23 @@ sources["appdock_suggestions.db"] = "# AppDock offline bilingual suggestion data
 local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
-    -- Match the actual AppDock 7.9.21 DApp-host module size so this exact release
+-- Match the actual AppDock 8.2.1 DApp-host module size so this exact release
 -- proves acceptance under the bounded per-file size limit.
-packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 205633) .. "\n"
-assert(#packaged_sources["appdock_dapps.lua"] == 205636, "The AppDock 7.9.21 host fixture must match its published byte size")
-packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-7.9.21' }\n"
-packaged_sources["_meta.lua"] = "return { version = '7.9.21' }\n"
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 244212) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 244215, "The AppDock 8.2.1 host fixture must match its published byte size")
+packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-8.2.1' }\n"
+packaged_sources["_meta.lua"] = "return { version = '8.2.1' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
 local svg_wallpaper = "<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>"
 for _, asset in ipairs(svg_assets) do packaged_sources[asset] = svg_wallpaper end
 local feed = [[<feed><entry>
-<id>tag:github.com,2008:Repository/1345844414/v7.9.21</id>
+<id>tag:github.com,2008:Repository/1345844414/v8.2.1</id>
 <updated>2026-10-11T07:53:22Z</updated>
-<link rel="alternate" type="text/html" href="https://github.com/arduinodude456/appdock.koplugin/releases/tag/v7.9.21"/>
-<title>AppDock 7.9.21</title>
-<content type="html">&lt;h1&gt;AppDock 7.9.21&lt;/h1&gt;&lt;p&gt;Kobo stylus pressure, eraser and marker support in Draw&lt;/p&gt;</content>
+<link rel="alternate" type="text/html" href="https://github.com/arduinodude456/appdock.koplugin/releases/tag/v8.2.1"/>
+<title>AppDock 8.2.1</title>
+<content type="html">&lt;h1&gt;AppDock 8.2.1&lt;/h1&gt;&lt;p&gt;Sleepscreen catalogue and editor loading fix&lt;/p&gt;</content>
 </entry></feed>]]
 
 package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "white", COLOR_BLACK = "black", COLOR_DARK_GRAY = "dark", COLOR_LIGHT_GRAY = "light", COLOR_GRAY_8 = "g8" } end
@@ -141,7 +144,7 @@ package.preload["ssl.https"] = function()
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
             local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.svg)$") or request.url:match("/([^/]+%.db)$")
-            local relative = request.url:match("/v7%.9%.21/appdock%.koplugin/(.+)$")
+            local relative = request.url:match("/v8%.2%.1/appdock%.koplugin/(.+)$")
             local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
             request.sink(source)
@@ -159,7 +162,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.1" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.2" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher ordering module is required for AppDock startup")
@@ -169,6 +172,10 @@ assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpd
 assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded AppDock package")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
 assert(dock_update_source:find('["appdock_tbs_account.lua"] = true', 1, true), "DockUpdate must allow the TBS account client")
+for _, module in ipairs({ "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua" }) do
+    assert(required_source_block:find('"' .. module .. '"', 1, true), "DockUpdate must require the AppDock module " .. module)
+    assert(dock_update_source:find('["' .. module .. '"] = true', 1, true), "DockUpdate must allow the AppDock module " .. module)
+end
 assert(dock_update_source:find('["appdock_groups.lua"] = true', 1, true), "DockUpdate must allow the AppDock group model")
 assert(dock_update_source:find('assets/wallpaper/appdock_default.svg', 1, true), "DockUpdate must allow the bundled default wallpaper")
 assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage data files without Lua execution")
@@ -199,9 +206,9 @@ assert(split_pane and split_pane.dimen and split_pane.dimen.h == 360 and split_p
 
 check.callback()
 pane = app.buildPane(instance, context); check, notes, install = pane[5], pane[6], pane[7]
-assert(install.title == "Install update" and install.subtitle == "AppDock 7.9.21", "DockUpdate must detect a newer stable release")
+assert(install.title == "Install update" and install.subtitle == "AppDock 8.2.1", "DockUpdate must detect a newer stable release")
 notes.callback()
-assert(log.shown and log.shown.text:find("stylus", 1, true) and log.shown.title:find("v7.9.21", 1, true), "DockUpdate must display the complete release notes")
+assert(log.shown and log.shown.text:find("Sleepscreen", 1, true) and log.shown.title:find("v8.2.1", 1, true), "DockUpdate must display the complete release notes")
 
 install.callback()
 assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit confirmation before installation")
@@ -209,10 +216,10 @@ log.shown.ok_callback()
 local new_main = assert(io.open(active .. "/main.lua", "rb")):read("*a")
 assert(new_main:find("packaged main", 1, true), "DockUpdate must atomically replace the active AppDock folder with the current packaged sources")
 local new_meta = assert(io.open(active .. "/_meta.lua", "rb")):read("*a")
-assert(new_meta:find("7.9.21", 1, true), "DockUpdate must prefer the current packaged release over the stale root mirror")
-for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_ytmusic.lua" }) do
+assert(new_meta:find("8.2.1", 1, true), "DockUpdate must prefer the current packaged release over the stale root mirror")
+for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_ytmusic.lua", "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua" }) do
     local installed = assert(io.open(active .. "/" .. module, "rb")):read("*a")
-        assert(installed:find("packaged " .. module, 1, true), "DockUpdate must install required AppDock 7.9.21 module " .. module)
+        assert(installed:find("packaged " .. module, 1, true), "DockUpdate must install required AppDock 8.2.1 module " .. module)
 end
 local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
 assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")

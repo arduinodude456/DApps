@@ -40,14 +40,14 @@ local RAW_ROOT = "https://raw.githubusercontent.com/" .. REPOSITORY
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- AppDock 7.9.21's appdock_dapps.lua is 205,636 bytes. Keep a strict bounded
+-- AppDock 8.2.1's appdock_dapps.lua is about 244 KiB. Keep a strict bounded
 -- source limit with headroom for the current DApp host and modest growth.
 local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 512 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
--- The AppDock 7.9.21 package has 53 allowlisted files (30 Lua modules and
--- 23 PNG assets). Keep a hard cap with room for modest future additions.
+-- The AppDock 8.2.1 package has 64 allowlisted files (39 Lua modules,
+-- 24 assets, and 4 data files). Keep this cap aligned with the fixed package.
 local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
@@ -59,7 +59,11 @@ local REQUIRED_FILES = {
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_suggestions.db",
+    "appdock_suggestions.lua", "appdock_tbs_account.lua",
+    "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
+    "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
+    "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua",
+    "appdock_suggestions.db",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -73,6 +77,11 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_motion.lua"] = true, ["appdock_notifications.lua"] = true,
     ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true,
     ["appdock_sleepscreen.lua"] = true,
+    ["appdock_sleepscreen_catalog.lua"] = true,
+    ["appdock_sleepscreen_editor.lua"] = true,
+    ["appdock_sleepscreen_presets.lua"] = true,
+    ["appdock_sleepscreen_renderer.lua"] = true,
+    ["appdock_sleepscreen_store.lua"] = true,
     ["appdock_theme.lua"] = true, ["appdock_wallpaper.lua"] = true,
     ["appdock_device_controls.lua"] = true,
     ["appdock_audio.lua"] = true, ["appdock_bwr.lua"] = true,
@@ -606,7 +615,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.1",
+    version = "1.4.2",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
