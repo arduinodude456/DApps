@@ -46,8 +46,7 @@ local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 512 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
--- The AppDock 8.2.1 package has 64 allowlisted files (39 Lua modules,
--- 24 assets, and 4 data files). Keep this cap aligned with the fixed package.
+-- Keep the fixed package bounded even as the explicit module and asset lists evolve.
 local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
@@ -104,7 +103,6 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
     ["assets/logos/music.png"] = true, ["assets/logos/dchat.png"] = true,
     ["assets/logos/dockupdate.png"] = true, ["assets/logos/minecraft.png"] = true,
-    ["assets/wallpaper/appdock_default.svg"] = true,
     ["assets/screensaver/happy_ereader_01.png"] = true,
     ["assets/screensaver/happy_ereader_02.png"] = true,
     ["assets/screensaver/happy_ereader_03.png"] = true,
@@ -300,22 +298,9 @@ end
 local function isPng(content)
     return type(content) == "string" and content:sub(1, 8) == "\137PNG\r\n\26\n"
 end
-local function isSafeSvg(content)
-    if type(content) ~= "string" or #content == 0 or #content > MAX_ASSET_BYTES then return false end
-    local lower = content:lower()
-    if not lower:match("^%s*<%?xml[^>]*>%s*<svg[%s>]") and not lower:match("^%s*<svg[%s>]") then return false end
-    -- The bundled wallpaper is deliberately static. Do not permit executable,
-    -- event-bound or remotely fetched SVG content through the update channel.
-    return not lower:find("<script", 1, true)
-        and not lower:find("<foreignobject", 1, true)
-        and not lower:find("href%s*=%s*[\"']https?://")
-        and not lower:find("url%s*%(%s*[\"']?https?://")
-        and not lower:find("on[%a_%-]+%s*=")
-end
 local function validAsset(path, content)
     if type(path) ~= "string" then return false end
     if path:match("%.png$") then return isPng(content) end
-    if path == "assets/wallpaper/appdock_default.svg" then return isSafeSvg(content) end
     return false
 end
 
@@ -350,7 +335,7 @@ local function stageRelease(release, entries, target)
         local is_asset = entry.kind == "asset"
         local is_data = entry.kind == "data"
         local max_size = is_asset and MAX_ASSET_BYTES or (is_data and MAX_DATA_BYTES or MAX_FILE_BYTES)
-        local accept = is_asset and "image/png,image/svg+xml,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
+        local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
         if entry.size and #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
@@ -615,7 +600,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.2",
+    version = "1.4.3",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

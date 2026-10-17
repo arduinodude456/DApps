@@ -72,7 +72,6 @@ local png_assets = {
     "assets/screensaver/happy_ereader_01.png", "assets/screensaver/happy_ereader_02.png",
     "assets/screensaver/happy_ereader_03.png", "assets/screensaver/happy_ereader_04.png",
 }
-local svg_assets = { "assets/wallpaper/appdock_default.svg" }
 local sources = {}
 for _, name in ipairs(required) do
     sources[name] = "-- staged " .. name .. "\nreturn {}\n"
@@ -92,8 +91,6 @@ packaged_sources["_meta.lua"] = "return { version = '8.2.1' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
-local svg_wallpaper = "<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>"
-for _, asset in ipairs(svg_assets) do packaged_sources[asset] = svg_wallpaper end
 local feed = [[<feed><entry>
 <id>tag:github.com,2008:Repository/1345844414/v8.2.1</id>
 <updated>2026-10-11T07:53:22Z</updated>
@@ -162,7 +159,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.2" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.3" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher ordering module is required for AppDock startup")
@@ -177,7 +174,7 @@ for _, module in ipairs({ "appdock_sleepscreen.lua", "appdock_sleepscreen_catalo
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true), "DockUpdate must allow the AppDock module " .. module)
 end
 assert(dock_update_source:find('["appdock_groups.lua"] = true', 1, true), "DockUpdate must allow the AppDock group model")
-assert(dock_update_source:find('assets/wallpaper/appdock_default.svg', 1, true), "DockUpdate must allow the bundled default wallpaper")
+assert(not dock_update_source:find('assets/wallpaper/appdock_default.svg', 1, true), "DockUpdate must not require or request the removed default wallpaper")
 assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage data files without Lua execution")
     for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua" }) do
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
@@ -223,18 +220,19 @@ for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_yt
 end
 local new_logo = assert(io.open(active .. "/assets/logos/appdock.png", "rb")):read("*a")
 assert(new_logo == png_signature, "DockUpdate must stage bundled PNG assets alongside AppDock source files")
-local new_wallpaper = assert(io.open(active .. "/assets/wallpaper/appdock_default.svg", "rb")):read("*a")
-assert(new_wallpaper == svg_wallpaper, "DockUpdate must stage the bundled static SVG wallpaper")
+local new_wallpaper = io.open(active .. "/assets/wallpaper/appdock_default.svg", "rb")
+assert(not new_wallpaper, "DockUpdate must install AppDock successfully without the optional default wallpaper")
 local new_database = assert(io.open(active .. "/appdock_suggestions.db", "rb")):read("*a")
 assert(new_database:find("# AppDock offline suggestion database", 1, true) and new_database:find("de\t7.4", 1, true) and new_database:find("en\t7.4", 1, true), "DockUpdate must atomically install the current keyboard suggestion database")
 local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 1 + #required + #optional_sources + #png_assets + #svg_assets,
+assert(#log.requests == 1 + #required + #optional_sources + #png_assets,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
+    assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
 end
 
 os.execute("rm -rf " .. root)
