@@ -51,7 +51,8 @@ local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 local MAX_RELEASE_FILES = 64
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
-    "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
+    "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
+    "appdock_appstore.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
@@ -62,6 +63,7 @@ local REQUIRED_FILES = {
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
+    ["appdock_recovery.lua"] = true,
     ["appdock_appstore.lua"] = true, ["appdock_boot.lua"] = true,
     ["appdock_browser.lua"] = true, ["appdock_dapps.lua"] = true,
     ["appdock_filemanager.lua"] = true, ["appdock_groups.lua"] = true, ["appdock_help.lua"] = true,
@@ -226,14 +228,23 @@ end
 
 local function releaseEntries()
     local entries = {}
+    local included = {}
     for path in pairs(ALLOWED_SOURCE_FILES) do
         entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "source" }
+        included[path] = true
     end
     for path in pairs(ALLOWED_ASSET_FILES) do
         entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "asset" }
+        included[path] = true
     end
     for path in pairs(ALLOWED_DATA_FILES) do
         entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "data" }
+        included[path] = true
+    end
+    for _, path in ipairs(REQUIRED_FILES) do
+        if not included[path] then
+            return nil, _("The fixed AppDock file list is missing a required module: ") .. path
+        end
     end
     if #entries > MAX_RELEASE_FILES then return nil, _("The fixed AppDock file list is too large.") end
     table.sort(entries, function(left, right) return left.path < right.path end)
@@ -595,7 +606,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.3.1",
+    version = "1.4.1",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

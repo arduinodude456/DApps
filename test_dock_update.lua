@@ -41,7 +41,8 @@ local function simpleModule() return WidgetContainer end
 local log = { shown = nil, rebuilds = 0, requests = {} }
 
 local required = {
-    "_meta.lua", "main.lua", "appdock_appstore.lua", "appdock_browser.lua",
+    "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
+    "appdock_appstore.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
@@ -52,7 +53,7 @@ local required = {
 }
 local optional_sources = {
     "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
-    "appdock_order.lua", "appdock_sleepscreen.lua",
+    "appdock_sleepscreen.lua",
 }
 local png_assets = {
     "assets/lockscreen/appdock_lockscreen_hero.png",
@@ -158,8 +159,12 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.3.1" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.1" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
+local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
+assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher ordering module is required for AppDock startup")
+assert(required_source_block:find('"appdock_recovery.lua"', 1, true), "Boot recovery must survive every DockUpdate install")
+assert(dock_update_source:find("if not included[path] then", 1, true), "The updater must reject a release when a required module is not allowlisted")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded AppDock package")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
