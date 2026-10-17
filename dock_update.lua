@@ -20,7 +20,6 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local InfoMessage = require("ui/widget/infomessage")
-local InputDialog = require("ui/widget/inputdialog")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
@@ -47,7 +46,6 @@ local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 512 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
-local UPDATE_PASSWORD = "b8-adt73548"
 -- The AppDock 7.9.21 package has 53 allowlisted files (30 Lua modules and
 -- 23 PNG assets). Keep a hard cap with room for modest future additions.
 local MAX_RELEASE_FILES = 64
@@ -493,30 +491,6 @@ local function showNotes(instance, context)
     })
 end
 
-local function promptForPassword(on_success)
-    local dialog
-    dialog = InputDialog:new{
-        title = _("AppDock update password"),
-        input = "",
-        input_hint = _("Enter the password to authorize this update"),
-        input_type = "password",
-        buttons = { {
-            { text = _("Cancel"), callback = function() UIManager:close(dialog) end },
-            { text = _("Authorize"), is_enter_default = true, callback = function()
-                local entered = dialog:getInputText() or ""
-                UIManager:close(dialog)
-                if entered ~= UPDATE_PASSWORD then
-                    showMessage(_("Incorrect update password. The AppDock files were not changed."))
-                    return
-                end
-                on_success()
-                end },
-        },
-        },
-    }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
-end
 local function confirmInstall(instance, context)
     local state = stateFor(instance)
     local target, installed_version_or_err = activePlugin(context)
@@ -532,10 +506,9 @@ local function confirmInstall(instance, context)
         showMessage(relation == 0 and _("AppDock is already up to date.") or _("The installed AppDock version is newer than this release."))
         return
     end
-    promptForPassword(function()
-        local entries, prepare_err = prepareRelease(state)
-        if not entries then showMessage(prepare_err); return end
-        UIManager:show(ConfirmBox:new{
+    local entries, prepare_err = prepareRelease(state)
+    if not entries then showMessage(prepare_err); return end
+    UIManager:show(ConfirmBox:new{
             text = _("Install the trusted AppDock update now?\n\n")
                 .. _("Installed: ") .. tostring(installed_version_or_err) .. "\n"
                 .. _("Release: ") .. release.version .. "\n"
@@ -556,8 +529,7 @@ local function confirmInstall(instance, context)
                 end
                 requestRebuild(context)
             end,
-        })
-    end)
+    })
 end
 
 local function background(width, height)

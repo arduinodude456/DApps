@@ -165,8 +165,8 @@ assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
         "DockUpdate must explicitly allow the AppDock module " .. module)
 end
-assert(dock_update_source:find("UPDATE_PASSWORD = \"b8-adt73548\"", 1, true), "DockUpdate must require the configured update password")
-assert(dock_update_source:find("input_type = \"password\"", 1, true), "DockUpdate password entry must be masked")
+assert(not dock_update_source:find("UPDATE_PASSWORD", 1, true), "DockUpdate must not require a password")
+assert(not dock_update_source:find("input_type = \"password\"", 1, true), "DockUpdate must not show a password prompt")
 local context = {
     dimen = { w = 600, h = 760 },
     manager = { appdock = { path = active, version = "7.9.14" } },
@@ -193,14 +193,7 @@ notes.callback()
 assert(log.shown and log.shown.text:find("stylus", 1, true) and log.shown.title:find("v7.9.21", 1, true), "DockUpdate must display the complete release notes")
 
 install.callback()
-assert(log.shown and log.shown.getInputText and log.shown.buttons, "DockUpdate must request the update password before installation")
-log.shown.input = "wrong-password"
-log.shown.buttons[1][2].callback()
-assert(log.shown.text and log.shown.text:find("Incorrect update password", 1, true), "DockUpdate must reject an incorrect password")
-install.callback()
-log.shown.input = "b8-adt73548"
-log.shown.buttons[1][2].callback()
-assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit confirmation after password authorization")
+assert(log.shown and log.shown.ok_callback, "DockUpdate must require explicit confirmation before installation")
 log.shown.ok_callback()
 local new_main = assert(io.open(active .. "/main.lua", "rb")):read("*a")
 assert(new_main:find("packaged main", 1, true), "DockUpdate must atomically replace the active AppDock folder with the current packaged sources")
