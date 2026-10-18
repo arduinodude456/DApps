@@ -4,9 +4,9 @@ DockUpdate for AppDock.
 A local, explicit-confirmation updater for the AppDock core plugin. It reads
 release metadata only from the pinned public GitHub repository, displays the
 release notes, validates a small root-level Lua release tree plus bundled PNG
-assets, stages every file, and atomically swaps the active plugin folder only
-after the user confirms. The previous plugin folder is kept as a nearby
-rollback backup.
+assets and AppDock data files, stages every file, and atomically swaps the
+active plugin folder only after the user confirms. The previous plugin folder
+is kept as a nearby rollback backup.
 --]]--
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -62,7 +62,7 @@ local REQUIRED_FILES = {
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
     "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua",
-    "appdock_suggestions.db",
+    "appdock_suggestions.db", "features.adf",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -91,6 +91,7 @@ local ALLOWED_SOURCE_FILES = {
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
+    ["features.adf"] = true,
 }
 local ALLOWED_ASSET_FILES = {
     ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
@@ -312,7 +313,18 @@ local function isSuggestionDatabase(content)
         and content:match("\nde\t[%d%.]+\t[^\r\n]+")
         and content:match("\nen\t[%d%.]+\t[^\r\n]+")
 end
-
+local function isFeaturePagesFile(content)
+    if type(content) ~= "string" or #content == 0 or content:find("%z") then return false end
+    content = content:gsub("\r\n", "\n")
+    if not content:match("^# AppDock news[%s\r\n]") or not content:find("[page]", 1, true) then return false end
+    return content:match("%[page%].-\ntitle=[^\r\n]+") ~= nil
+        and content:match("%[page%].-\ntext=[^\r\n]+") ~= nil
+end
+local function validDataFile(path, content)
+    if path == "appdock_suggestions.db" then return isSuggestionDatabase(content) end
+    if path == "features.adf" then return isFeaturePagesFile(content) end
+    return false
+end
 local function activePlugin(context)
     local appdock = context and context.manager and context.manager.appdock
     local path = appdock and appdock.path
@@ -342,8 +354,8 @@ local function stageRelease(release, entries, target)
         if is_asset then
             if not validAsset(entry.path, source) then removeTree(stage); return nil, _("Downloaded asset is invalid: ") .. entry.path end
         elseif is_data then
-            if not isSuggestionDatabase(source) then
-                removeTree(stage); return nil, _("Downloaded suggestion database has an invalid format: ") .. entry.path
+            if not validDataFile(entry.path, source) then
+                removeTree(stage); return nil, _("Downloaded AppDock data file has an invalid format: ") .. entry.path
             end
         else
             local chunk, syntax_err = loadstring(source, "@dockupdate/" .. entry.path)
@@ -369,9 +381,9 @@ local function stageRelease(release, entries, target)
             local file = io.open(stage .. "/" .. entry.path, "rb")
             local content = file and file:read("*a") or nil
             if file then file:close() end
-            if not isSuggestionDatabase(content) then
+            if not validDataFile(entry.path, content) then
                 removeTree(stage)
-                return nil, _("Staged suggestion database validation failed: ") .. entry.path
+                return nil, _("Staged AppDock data-file validation failed: ") .. entry.path
             end
         else
             local chunk, syntax_err = loadfile(stage .. "/" .. entry.path)
@@ -600,7 +612,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.3",
+    version = "1.4.4",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
