@@ -54,7 +54,7 @@ local deferred_ui_callback
 local appdock_keyboard_attach_count = 0
 local shown_ui_widget
 function Input:paintTo() end
-install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7, COLOR_TRANSPARENT = 0 })
+install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7 })
 install("ui/widget/container/centercontainer", Widget)
 install("ui/widget/confirmbox", Widget)
 install("device", { screen = { scaleBySize = function(_, value) return value end }, isAndroid = function() return test_is_android end })
@@ -98,7 +98,7 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
-assert(dchat.id == "dchat" and dchat.version == "2.1.0", "DChat metadata must expose the updated version")
+assert(dchat.id == "dchat" and dchat.version == "2.1.1", "DChat metadata must expose the updated version")
 local background_instance = { dchat = { store = dchat._test.cloneStore({ last_background_check = 100 }) } }
 local ran_early = dchat._test.backgroundCheck(background_instance, { now = 159 })
 assert(type(ran_early) == "table" and ran_early.skipped == "interval", "DChat background checks must wait a full minute")
@@ -173,7 +173,9 @@ end
 local initial_bubble = find_widget(dm_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
 assert(initial_bubble and initial_bubble[1].radius == 12, "DM bubbles must use consistent rounded corners instead of becoming pill-shaped")
 local bubble_text = find_widget(initial_bubble, function(widget) return widget.text == "Image attached" end)
-assert(bubble_text and bubble_text.background == nil, "DM bubble text must not paint an opaque background over the bubble")
+assert(bubble_text and bubble_text.bgcolor == initial_bubble.bubble_background
+    and bubble_text.bgcolor == initial_bubble[1].background,
+    "DM bubble text background must exactly match the bubble color, not the TextBoxWidget white default")
 initial_bubble:onTapDChatBubble()
 local detail_pane = dchat.buildPane(dm_instance, dm_context)
 local reply_button = find_widget(detail_pane, function(widget) return widget.title == "Reply" and type(widget.onTapDChatAction) == "function" end)
@@ -335,6 +337,6 @@ for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
 assert(type(pane) == "table", "pane did not build")
 end
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dchat.lua | 2.1.0 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
+assert(catalog:find("dchat.lua | 2.1.1 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
 os.execute("rm -rf " .. string.format("%q", test_data_dir))
 print("dchat-pane-smoke-ok")

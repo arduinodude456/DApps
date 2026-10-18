@@ -1161,9 +1161,10 @@ function DMBubble:init()
         line_height = 0.30,
         alignment = "left",
         fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
-        -- TextBoxWidget draws no fill when background is unset, exposing the
-        -- FrameContainer bubble colour underneath on both monochrome and RGB.
-        background = nil,
+        -- TextBoxWidget defaults bgcolor to white and renders an opaque buffer.
+        -- Match the parent bubble color so the text area blends into it on both
+        -- monochrome and RGB screens (there is no transparent TextBoxWidget BB).
+        bgcolor = self.bubble_background or Blitbuffer.COLOR_WHITE,
         overlap_offset = { 0, self.image_widget and (self.image_height + px(4)) or 0 },
     }
     self[1] = FrameContainer:new{
@@ -1831,7 +1832,7 @@ end
 
 return {
     id = "dchat",
-    version = "2.1.0",
+    version = "2.1.1",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
