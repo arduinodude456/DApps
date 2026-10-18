@@ -124,7 +124,6 @@ local function isAndroidDevice()
 end
 
 local function safeImageWidget(options)
-    if isAndroidDevice() then return nil end
     local loaded, ImageWidget = pcall(require, "ui/widget/imagewidget")
     if not loaded or not ImageWidget then return nil end
     -- DM images are user-supplied and can be much larger when decoded than on the wire.
@@ -1139,6 +1138,9 @@ local DMBubble = InputContainer:extend{
     bubble_background = nil,
     text_foreground = nil,
     font_size = nil,
+    text_height = nil,
+    image_widget = nil,
+    image_height = 0,
     callback = nil,
 }
 
@@ -1146,6 +1148,24 @@ function DMBubble:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     local px = active_px or scale
     local padding = px(6)
+    local bubble_content = {}
+    if self.image_widget then
+        self.image_widget.overlap_offset = { 0, 0 }
+        bubble_content[#bubble_content + 1] = self.image_widget
+    end
+    bubble_content[#bubble_content + 1] = TextBoxWidget:new{
+        text = self.body,
+        face = Font:getFace("smallinfofont", self.font_size or math.max(px(8), math.floor(self.height * .16))),
+        width = self.width - 2 * padding,
+        height = math.max(1, self.text_height or (self.height - 2 * padding)),
+        line_height = 0.30,
+        alignment = "left",
+        fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
+        -- TextBoxWidget draws no fill when background is unset, exposing the
+        -- FrameContainer bubble colour underneath on both monochrome and RGB.
+        background = nil,
+        overlap_offset = { 0, self.image_widget and (self.image_height + px(4)) or 0 },
+    }
     self[1] = FrameContainer:new{
         width = self.width,
         height = self.height,
@@ -1155,15 +1175,7 @@ function DMBubble:init()
         -- Keep the corner treatment consistent like a normal chat bubble.
         radius = math.min(padding * 2, math.floor(math.min(self.width, self.height) / 2)),
         background = self.bubble_background or Blitbuffer.COLOR_WHITE,
-        TextBoxWidget:new{
-            text = self.body,
-            face = Font:getFace("smallinfofont", self.font_size or math.max(px(8), math.floor(self.height * .16))),
-            width = self.width - 2 * padding,
-            height = math.max(1, self.height - 2 * padding),
-            line_height = 0.30,
-            alignment = "left",
-            fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
-        },
+        OverlapGroup:new{ dimen = Geom:new{ w = self.width - 2 * padding, h = self.height - 2 * padding }, allow_mirroring = false, unpack(bubble_content) },
     }
     self.ges_events = { TapDChatBubble = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
@@ -1242,7 +1254,7 @@ local function dmPreview(text, maximum)
 end
 
 local function attachmentFilePath(state, message)
-    if isAndroidDevice() or not message or message.attachmentData == "" then return nil end
+    if not message or message.attachmentData == "" then return nil end
     state.attachment_files = state.attachment_files or {}
     local cached = state.attachment_files[message.id]
     if cached then
@@ -1270,11 +1282,11 @@ end
 local function directBubbleText(message, own)
     local body = message.body or ""
     if message.attachmentData ~= "" then
-        local notice = isAndroidDevice() and _("Image attached") or _("Image attached · tap to view")
+        local notice = _("Image attached")
         body = body ~= "" and body .. "\n" .. notice or notice
     end
     if own then body = body .. "\n" .. (message.readAt ~= "" and "✓✓" or "✓") end
-    return dmPreview(body, 260)
+    return body
 end
 
 local function estimatedBubbleHeight(body, bubble_width, available_height, px)
@@ -1312,10 +1324,14 @@ local function visibleRecentBubbles(items, offset, available_height, gap, make_b
     return ordered, #ordered, used, normalized
 end
 
-local function makeDirectBubble(available_width, message, own, palette, px, callback, max_height)
+local function makeDirectBubble(available_width, message, own, palette, px, callback, max_height, state)
     local bubble_width = math.max(px(112), math.floor(available_width * .76))
     local body = directBubbleText(message, own)
-    local bubble_height, font_size = estimatedBubbleHeight(body, bubble_width, max_height, px)
+    local image_path = attachmentFilePath(state, message)
+    local image_height = image_path and math.min(px(96), math.floor(max_height * .28)) or 0
+    local image_widget = image_path and safeImageWidget{ file = image_path, width = bubble_width - px(12), height = image_height, scale_factor = 0, file_do_cache = false }
+    local text_height, font_size = estimatedBubbleHeight(body, bubble_width, math.max(1, max_height - image_height - (image_height > 0 and px(4) or 0)), px)
+    local bubble_height = math.min(max_height, text_height + image_height + (image_height > 0 and px(4) or 0))
     return DMBubble:new{
         width = bubble_width,
         height = bubble_height,
@@ -1323,12 +1339,15 @@ local function makeDirectBubble(available_width, message, own, palette, px, call
         bubble_background = own and palette.primary or palette.surface_variant,
         text_foreground = own and palette.on_primary or palette.on_variant,
         font_size = font_size,
+        text_height = math.max(1, bubble_height - image_height - px(16)),
+        image_widget = image_widget,
+        image_height = image_height,
         callback = callback,
     }
 end
 
 local function makePublicBubble(available_width, message, palette, px, callback, max_height)
-    local body = dmPreview(message.authorName .. "\n" .. message.body, 260)
+    local body = message.authorName .. "\n" .. message.body
     local bubble_width = math.max(px(112), math.floor(available_width * .84))
     local bubble_height, font_size = estimatedBubbleHeight(body, bubble_width, max_height, px)
     return DMBubble:new{
@@ -1489,7 +1508,7 @@ local function buildConversationPanel(state, context, width, height, compact)
     local messages = state.store.dm_messages or {}
     local visible, capacity, used, normalized = visibleRecentBubbles(messages, state.dm_scroll or 0, message_area, gap, function(message, max_height)
         local own = message.senderDeviceId == state.store.device_id or (message.senderDeviceId == "" and message.authorName == state.store.display_name)
-        return makeDirectBubble(width - 2 * margin - px(8), message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, max_height)
+        return makeDirectBubble(width - 2 * margin - px(8), message, own, palette, px, function() clearAttachmentFiles(state); state.selected_dm_id = message.id; state.view = "dm_message"; refresh(context) end, max_height, state)
     end)
     state.dm_scroll = normalized
     local action_width = math.max(px(25), math.floor(width * .12))
@@ -1758,7 +1777,8 @@ local function dmMessagePane(instance, context)
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
     local margin, gap, button_height = math.max(px(10), math.floor(width / 65)), math.max(px(7), math.floor(width / 110)), math.max(px(36), math.floor(height / 14))
-    local half = math.floor((width - 2 * margin - gap) / 2)
+    local button_gap = math.max(px(3), math.floor(gap / 2))
+    local button_width = math.floor((width - 2 * margin - 2 * button_gap) / 3)
     local full_body = message.body
     local image_file = attachmentFilePath(state, message)
     local image_height = image_file and math.min(px(220), math.floor(height * .34)) or 0
@@ -1777,8 +1797,12 @@ local function dmMessagePane(instance, context)
     }
     if image then elements[#elements + 1] = image end
     elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, body_y } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("‹ Conversation"), callback = function() clearAttachmentFiles(state); state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
-    elements[#elements + 1] = ActionButton:new{ width = half, height = button_height, title = _("DMs"), primary = true, callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + half + gap, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("‹ Conversation"), callback = function() clearAttachmentFiles(state); state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("Reply"), primary = true, callback = function()
+        local quote = "↪ " .. message.authorName .. ": " .. dmPreview(message.body, 140)
+        promptDirectMessage(state, context, quote .. "\n\n")
+    end, overlap_offset = { margin + button_width + button_gap, height - margin - button_height } }
+    elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("DMs"), callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + 2 * (button_width + button_gap), height - margin - button_height } }
     elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
@@ -1807,7 +1831,7 @@ end
 
 return {
     id = "dchat",
-    version = "2.0.0",
+    version = "2.1.0",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",

@@ -54,7 +54,7 @@ local deferred_ui_callback
 local appdock_keyboard_attach_count = 0
 local shown_ui_widget
 function Input:paintTo() end
-install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7 })
+install("ffi/blitbuffer", { COLOR_GRAY_8 = 1, COLOR_WHITE = 2, COLOR_LIGHT_GRAY = 3, COLOR_BLACK = 4, COLOR_DARK_GRAY = 5, COLOR_DARK_GREEN = 6, COLOR_LIGHT_GREEN = 7, COLOR_TRANSPARENT = 0 })
 install("ui/widget/container/centercontainer", Widget)
 install("ui/widget/confirmbox", Widget)
 install("device", { screen = { scaleBySize = function(_, value) return value end }, isAndroid = function() return test_is_android end })
@@ -98,12 +98,12 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
-assert(dchat.id == "dchat" and dchat.version == "1.8.6", "DChat metadata must expose the updated version")
+assert(dchat.id == "dchat" and dchat.version == "2.1.0", "DChat metadata must expose the updated version")
 local background_instance = { dchat = { store = dchat._test.cloneStore({ last_background_check = 100 }) } }
-local ran_early, early_reason = dchat._test.backgroundCheck(background_instance, { now = 159 })
-assert(ran_early == false and early_reason == "interval", "DChat background checks must wait a full minute")
-local ran_on_minute, minute_reason = dchat._test.backgroundCheck(background_instance, { now = 160 })
-assert(ran_on_minute == false and minute_reason == "wifi", "DChat background check should become eligible after 60 seconds")
+local ran_early = dchat._test.backgroundCheck(background_instance, { now = 159 })
+assert(type(ran_early) == "table" and ran_early.skipped == "interval", "DChat background checks must wait a full minute")
+local ran_on_minute = dchat._test.backgroundCheck(background_instance, { now = 160 })
+assert(type(ran_on_minute) == "table" and ran_on_minute.skipped == "wifi", "DChat background check should become eligible after 60 seconds")
 local native_keyboard_opened = false
 local appdock_input_dialog = { onShowKeyboard = function() native_keyboard_opened = true end }
 dchat._test.showInputDialog(appdock_input_dialog)
@@ -135,20 +135,20 @@ end
 local old_jpeg = dchat._test.cloneDirectMessage({ id = 9, authorName = "Test", body = "", attachmentMime = "image/jpeg", attachmentData = "TWFudXM=", createdAt = "2026-10-04T00:00:00Z" })
 assert(old_jpeg and old_jpeg.attachmentData == "TWFudXM=" and old_jpeg.attachmentMime == "image/jpeg", "JPEG DM attachment was not preserved")
 for _, mime in ipairs({ "image/png", "image/jpeg", "image/gif", "image/webp" }) do
-    assert(dchat._test.attachmentFilePath({ attachment_files = {} }, { id = "10", attachmentMime = mime, attachmentData = "TWFudXM=" }) == nil, "Android attempted to create a local " .. mime .. " image for rendering")
+    assert(dchat._test.attachmentFilePath({ attachment_files = {} }, { id = "10", attachmentMime = mime, attachmentData = "TWFudXM=" }) ~= nil, "image preview path was not created for " .. mime)
 end
 local dm_instance = { dchat = {
-    store = { recipients = { { deviceId = "dch_testrecipient123", displayName = "Test" } }, messages = {}, dm_messages = { { id = "10", authorName = "Test", body = "", createdAt = "2026-10-04T00:00:00Z", senderDeviceId = "dch_testrecipient123", readAt = "", attachmentMime = "image/png", attachmentData = "TWFudXM=" } }, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "", device_secret = "", display_name = "", selected_recipient_id = "dch_testrecipient123" },
+    store = { recipients = { { deviceId = "dch_testrecipient123", displayName = "Test" } }, messages = {}, dm_messages = { { id = "10", authorName = "Test", body = "", createdAt = "2026-10-04T00:00:00Z", senderDeviceId = "dch_testrecipient123", readAt = "", attachmentMime = "image/png", attachmentData = "TWFudXM=" } }, endpoint = "https://example.com", dm_endpoint = "https://example.com", device_id = "dch_selfreader123", device_secret = "test-secret", display_name = "Me", selected_recipient_id = "dch_testrecipient123" },
     view = "dm_conversation", status = "", loading = false,
 } }
 local dm_context = { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }
 local dm_pane = dchat.buildPane(dm_instance, dm_context)
 assert(io.open(stale_cache_path, "rb") == nil, "stale DChat image cache file was not removed on startup")
-assert(#image_widget_files == 0, "Android DChat instantiated ImageWidget in the conversation, including emoji shortcuts")
+assert(#image_widget_files > 0, "Android DChat did not instantiate an inline ImageWidget in the conversation")
 dm_instance.dchat.view = "dm_message"
 dm_instance.dchat.selected_dm_id = "10"
-assert(type(dchat.buildPane(dm_instance, dm_context)) == "table", "Android DM details failed to build without image rendering")
-assert(#image_widget_files == 0, "Android DChat instantiated ImageWidget in DM details")
+assert(type(dchat.buildPane(dm_instance, dm_context)) == "table", "Android DM details failed to build")
+assert(#image_widget_files > 1, "Android DChat did not render the image in DM details")
 dm_instance.dchat.view = "dm_conversation"
 local function find_widget(widget, predicate, visited)
     if type(widget) ~= "table" then return nil end
@@ -172,6 +172,16 @@ local function collect_widgets(widget, predicate, found, visited)
 end
 local initial_bubble = find_widget(dm_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
 assert(initial_bubble and initial_bubble[1].radius == 12, "DM bubbles must use consistent rounded corners instead of becoming pill-shaped")
+local bubble_text = find_widget(initial_bubble, function(widget) return widget.text == "Image attached" end)
+assert(bubble_text and bubble_text.background == nil, "DM bubble text must not paint an opaque background over the bubble")
+initial_bubble:onTapDChatBubble()
+local detail_pane = dchat.buildPane(dm_instance, dm_context)
+local reply_button = find_widget(detail_pane, function(widget) return widget.title == "Reply" and type(widget.onTapDChatAction) == "function" end)
+assert(reply_button, "tapping a DM must offer a Reply action in the full-message view")
+reply_button:onTapDChatAction()
+assert(shown_ui_widget and shown_ui_widget.title == "Private message" and shown_ui_widget.input:find("↪ Test:", 1, true), "Reply action did not open a quoted message draft")
+dm_instance.dchat.view = "dm_conversation"
+dm_pane = dchat.buildPane(dm_instance, dm_context)
 local refresh_button = find_widget(dm_pane, function(widget) return widget.dchat_role == "conversation_refresh" and type(widget.onTapDChatAction) == "function" end)
 assert(refresh_button, "DM conversation refresh button was not built")
 refresh_button:onTapDChatAction()
@@ -188,10 +198,14 @@ end
 local kobo_store = dm_instance.dchat.store
 kobo_store.dm_messages = kobo_messages
 local kobo_instance = { dchat = { store = kobo_store, view = "dm_conversation", status = "", loading = false, dm_page = 1, attachment_files = {} } }
+local previews_before_kobo = #image_widget_files
 kobo_dchat.buildPane(kobo_instance, dm_context)
-for _, image_file in ipairs(image_widget_files) do
-    assert(not image_file:match("/appdock_dchat_images/"), "opening the DM conversation rendered an attachment preview")
+assert(#image_widget_files > previews_before_kobo, "Kobo DM conversation did not build inline image previews")
+local inline_preview_found = false
+for index = previews_before_kobo + 1, #image_widget_files do
+    if image_widget_files[index]:match("/appdock_dchat_images/") then inline_preview_found = true end
 end
+assert(inline_preview_found, "inline image preview did not use the dedicated DChat cache")
 kobo_instance.dchat.view = "dm_message"
 for _, message in ipairs(kobo_messages) do
     kobo_instance.dchat.selected_dm_id = message.id
@@ -248,14 +262,21 @@ local layout_pane = dchat.buildPane(layout_instance, layout_context)
 local bubbles = collect_widgets(layout_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
 local short_height, long_height
 local newest_visible = false
+local full_long_text_visible = false
 for _, bubble in ipairs(bubbles) do
     assert(bubble[1].radius == 12, "all DM bubbles must use the same corner radius")
     assert(bubble.overlap_offset[2] + bubble.height <= 600, "a variable-height message bubble exceeded the conversation pane")
     if bubble.body:find("msg10", 1, true) then newest_visible = true end
-    if bubble.body:find("short", 1, true) then short_height = bubble.height else long_height = bubble.height end
+    if bubble.body:find("short", 1, true) then
+        short_height = bubble.height
+    else
+        long_height = bubble.height
+        if bubble.body:find(string.rep("long text ", 27) .. "long text", 1, true) then full_long_text_visible = true end
+    end
 end
 assert(#bubbles > 1 and newest_visible, "the initial chat viewport must show multiple recent messages including the newest one")
 assert(short_height and long_height and long_height > short_height, "bubble heights must follow message length rather than forcing every message into one tall slot")
+assert(full_long_text_visible, "long DM bubble text was truncated before rendering")
 local scroll_surfaces = collect_widgets(layout_pane, function(widget) return type(widget.onSwipeDChatScroll) == "function" end)
 local scroll_step = math.max(1, math.floor(#bubbles / 2))
 for _, scroll_surface in ipairs(scroll_surfaces) do
@@ -270,7 +291,7 @@ local old_dm_instance = { dchat = { store = { recipients = { { deviceId = "dch_l
 assert(dchat.buildPane(old_dm_instance, { dimen = { w = 800, h = 600 }, px = function(v) return v end, requestRebuild = function() end, appdock = {} }), "legacy DM cache pane crashed")
 local dual_store = dchat._test.cloneStore({ endpoint = "https://appdock-bd7bcrzm.manus.space/" })
 assert(dual_store.endpoint == "https://appdock-bd7bcrzm.manus.space", "public endpoint was not normalized")
-assert(dual_store.dm_endpoint == "https://dchatdm-qkwwnvdq.manus.space", "DM endpoint was not initialized")
+assert(dual_store.dm_endpoint == "https://qndwbriqomqqaqhkasbh.supabase.co/functions/v1/quick-endpoint", "DM endpoint was not initialized")
 local dedupe_store = { recipients = {} }
 dchat._test.replaceRecipients(dedupe_store, {
     { deviceId = "dch_duplicate", displayName = "Same account" },
@@ -314,6 +335,6 @@ for _, dimen in ipairs({ { w = 210, h = 126 }, { w = 800, h = 600 } }) do
 assert(type(pane) == "table", "pane did not build")
 end
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dchat.lua | 1.8.6 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
+assert(catalog:find("dchat.lua | 2.1.0 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
 os.execute("rm -rf " .. string.format("%q", test_data_dir))
 print("dchat-pane-smoke-ok")
