@@ -46,6 +46,21 @@ local test_lfs = {
 install("datastorage", { getDataDir = function() return test_data_dir end })
 install("libs/libkoreader-lfs", test_lfs)
 local Widget = class()
+function Widget:getTextHeight()
+    local text = tostring(self.text or "")
+    local font_size = self.face and self.face.size or 10
+    local line_height = math.max(1, math.ceil(font_size * 1.3))
+    local width = self.width or self.max_width or 400
+    local chars_per_line = math.max(1, math.floor(width / math.max(1, font_size * .52)))
+    local lines = 0
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        lines = lines + math.max(1, math.ceil(#line / chars_per_line))
+    end
+    return math.max(1, lines * line_height)
+end
+function Widget:getSize()
+    return { w = self.width or self.max_width or math.max(1, #(self.text or "") * 5), h = self.height or self:getTextHeight() }
+end
 local Input = class()
 local image_widget_files = {}
 local image_widget_cache_modes = {}
@@ -98,7 +113,7 @@ install("socket.url", { parse = function(value) return { scheme = "https", host 
 _G.unpack = table.unpack or unpack
 _G.G_reader_settings = { readSetting = function() return {} end, saveSetting = function() end }
 local dchat = assert(loadfile("dchat.lua"))()
-assert(dchat.id == "dchat" and dchat.version == "2.1.2", "DChat metadata must expose the updated version")
+assert(dchat.id == "dchat" and dchat.version == "2.1.3", "DChat metadata must expose the updated version")
 local background_instance = { dchat = { store = dchat._test.cloneStore({ last_background_check = 100 }) } }
 local ran_early = dchat._test.backgroundCheck(background_instance, { now = 159 })
 assert(type(ran_early) == "table" and ran_early.skipped == "interval", "DChat background checks must wait a full minute")
@@ -176,12 +191,46 @@ local bubble_text = find_widget(initial_bubble, function(widget) return widget.t
 assert(bubble_text and bubble_text.bgcolor == initial_bubble.bubble_background
     and bubble_text.bgcolor == initial_bubble[1].background,
     "DM bubble text background must exactly match the bubble color, not the TextBoxWidget white default")
+local long_body = string.rep("A long private message must remain fully visible inside its bubble.", 22)
+local long_message = dchat._test.cloneDirectMessage({ id = "11", authorName = "Me", body = long_body,
+    createdAt = "now", senderDeviceId = "dch_selfreader123", readAt = "" })
+dm_instance.dchat.store.dm_messages = { long_message }
+dm_pane = dchat.buildPane(dm_instance, dm_context)
+local long_bubble = find_widget(dm_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
+assert(long_bubble and long_bubble.body_widget and long_bubble.body_widget.text == long_body,
+    "A long DM must retain the complete unabridged message text in its bubble")
+assert(long_bubble.height > 180 and long_bubble.body_widget:getTextHeight() > 180,
+    "A long DM bubble must grow beyond the old 180-pixel clipping limit")
+assert(long_bubble.status_widget and long_bubble.status_widget.text == "✓"
+    and not long_bubble.body_widget.text:find("✓", 1, true),
+    "The sent checkmark must render as a separate visible widget, not as a clipped text line")
+long_message.readAt = "2026-10-18T00:00:00Z"
+dm_pane = dchat.buildPane(dm_instance, dm_context)
+long_bubble = find_widget(dm_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
+assert(long_bubble.status_widget and long_bubble.status_widget.text == "✓✓",
+    "A read DM must show two separate read checkmarks")
+local reply_text = "↪ Test: quoted first line quoted second line " .. dchat._test.replySeparator .. " My answer is visually separate."
+dm_instance.dchat.store.dm_messages = { dchat._test.cloneDirectMessage({ id = "12", authorName = "Me",
+    body = reply_text, createdAt = "now", senderDeviceId = "dch_selfreader123", readAt = "" }) }
+dm_pane = dchat.buildPane(dm_instance, dm_context)
+local reply_bubble = find_widget(dm_pane, function(widget) return type(widget.onTapDChatBubble) == "function" end)
+assert(reply_bubble and reply_bubble.quote_card and reply_bubble.body_widget
+    and reply_bubble.body_widget.text == "My answer is visually separate.",
+    "A reply bubble must split its quote from the new response")
+local quoted_text_widget = find_widget(reply_bubble.quote_card, function(widget) return widget.text == "↪ Test: quoted first line quoted second line" end)
+assert(quoted_text_widget and quoted_text_widget.bgcolor == reply_bubble.quote_card.background
+    and reply_bubble.quote_card.background ~= reply_bubble.bubble_background,
+    "The quoted text must appear on a visibly distinct inset surface")
+dm_instance.dchat.store.dm_messages = { dchat._test.cloneDirectMessage({ id = "10", authorName = "Test",
+    body = "Reply target", createdAt = "now", senderDeviceId = "dch_testrecipient123", readAt = "" }) }
+dm_instance.dchat.selected_dm_id = "10"
 initial_bubble:onTapDChatBubble()
 local detail_pane = dchat.buildPane(dm_instance, dm_context)
 local reply_button = find_widget(detail_pane, function(widget) return widget.title == "Reply" and type(widget.onTapDChatAction) == "function" end)
 assert(reply_button, "tapping a DM must offer a Reply action in the full-message view")
 reply_button:onTapDChatAction()
-assert(shown_ui_widget and shown_ui_widget.title == "Private message" and shown_ui_widget.input:find("↪ Test:", 1, true), "Reply action did not open a quoted message draft")
+assert(shown_ui_widget and shown_ui_widget.title == "Private message" and shown_ui_widget.input:find("↪ Test:", 1, true)
+    and shown_ui_widget.input:find(dchat._test.replySeparator, 1, true), "Reply action did not open a quoted message draft with its preserved boundary")
 dm_instance.dchat.view = "dm_conversation"
 dm_pane = dchat.buildPane(dm_instance, dm_context)
 local refresh_button = find_widget(dm_pane, function(widget) return widget.dchat_role == "conversation_refresh" and type(widget.onTapDChatAction) == "function" end)
@@ -391,6 +440,6 @@ assert(helper_calls >= 6, "All DChat multiline views must use the host's transpa
 package.loaded["appdock_text"], package.preload["appdock_text"] = nil, nil
 
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dchat.lua | 2.1.2 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
+assert(catalog:find("dchat.lua | 2.1.3 | dchat", 1, true), "DChat must be published in the DApp catalog at the updated version")
 os.execute("rm -rf " .. string.format("%q", test_data_dir))
 print("dchat-pane-smoke-ok")
