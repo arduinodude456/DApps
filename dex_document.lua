@@ -35,6 +35,7 @@ local InputDialog = require("ui/widget/inputdialog")
 local LineWidget = require("ui/widget/linewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
+local ok_text, AppDockText = pcall(require, "appdock_text")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -718,6 +719,16 @@ local function buildReaderScreen(instance, context, width, height)
         dialog = nil,
         editable = false,
     }
+    -- ScrollTextWidget does not forward bgcolor to its internal TextBoxWidget.
+    -- Configure that child, retaining the native scroll and selection contract.
+    if body.text_widget then
+        body.text_widget.bgcolor = Blitbuffer.COLOR_WHITE
+        if ok_text and type(AppDockText) == "table" and type(AppDockText.makeTransparent) == "function" then
+            AppDockText.makeTransparent(body.text_widget)
+        elseif type(body.text_widget.update) == "function" then
+            body.text_widget:update()
+        end
+    end
 
     return VerticalGroup:new{
         toolbar,
@@ -794,7 +805,7 @@ end
 
 return {
     id = "dex_document",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Dex Document",
     subtitle = "Read-only .docx viewer",
     symbol = "D",

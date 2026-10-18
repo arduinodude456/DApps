@@ -93,7 +93,7 @@ This is **local** Markdown with a [safe label](https://example.invalid) and ![di
 markdown:close()
 
 local app = dofile(os.getenv("DREADER_SOURCE") or "/home/ubuntu/dapps-store-repo/dreader.lua")
-assert(app.id == "dreader" and app.version == "2.2.0" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
+assert(app.id == "dreader" and app.version == "2.2.1" and type(app.openFile) == "function", "DReader must satisfy the Store DApp contract")
 local context = { dimen = { w = 600, h = 760 }, requestRebuild = function() end, requestRefresh = function() end }
 local html_instance = {}
 assert(app.openFile(html_instance, html_path), "DReader must open supported HTML")

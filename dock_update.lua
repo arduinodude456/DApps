@@ -23,6 +23,12 @@ local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
+-- New AppDock hosts composite glyphs transparently; older hosts use the
+-- explicit surface bgcolor below instead of KOReader's implicit white buffer.
+local ok_text, AppDockText = pcall(require, "appdock_text")
+if ok_text and type(AppDockText) == "table" and type(AppDockText.TextBoxWidget) == "table" then
+    TextBoxWidget = AppDockText.TextBoxWidget
+end
 local TextViewer = require("ui/widget/textviewer")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
@@ -47,7 +53,7 @@ local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 512 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
-local MAX_RELEASE_FILES = 64
+local MAX_RELEASE_FILES = 65
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
@@ -57,7 +63,7 @@ local REQUIRED_FILES = {
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
-    "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
+    "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_stylus.lua",
     "appdock_suggestions.lua", "appdock_tbs_account.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
@@ -85,7 +91,9 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_device_controls.lua"] = true,
     ["appdock_audio.lua"] = true, ["appdock_bwr.lua"] = true,
     ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
-    ["appdock_dialogs.lua"] = true, ["appdock_draw.lua"] = true,
+    ["appdock_dialogs.lua"] = true,
+    ["appdock_text.lua"] = true,
+    ["appdock_draw.lua"] = true,
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
     ["appdock_suggestions.lua"] = true, ["appdock_tbs_account.lua"] = true,
 }
@@ -234,12 +242,18 @@ local function releasePathKind(path)
     return nil
 end
 
-local function releaseEntries()
+local function releaseEntries(tag)
     local entries = {}
     local included = {}
+    -- Older releases do not contain the additive text module. Never request
+    -- a nonexistent file while updating to an older published release.
+    local text_version = compareVersions(tag, "8.2.13")
+    local include_text = text_version and text_version >= 0
     for path in pairs(ALLOWED_SOURCE_FILES) do
-        entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "source" }
-        included[path] = true
+        if path ~= "appdock_text.lua" or include_text then
+            entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "source" }
+            included[path] = true
+        end
     end
     for path in pairs(ALLOWED_ASSET_FILES) do
         entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "asset" }
@@ -250,7 +264,7 @@ local function releaseEntries()
         included[path] = true
     end
     for _, path in ipairs(REQUIRED_FILES) do
-        if not included[path] then
+        if not included[path] and (path ~= "appdock_text.lua" or include_text) then
             return nil, _("The fixed AppDock file list is missing a required module: ") .. path
         end
     end
@@ -507,7 +521,7 @@ end
 local function prepareRelease(state)
     if not state.release then return nil, _("Check for an AppDock release first.") end
     if state.files then return state.files end
-    local entries, tree_err = releaseEntries()
+    local entries, tree_err = releaseEntries(state.release.tag)
     if not entries then return nil, tree_err end
     state.files = entries
     return entries
@@ -602,7 +616,7 @@ local function buildPane(instance, context)
         background(width, height),
         TextWidget:new{ text = _("DockUpdate"), face = Font:getFace("cfont", px(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = _("Installed: ") .. tostring(current_version) .. "    " .. _("Latest: ") .. latest, face = Font:getFace("smallinfofont", px(10)), fgcolor = Blitbuffer.COLOR_DARK_GRAY, max_width = width - 2 * margin, overlap_offset = { margin, margin + title_h } },
-        TextBoxWidget:new{ text = status .. "\n\n" .. notes, face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = notes_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, notes_y } },
+        TextBoxWidget:new{ bgcolor = Blitbuffer.COLOR_WHITE, text = status .. "\n\n" .. notes, face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = notes_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, notes_y } },
         Action:new{ title = _("Check updates"), subtitle = _("GitHub release"), width = third, height = button_h, callback = function() checkForRelease(instance, context) end, overlap_offset = { margin, footer_y } },
         Action:new{ title = _("Release Notes"), subtitle = release and release.tag or _("Check first"), width = third, height = button_h, callback = function() showNotes(instance, context) end, overlap_offset = { margin + third + gap, footer_y } },
         Action:new{ title = install_title, subtitle = install_subtitle, width = third, height = button_h, background = relation == 1 and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY, callback = function() confirmInstall(instance, context) end, overlap_offset = { margin + 2 * (third + gap), footer_y } },
@@ -612,7 +626,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.4",
+    version = "1.4.5",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

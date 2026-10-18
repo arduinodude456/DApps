@@ -28,6 +28,12 @@ if not ok_appdock_keyboard or type(AppDockKeyboard) ~= "table" or type(AppDockKe
 end
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
+-- New AppDock hosts composite glyphs transparently; older hosts use the
+-- explicit surface bgcolor below instead of KOReader's implicit white buffer.
+local ok_text, AppDockText = pcall(require, "appdock_text")
+if ok_text and type(AppDockText) == "table" and type(AppDockText.TextBoxWidget) == "table" then
+    TextBoxWidget = AppDockText.TextBoxWidget
+end
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -1069,6 +1075,7 @@ function ActionButton:init()
     local content
     if self.body then
         content = TextBoxWidget:new{
+            bgcolor = background,
             text = self.body,
             face = Font:getFace("smallinfofont", math.max(px(8), math.floor(self.height * .18))),
             width = math.max(1, self.width - px(12)),
@@ -1161,9 +1168,8 @@ function DMBubble:init()
         line_height = 0.30,
         alignment = "left",
         fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
-        -- TextBoxWidget defaults bgcolor to white and renders an opaque buffer.
-        -- Match the parent bubble color so the text area blends into it on both
-        -- monochrome and RGB screens (there is no transparent TextBoxWidget BB).
+        -- Transparent glyph compositing on new hosts; match the bubble on
+        -- older hosts whose native TextBoxWidget still uses an opaque buffer.
         bgcolor = self.bubble_background or Blitbuffer.COLOR_WHITE,
         overlap_offset = { 0, self.image_widget and (self.image_height + px(4)) or 0 },
     }
@@ -1394,7 +1400,7 @@ local function buildSidebar(state, context, width, height)
     }
 
     if #(state.store.recipients or {}) == 0 then
-        elements[#elements + 1] = TextBoxWidget:new{ text = _("No contacts yet. Find a reader to start a private chat."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(row_height * .22))), width = width - 2 * margin, height = math.min(px(64), math.max(px(28), list_end - list_y)), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, list_y } }
+        elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = _("No contacts yet. Find a reader to start a private chat."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(row_height * .22))), width = width - 2 * margin, height = math.min(px(64), math.max(px(28), list_end - list_y)), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, list_y } }
     else
         local y = list_y
         for index = first, last do
@@ -1465,7 +1471,7 @@ local function buildPublicPanel(state, context, width, height, compact)
     }
 
     if #messages == 0 then
-        elements[#elements + 1] = TextBoxWidget:new{ text = _("No public messages cached. Refresh to load the lounge."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
+        elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = _("No public messages cached. Refresh to load the lounge."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
     else
         local y = message_end - used
         for _, item in ipairs(visible) do
@@ -1537,7 +1543,7 @@ local function buildConversationPanel(state, context, width, height, compact)
         end, overlap_offset = { width - margin - action_width, margin } }
 
         if #messages == 0 then
-            elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet. Write a message below to start this conversation."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
+            elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = _("No private messages yet. Write a message below to start this conversation."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
         else
             local y = message_end - used
             for _, item in ipairs(visible) do
@@ -1746,7 +1752,7 @@ local function settingsPane(instance, context)
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
         FrameContainer:new{ width = width, height = px(54), padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, px(54)) },
         TextWidget:new{ text = _("DChat settings"), face = Font:getFace("cfont", px(18)), fgcolor = palette.on_secondary, bold = true, overlap_offset = { margin, px(8) } },
-        TextBoxWidget:new{ text = _("Private messages are server-stored and not end-to-end encrypted. Do not share sensitive data."), face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = px(30), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, px(57) } },
+        TextBoxWidget:new{ bgcolor = palette.background, text = _("Private messages are server-stored and not end-to-end encrypted. Do not share sensitive data."), face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = px(30), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, px(57) } },
         TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_surface, max_width = width - 2 * margin, overlap_offset = { margin, px(91) } },
         TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, px(108) } },
         TextWidget:new{ text = dm_endpoint_status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, px(123) } },
@@ -1797,7 +1803,7 @@ local function dmMessagePane(instance, context)
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
     }
     if image then elements[#elements + 1] = image end
-    elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, body_y } }
+    elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, body_y } }
     elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("‹ Conversation"), callback = function() clearAttachmentFiles(state); state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
     elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("Reply"), primary = true, callback = function()
         local quote = "↪ " .. message.authorName .. ": " .. dmPreview(message.body, 140)
@@ -1823,7 +1829,7 @@ local function messagePane(instance, context)
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
         TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_surface, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Public message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
-        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = math.max(px(1), height - 2 * margin - px(48) - 2 * button_height - 2 * gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
+        TextBoxWidget:new{ bgcolor = palette.background, text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = math.max(px(1), height - 2 * margin - px(48) - 2 * button_height - 2 * gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Messages"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Report"), primary = true, callback = function() promptReport(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
@@ -1832,7 +1838,7 @@ end
 
 return {
     id = "dchat",
-    version = "2.1.1",
+    version = "2.1.2",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
