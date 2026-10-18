@@ -19,6 +19,12 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
+-- New AppDock hosts composite glyphs transparently; older hosts use the
+-- explicit surface bgcolor below instead of KOReader's implicit white buffer.
+local ok_text, AppDockText = pcall(require, "appdock_text")
+if ok_text and type(AppDockText) == "table" and type(AppDockText.TextBoxWidget) == "table" then
+    TextBoxWidget = AppDockText.TextBoxWidget
+end
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -404,7 +410,7 @@ local function readerPane(instance, context)
     if state.article_layout_key ~= key then state.article_pages, state.article_page, state.article_layout_key = paginate(text, width - 2 * margin, content_h), 1, key end
     local pages = state.article_pages or { "" }
     state.article_page = clamp(state.article_page, 1, #pages)
-    local elements = { background(width, height), TextBoxWidget:new{ text = pages[state.article_page], face = normalFace(width), width = width - 2 * margin, height = content_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, content_y } } }
+    local elements = { background(width, height), TextBoxWidget:new{ bgcolor = Blitbuffer.COLOR_WHITE, text = pages[state.article_page], face = normalFace(width), width = width - 2 * margin, height = content_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, content_y } } }
     local third = math.floor((width - 2 * margin - 2 * gap) / 3)
     elements[#elements + 1] = Action:new{ title = _("‹ Articles"), width = third, height = toolbar_h, callback = function() state.view = "articles"; refresh(context) end, overlap_offset = { margin, margin } }
     elements[#elements + 1] = Action:new{ title = entry.title:sub(1, 16), width = third, height = toolbar_h, background = Blitbuffer.COLOR_GRAY_8, callback = function() end, overlap_offset = { margin + third + gap, margin } }
@@ -423,7 +429,7 @@ end
 
 return {
     id = "rss_reader",
-    version = "1.0.2",
+    version = "1.0.3",
     title = "RSS Reader",
     subtitle = "Local RSS and Atom feeds",
     symbol = "R",

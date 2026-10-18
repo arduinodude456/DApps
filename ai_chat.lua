@@ -21,6 +21,12 @@ local InputDialog = require("ui/widget/inputdialog")
 local ButtonDialog = require("ui/widget/buttondialog")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
+-- New AppDock hosts composite glyphs transparently; older hosts use the
+-- explicit surface bgcolor below instead of KOReader's implicit white buffer.
+local ok_text, AppDockText = pcall(require, "appdock_text")
+if ok_text and type(AppDockText) == "table" and type(AppDockText.TextBoxWidget) == "table" then
+    TextBoxWidget = AppDockText.TextBoxWidget
+end
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -1017,7 +1023,7 @@ local function buildPane(instance, context)
     -- Reserve a status strip above the two button rows. Without this explicit
     -- space the progress bar was painted underneath the model/settings row.
     local chat_h = math.max(px(120), upper_buttons_y - chat_y - px(50))
-    content[#content + 1] = TextBoxWidget:new{ text = transcript, face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = chat_h, line_height = 0.3, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, chat_y } }
+    content[#content + 1] = TextBoxWidget:new{ bgcolor = Blitbuffer.COLOR_WHITE, text = transcript, face = Font:getFace("smallinfofont", px(10)), width = width - 2 * margin, height = chat_h, line_height = 0.3, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, chat_y } }
     if state.download then
         local progress = ModelProgress:new{ width = width - 2 * margin, height = px(10), progress = state.download.progress or 0 }
         progress.overlap_offset = { margin, upper_buttons_y - px(18) }
@@ -1049,6 +1055,6 @@ local function buildPane(instance, context)
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(content) }
 end
 
-return { id = "ai_chat", version = "1.5.3", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
+return { id = "ai_chat", version = "1.5.4", title = "AI Chat Agent", subtitle = "Groq and direct local SmolLM", symbol = "AI", logo = "dchat", buildPane = buildPane,
     _test = { modelCatalog = MODEL_CATALOG, runtimeFiles = RUNTIME_FILES, runtimeVersion = RUNTIME_VERSION, runtimeIsInstalled = runtimeIsInstalled, runtimeFileIsValid = runtimeFileIsValid, buildLocalLauncher = buildLocalLauncher, startModelDownload = startModelDownload, pumpModelDownload = pumpModelDownload, httpJson = httpJson, localPrompt = localPrompt },
 }

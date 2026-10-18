@@ -8,16 +8,16 @@ markup.lua | 1.0.0 | notes
 draw.lua | 1.2.2 | notes
 calc.lua | 1.0.1 | calculator
 video_player.lua | 1.0.3 | gallery
-dreader.lua | 2.2.0 | document
+dreader.lua | 2.2.1 | document
 calendar.lua | 1.0.2 | calendar
-rss_reader.lua | 1.0.2 | rss
-dock_update.lua | 1.4.4 | dockupdate
-ai_chat.lua | 1.5.3 | dchat
+rss_reader.lua | 1.0.3 | rss
+dock_update.lua | 1.4.5 | dockupdate
+ai_chat.lua | 1.5.4 | dchat
 appdock_guide.lua | 1.0.0 | help
 dpdf.lua | 1.0.0 | document
 widget_generator.lua | 1.0.0 | settings
 2048.lua | 1.0.4 | other
-dex_document.lua | 1.0.0 | document
+dex_document.lua | 1.0.1 | document
 geometry_dash.lua | 1.1.1 | other
 snake.lua | 1.0.1 | other
 status_message.lua | 1.0.0 | help
@@ -28,7 +28,7 @@ reading_stats_widget.lua | 1.0.0 | reading | widget
 analog_clock_widget.lua | 1.0.0 | analog_clock | widget
 calendar_widget.lua | 1.0.0 | calendar | widget
 random_book_covers_widget.lua | 1.0.0 | reading | widget
-dchat.lua | 2.1.1 | dchat
+dchat.lua | 2.1.3 | dchat
 dbasic.lua | 1.0.0 | code
 focus_timer.lua | 1.0.0 | calendar
 quick_notes.lua | 1.0.0 | notes

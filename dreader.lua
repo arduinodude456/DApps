@@ -20,6 +20,12 @@ local InputDialog = require("ui/widget/inputdialog")
 local ImageWidget = require("ui/widget/imagewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
+-- New AppDock hosts composite glyphs transparently; older hosts use the
+-- explicit surface bgcolor below instead of KOReader's implicit white buffer.
+local ok_text, AppDockText = pcall(require, "appdock_text")
+if ok_text and type(AppDockText) == "table" and type(AppDockText.TextBoxWidget) == "table" then
+    TextBoxWidget = AppDockText.TextBoxWidget
+end
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -753,7 +759,7 @@ local function readerPane(instance, context)
     for image_index, page_image in ipairs(page_images) do
         elements[#elements + 1] = ImageWidget:new{ file = page_image, width = width - 2 * px(state.store.settings.padding), height = image_height, scale_factor = 0, overlap_offset = { px(state.store.settings.padding), content_y + (image_index - 1) * (image_height + image_gap) } }
     end
-    elements[#elements + 1] =         TextBoxWidget:new{ text = page_text, face = safeFace(state.book.style and state.book.style.family, px(state.store.settings.font)), width = width - 2 * px(state.store.settings.padding), height = text_h, line_height = 0.32, alignment = "left", fgcolor = cssColor(state.book.style and state.book.style.color), overlap_offset = { px(state.store.settings.padding), text_y } }
+    elements[#elements + 1] =         TextBoxWidget:new{ bgcolor = Blitbuffer.COLOR_WHITE, text = page_text, face = safeFace(state.book.style and state.book.style.family, px(state.store.settings.font)), width = width - 2 * px(state.store.settings.padding), height = text_h, line_height = 0.32, alignment = "left", fgcolor = cssColor(state.book.style and state.book.style.color), overlap_offset = { px(state.store.settings.padding), text_y } }
     if state.controls then
         local button_w = math.floor((width - 2 * margin - 5 * px(4)) / 6)
             local labels = { { _("Library"), "library" }, { _("Pages"), "pages" }, { _("Mark"), "bookmark" }, { _("A−"), "font_minus" }, { _("A+"), "font_plus" }, { _("Settings"), "settings" } }
@@ -819,7 +825,7 @@ end
 
 return {
     id = "dreader",
-    version = "2.2.0",
+    version = "2.2.1",
     title = "DReader",
     subtitle = "A calm EPUB, HTML, and Markdown reader",
     symbol = "R",

@@ -142,7 +142,7 @@ package.preload["ssl.https"] = function()
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
             local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.svg)$") or request.url:match("/([^/]+%.db)$") or request.url:match("/([^/]+%.adf)$")
-            local relative = request.url:match("/v8%.2%.1/appdock%.koplugin/(.+)$")
+            local relative = request.url:match("/v[%d.]+/appdock%.koplugin/(.+)$")
             local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
             request.sink(source)
@@ -160,14 +160,16 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.4" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.5" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher ordering module is required for AppDock startup")
 assert(required_source_block:find('"appdock_recovery.lua"', 1, true), "Boot recovery must survive every DockUpdate install")
-assert(dock_update_source:find("if not included[path] then", 1, true), "The updater must reject a release when a required module is not allowlisted")
+assert(required_source_block:find('"appdock_text.lua"', 1, true), "Transparent text support must survive every DockUpdate install")
+assert(dock_update_source:find('["appdock_text.lua"] = true', 1, true), "DockUpdate must allow the transparent text module")
+assert(dock_update_source:find("if not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
-assert(dock_update_source:find("MAX_RELEASE_FILES = 64", 1, true), "DockUpdate must accept the current bounded AppDock package")
+assert(dock_update_source:find("MAX_RELEASE_FILES = 65", 1, true), "DockUpdate must accept the current bounded AppDock package")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
 assert(dock_update_source:find('["appdock_tbs_account.lua"] = true', 1, true), "DockUpdate must allow the TBS account client")
 for _, module in ipairs({ "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua" }) do
@@ -236,11 +238,30 @@ assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpda
 assert(#log.requests == 1 + #required + #optional_sources + #png_assets,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.4 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.4")
+assert(catalog:find("dock_update.lua | 1.4.5 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.5")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
+    assert(not url:find("appdock_text.lua", 1, true), "Older AppDock releases must not require a nonexistent text module")
 end
 
+-- Starting with 8.2.13, the same bounded updater must include the new helper.
+feed = feed:gsub("8%.2%.1", "8.2.13")
+packaged_sources["_meta.lua"] = "return { version = '8.2.13' }\n"
+packaged_sources["appdock_text.lua"] = "-- transparent text helper\nreturn {}\n"
+log.requests = {}
+local text_instance = {}
+app.buildPane(text_instance, context)[5].callback()
+local text_pane = app.buildPane(text_instance, context)
+text_pane[7].callback()
+assert(log.shown and log.shown.ok_callback, "New AppDock releases must still require installation confirmation: " .. tostring(log.shown and log.shown.text))
+log.shown.ok_callback()
+local installed_text = assert(io.open(active .. "/appdock_text.lua", "rb")):read("*a")
+assert(installed_text == packaged_sources["appdock_text.lua"], "DockUpdate must atomically install the transparent text helper")
+local text_requests = 0
+for _, url in ipairs(log.requests) do
+    if url:find("appdock_text.lua", 1, true) then text_requests = text_requests + 1 end
+end
+assert(text_requests == 1, "The new helper must be fetched exactly once from the fixed allowlist")
 os.execute("rm -rf " .. root)
 print("DockUpdate test: OK")

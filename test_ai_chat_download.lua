@@ -119,7 +119,7 @@ install("socket.url", {
 })
 
 local app = assert(loadfile("ai_chat.lua"))()
-assert(app.id == "ai_chat" and app.version == "1.5.3", "AI Chat must publish version 1.5.3")
+assert(app.id == "ai_chat" and app.version == "1.5.4", "AI Chat must publish version 1.5.4")
 
 -- Local endpoints use plain LuaSocket HTTP, and connection errors must retain
 -- the actual reason instead of collapsing into a generic message.

@@ -28,6 +28,12 @@ if not ok_appdock_keyboard or type(AppDockKeyboard) ~= "table" or type(AppDockKe
 end
 local OverlapGroup = require("ui/widget/overlapgroup")
 local TextBoxWidget = require("ui/widget/textboxwidget")
+-- New AppDock hosts composite glyphs transparently; older hosts use the
+-- explicit surface bgcolor below instead of KOReader's implicit white buffer.
+local ok_text, AppDockText = pcall(require, "appdock_text")
+if ok_text and type(AppDockText) == "table" and type(AppDockText.TextBoxWidget) == "table" then
+    TextBoxWidget = AppDockText.TextBoxWidget
+end
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -46,6 +52,9 @@ local SUPABASE_DM_PUBLISHABLE_KEY = "sb_publishable_UAIcZameyUZHtEB-NY1ffQ_TfF67
 local MAX_ENDPOINT_BYTES = 240
 local MAX_NAME_BYTES = 80
 local MAX_TEXT_BYTES = 1500
+-- Invisible separator survives the existing whitespace sanitizer and lets
+-- replies remain plain text while preserving their quote boundary on render.
+local REPLY_SEPARATOR = "\226\129\163" -- U+2063 INVISIBLE SEPARATOR
 local MAX_ATTACHMENT_BYTES = 512 * 1024
 local MAX_ATTACHMENT_BASE64_BYTES = 4 * math.ceil(MAX_ATTACHMENT_BYTES / 3)
 local ATTACHMENT_CACHE_DIR = DataStorage:getDataDir() .. "/appdock_dchat_images"
@@ -1069,6 +1078,7 @@ function ActionButton:init()
     local content
     if self.body then
         content = TextBoxWidget:new{
+            bgcolor = background,
             text = self.body,
             face = Font:getFace("smallinfofont", math.max(px(8), math.floor(self.height * .18))),
             width = math.max(1, self.width - px(12)),
@@ -1135,10 +1145,12 @@ local DMBubble = InputContainer:extend{
     width = nil,
     height = nil,
     body = "",
+    body_widget = nil,
+    quote_card = nil,
+    status_widget = nil,
     bubble_background = nil,
     text_foreground = nil,
     font_size = nil,
-    text_height = nil,
     image_widget = nil,
     image_height = 0,
     callback = nil,
@@ -1153,20 +1165,25 @@ function DMBubble:init()
         self.image_widget.overlap_offset = { 0, 0 }
         bubble_content[#bubble_content + 1] = self.image_widget
     end
-    bubble_content[#bubble_content + 1] = TextBoxWidget:new{
-        text = self.body,
-        face = Font:getFace("smallinfofont", self.font_size or math.max(px(8), math.floor(self.height * .16))),
-        width = self.width - 2 * padding,
-        height = math.max(1, self.text_height or (self.height - 2 * padding)),
-        line_height = 0.30,
-        alignment = "left",
-        fgcolor = self.text_foreground or Blitbuffer.COLOR_BLACK,
-        -- TextBoxWidget defaults bgcolor to white and renders an opaque buffer.
-        -- Match the parent bubble color so the text area blends into it on both
-        -- monochrome and RGB screens (there is no transparent TextBoxWidget BB).
-        bgcolor = self.bubble_background or Blitbuffer.COLOR_WHITE,
-        overlap_offset = { 0, self.image_widget and (self.image_height + px(4)) or 0 },
-    }
+    local inner_width = self.width - 2 * padding
+    local content_y = self.image_widget and (self.image_height + px(4)) or 0
+    if self.quote_card then
+        self.quote_card.overlap_offset = { 0, content_y }
+        bubble_content[#bubble_content + 1] = self.quote_card
+        content_y = content_y + self.quote_card.height + px(4)
+    end
+    if self.body_widget then
+        self.body_widget.overlap_offset = { 0, content_y }
+        bubble_content[#bubble_content + 1] = self.body_widget
+    end
+    if self.status_widget then
+        local status_size = self.status_widget:getSize()
+        self.status_widget.overlap_offset = {
+            math.max(0, inner_width - status_size.w),
+            self.height - 2 * padding - status_size.h,
+        }
+        bubble_content[#bubble_content + 1] = self.status_widget
+    end
     self[1] = FrameContainer:new{
         width = self.width,
         height = self.height,
@@ -1280,29 +1297,74 @@ local function attachmentFilePath(state, message)
     return path
 end
 
-local function directBubbleText(message, own)
+local function directMessageBody(message)
     local body = message.body or ""
     if message.attachmentData ~= "" then
         local notice = _("Image attached")
         body = body ~= "" and body .. "\n" .. notice or notice
     end
+    return body
+end
+
+local function directBubbleText(message, own)
+    local body = directMessageBody(message)
     if own then body = body .. "\n" .. (message.readAt ~= "" and "✓✓" or "✓") end
     return body
 end
 
-local function estimatedBubbleHeight(body, bubble_width, available_height, px)
-    local padding = px(6)
-    local font_size = math.max(px(9), px(10))
-    local text_width = math.max(px(32), bubble_width - 2 * padding)
-    local chars_per_line = math.max(10, math.floor(text_width / math.max(1, font_size * .52)))
-    local lines = 0
-    for line in (tostring(body or "") .. "\n"):gmatch("(.-)\n") do
-        lines = lines + math.max(1, math.ceil(#line / chars_per_line))
+-- Replies stay plain text on the wire; the blank line introduced by the reply
+-- action lets us render the quoted part as its own visual card.
+local function splitReplyText(body)
+    body = tostring(body or "")
+    local separator = body:find(REPLY_SEPARATOR, 1, true)
+    if not separator then return nil, body end
+    local quote = trim(body:sub(1, separator - 1))
+    if not quote:match("^↪ ") then return nil, body end
+    return quote, trim(body:sub(separator + #REPLY_SEPARATOR))
+end
+
+local function makeBubbleText(text, width, font_size, foreground, background)
+    if text == nil or text == "" then return nil end
+    return TextBoxWidget:new{
+        text = text,
+        face = Font:getFace("smallinfofont", font_size),
+        width = math.max(1, width),
+        line_height = 0.30,
+        alignment = "left",
+        fgcolor = foreground,
+        -- Transparent glyphs on new hosts; match the exact surface on old ones.
+        bgcolor = background,
+    }
+end
+
+local function measuredTextHeight(widget, fallback)
+    if widget then
+        local ok, height = pcall(function() return widget:getTextHeight() end)
+        if ok and tonumber(height) and height > 0 then return height end
+        ok, height = pcall(function() return widget:getSize().h end)
+        if ok and tonumber(height) and height > 0 then return height end
     end
-    local line_height = math.max(px(13), math.floor(font_size * 1.30))
-    local limit = math.max(1, math.min(px(180), math.floor(available_height)))
-    local minimum = math.min(px(50), limit)
-    return clamp(padding * 2 + lines * line_height + px(4), minimum, limit), font_size
+    return math.max(1, tonumber(fallback) or 1)
+end
+
+local function releaseTextWidget(widget)
+    if widget and type(widget.free) == "function" then pcall(widget.free, widget) end
+end
+
+local function makeQuoteCard(quote_widget, quote_height, width, palette, px)
+    if not quote_widget then return nil, 0 end
+    local inset, border = px(4), math.max(1, px(1))
+    local card_height = quote_height + 2 * inset + 2 * border
+    return FrameContainer:new{
+        width = width,
+        height = card_height,
+        padding = inset,
+        bordersize = border,
+        bordercolor = palette.outline or palette.on_variant,
+        radius = px(3),
+        background = palette.background,
+        quote_widget,
+    }, card_height
 end
 
 -- Build a recent-message window by actual bubble heights. This keeps every
@@ -1326,21 +1388,47 @@ local function visibleRecentBubbles(items, offset, available_height, gap, make_b
 end
 
 local function makeDirectBubble(available_width, message, own, palette, px, callback, max_height, state)
-    local bubble_width = math.max(px(112), math.floor(available_width * .76))
-    local body = directBubbleText(message, own)
+    local bubble_width = math.max(px(112), math.floor(available_width * .84))
+    local body = directMessageBody(message)
+    local quoted_text, response_text = splitReplyText(body)
     local image_path = attachmentFilePath(state, message)
     local image_height = image_path and math.min(px(96), math.floor(max_height * .28)) or 0
     local image_widget = image_path and safeImageWidget{ file = image_path, width = bubble_width - px(12), height = image_height, scale_factor = 0, file_do_cache = false }
-    local text_height, font_size = estimatedBubbleHeight(body, bubble_width, math.max(1, max_height - image_height - (image_height > 0 and px(4) or 0)), px)
-    local bubble_height = math.min(max_height, text_height + image_height + (image_height > 0 and px(4) or 0))
+    local padding = px(6)
+    local inner_width = math.max(px(32), bubble_width - 2 * padding)
+    local foreground = own and palette.on_primary or palette.on_variant
+    local background = own and palette.primary or palette.surface_variant
+    local status_mark = own and (message.readAt ~= "" and "✓✓" or "✓") or nil
+    local status_widget = status_mark and TextWidget:new{ text = status_mark, face = Font:getFace("smallinfofont", px(10)), fgcolor = foreground } or nil
+    local status_size = status_widget and status_widget:getSize() or { w = px(18), h = px(12) }
+    local minimum_font_size, font_size = math.max(5, px(6)), px(10)
+    local quote_widget, body_widget, quote_card, quote_height, body_height, bubble_height
+    repeat
+        quote_widget = quoted_text and makeBubbleText(quoted_text, inner_width - 2 * px(4), math.max(minimum_font_size, math.floor(font_size * .9)), palette.on_surface or Blitbuffer.COLOR_BLACK, palette.background) or nil
+        body_widget = makeBubbleText(response_text, inner_width, font_size, foreground, background)
+        quote_height = measuredTextHeight(quote_widget, font_size * 1.3)
+        body_height = measuredTextHeight(body_widget, font_size * 1.3)
+        quote_card = makeQuoteCard(quote_widget, quote_height, inner_width, palette, px)
+        local content_height = image_height + (image_height > 0 and px(4) or 0)
+            + (quote_card and quote_card.height + px(4) or 0)
+            + (body_widget and body_height or 0)
+            + (status_widget and status_size.h + px(2) or 0)
+        bubble_height = math.max(px(50), content_height + 2 * padding)
+        if bubble_height <= max_height or font_size <= minimum_font_size then break end
+        releaseTextWidget(quote_widget)
+        releaseTextWidget(body_widget)
+        font_size = math.max(minimum_font_size, font_size - math.max(1, px(1)))
+    until false
     return DMBubble:new{
         width = bubble_width,
         height = bubble_height,
         body = body,
-        bubble_background = own and palette.primary or palette.surface_variant,
-        text_foreground = own and palette.on_primary or palette.on_variant,
+        body_widget = body_widget,
+        quote_card = quote_card,
+        status_widget = status_widget,
+        bubble_background = background,
+        text_foreground = foreground,
         font_size = font_size,
-        text_height = math.max(1, bubble_height - image_height - px(16)),
         image_widget = image_widget,
         image_height = image_height,
         callback = callback,
@@ -1350,11 +1438,22 @@ end
 local function makePublicBubble(available_width, message, palette, px, callback, max_height)
     local body = message.authorName .. "\n" .. message.body
     local bubble_width = math.max(px(112), math.floor(available_width * .84))
-    local bubble_height, font_size = estimatedBubbleHeight(body, bubble_width, max_height, px)
+    local padding = px(6)
+    local font_size, minimum_font_size = px(10), math.max(5, px(6))
+    local body_widget, body_height, bubble_height
+    repeat
+        body_widget = makeBubbleText(body, bubble_width - 2 * padding, font_size, palette.on_surface, palette.surface)
+        body_height = measuredTextHeight(body_widget, font_size * 1.3)
+        bubble_height = math.max(px(50), body_height + 2 * padding)
+        if bubble_height <= max_height or font_size <= minimum_font_size then break end
+        releaseTextWidget(body_widget)
+        font_size = math.max(minimum_font_size, font_size - math.max(1, px(1)))
+    until false
     return DMBubble:new{
         width = bubble_width,
         height = bubble_height,
         body = body,
+        body_widget = body_widget,
         bubble_background = palette.surface,
         text_foreground = palette.on_surface,
         font_size = font_size,
@@ -1394,7 +1493,7 @@ local function buildSidebar(state, context, width, height)
     }
 
     if #(state.store.recipients or {}) == 0 then
-        elements[#elements + 1] = TextBoxWidget:new{ text = _("No contacts yet. Find a reader to start a private chat."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(row_height * .22))), width = width - 2 * margin, height = math.min(px(64), math.max(px(28), list_end - list_y)), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, list_y } }
+        elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = _("No contacts yet. Find a reader to start a private chat."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(row_height * .22))), width = width - 2 * margin, height = math.min(px(64), math.max(px(28), list_end - list_y)), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, list_y } }
     else
         local y = list_y
         for index = first, last do
@@ -1465,7 +1564,7 @@ local function buildPublicPanel(state, context, width, height, compact)
     }
 
     if #messages == 0 then
-        elements[#elements + 1] = TextBoxWidget:new{ text = _("No public messages cached. Refresh to load the lounge."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
+        elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = _("No public messages cached. Refresh to load the lounge."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
     else
         local y = message_end - used
         for _, item in ipairs(visible) do
@@ -1537,7 +1636,7 @@ local function buildConversationPanel(state, context, width, height, compact)
         end, overlap_offset = { width - margin - action_width, margin } }
 
         if #messages == 0 then
-            elements[#elements + 1] = TextBoxWidget:new{ text = _("No private messages yet. Write a message below to start this conversation."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
+            elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = _("No private messages yet. Write a message below to start this conversation."), face = Font:getFace("smallinfofont", math.max(px(8), math.floor(height * .025))), width = width - 2 * margin, height = math.max(px(42), message_end - message_y), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, message_y } }
         else
             local y = message_end - used
             for _, item in ipairs(visible) do
@@ -1746,7 +1845,7 @@ local function settingsPane(instance, context)
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
         FrameContainer:new{ width = width, height = px(54), padding = 0, bordersize = 0, background = palette.secondary, emptySizedWidget(width, px(54)) },
         TextWidget:new{ text = _("DChat settings"), face = Font:getFace("cfont", px(18)), fgcolor = palette.on_secondary, bold = true, overlap_offset = { margin, px(8) } },
-        TextBoxWidget:new{ text = _("Private messages are server-stored and not end-to-end encrypted. Do not share sensitive data."), face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = px(30), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, px(57) } },
+        TextBoxWidget:new{ bgcolor = palette.background, text = _("Private messages are server-stored and not end-to-end encrypted. Do not share sensitive data."), face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = px(30), line_height = 0.30, alignment = "left", fgcolor = palette.on_variant, overlap_offset = { margin, px(57) } },
         TextWidget:new{ text = identity_status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_surface, max_width = width - 2 * margin, overlap_offset = { margin, px(91) } },
         TextWidget:new{ text = endpoint_status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, px(108) } },
         TextWidget:new{ text = dm_endpoint_status, face = Font:getFace("smallinfofont", px(8)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, px(123) } },
@@ -1797,11 +1896,11 @@ local function dmMessagePane(instance, context)
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Private message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
     }
     if image then elements[#elements + 1] = image end
-    elements[#elements + 1] = TextBoxWidget:new{ text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, body_y } }
+    elements[#elements + 1] = TextBoxWidget:new{ bgcolor = palette.background, text = full_body, face = Font:getFace("smallinfofont", px(13)), width = width - 2 * margin, height = math.max(px(24), height - body_y - 2 * margin - button_height - gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, body_y } }
     elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("‹ Conversation"), callback = function() clearAttachmentFiles(state); state.view = "dm_conversation"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } }
     elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("Reply"), primary = true, callback = function()
         local quote = "↪ " .. message.authorName .. ": " .. dmPreview(message.body, 140)
-        promptDirectMessage(state, context, quote .. "\n\n")
+        promptDirectMessage(state, context, quote .. "\n\n" .. REPLY_SEPARATOR .. "\n")
     end, overlap_offset = { margin + button_width + button_gap, height - margin - button_height } }
     elements[#elements + 1] = ActionButton:new{ width = button_width, height = button_height, title = _("DMs"), callback = function() clearAttachmentFiles(state); state.view = "dm"; refresh(context) end, overlap_offset = { margin + 2 * (button_width + button_gap), height - margin - button_height } }
     elements[#elements + 1] = TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } }
@@ -1823,7 +1922,7 @@ local function messagePane(instance, context)
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = palette.background, emptySizedWidget(width, height) },
         TextWidget:new{ text = message.authorName, face = Font:getFace("cfont", px(18)), fgcolor = palette.on_surface, bold = true, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
         TextWidget:new{ text = message.createdAt ~= "" and message.createdAt or _("Public message"), face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, margin + px(26) } },
-        TextBoxWidget:new{ text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = math.max(px(1), height - 2 * margin - px(48) - 2 * button_height - 2 * gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
+        TextBoxWidget:new{ bgcolor = palette.background, text = message.body, face = Font:getFace("smallinfofont", px(12)), width = width - 2 * margin, height = math.max(px(1), height - 2 * margin - px(48) - 2 * button_height - 2 * gap), line_height = 0.32, alignment = "left", fgcolor = palette.on_surface, overlap_offset = { margin, margin + px(47) } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("‹ Messages"), callback = function() state.view = "timeline"; refresh(context) end, overlap_offset = { margin, height - margin - button_height } },
         ActionButton:new{ width = math.floor((width - 2 * margin - gap) / 2), height = button_height, title = _("Report"), primary = true, callback = function() promptReport(state, context) end, overlap_offset = { margin + math.floor((width - 2 * margin - gap) / 2) + gap, height - margin - button_height } },
         TextWidget:new{ text = state.status, face = Font:getFace("smallinfofont", px(9)), fgcolor = palette.on_variant, max_width = width - 2 * margin, overlap_offset = { margin, height - margin - button_height - px(20) } },
@@ -1832,7 +1931,7 @@ end
 
 return {
     id = "dchat",
-    version = "2.1.1",
+    version = "2.1.3",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
@@ -1848,5 +1947,5 @@ return {
     end,
     backgroundTick = backgroundCheck,
     backgroundComplete = applyBackgroundResult,
-    _test = { showInputDialog = showInputDialog, validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId },
+    _test = { showInputDialog = showInputDialog, validEndpoint = validEndpoint, cloneStore = cloneStore, cloneMessage = cloneMessage, cloneRecipient = cloneRecipient, cloneDirectMessage = cloneDirectMessage, dmPreview = dmPreview, base64Encode = base64Encode, base64Decode = base64Decode, imageMimeForPath = imageMimeForPath, attachmentFilePath = attachmentFilePath, hasIdentity = hasIdentity, newIdentity = newIdentity, replaceMessages = replaceMessages, replaceRecipients = replaceRecipients, replaceDirectMessages = replaceDirectMessages, httpJson = httpJson, backgroundCheck = backgroundCheck, deferConversationRefresh = deferConversationRefresh, countNewMessages = countNewMessages, newestMessageId = newestMessageId, splitReplyText = splitReplyText, directBubbleText = directBubbleText, replySeparator = REPLY_SEPARATOR },
 }
