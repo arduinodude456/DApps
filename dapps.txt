@@ -42,3 +42,4 @@ designs/old-paper.appdock-design | 1.0.0 | palette | design
 designs/ozean.appdock-design | 1.0.0 | palette | design
 tetris.lua | 1.0.0 | other
 minecraft.lua | 4.7.3 | minecraft
+reading_time.lua | 1.0.0 | timer
