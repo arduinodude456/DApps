@@ -49,14 +49,17 @@ local required = {
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_tbs_account.lua",
+    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
     "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua",
     "appdock_suggestions.db", "features.adf",
 }
 local optional_sources = {
-    "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
+}
+local versioned_sources = {
+    "appdock_bluetooth.lua", "appdock_sleepscreen_weather.lua", "appdock_transfer.lua",
+    "appdock_text.lua", "appdock_youtube_shorts.lua",
 }
 local png_assets = {
     "assets/lockscreen/appdock_lockscreen_hero.png",
@@ -82,10 +85,11 @@ sources["appdock_suggestions.db"] = "# AppDock offline bilingual suggestion data
 local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
--- Match the actual AppDock 8.2.1 DApp-host module size so this exact release
--- proves acceptance under the bounded per-file size limit.
-packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 244212) .. "\n"
-assert(#packaged_sources["appdock_dapps.lua"] == 244215, "The AppDock 8.2.1 host fixture must match its published byte size")
+for _, name in ipairs(versioned_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
+-- Match the current AppDock 8.3.5 DApp-host module size to verify the bounded
+-- per-file limit still accepts the live release.
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 250627) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 250630, "The AppDock 8.3.5 host fixture must match its published byte size")
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-8.2.1' }\n"
 packaged_sources["_meta.lua"] = "return { version = '8.2.1' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
@@ -160,19 +164,26 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.5" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.6" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
+local required_count = 0
+for _ in required_source_block:gmatch('"[^\"]+"') do required_count = required_count + 1 end
+assert(required_count == 69, "DockUpdate must declare all 69 files from the current AppDock 8.3.5 plugin tree as required")
+for _, asset in ipairs(png_assets) do
+    assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current PNG asset must be required: " .. asset)
+end
 assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher ordering module is required for AppDock startup")
 assert(required_source_block:find('"appdock_recovery.lua"', 1, true), "Boot recovery must survive every DockUpdate install")
 assert(required_source_block:find('"appdock_text.lua"', 1, true), "Transparent text support must survive every DockUpdate install")
 assert(dock_update_source:find('["appdock_text.lua"] = true', 1, true), "DockUpdate must allow the transparent text module")
-assert(dock_update_source:find("if not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
+assert(dock_update_source:find("and not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
-assert(dock_update_source:find("MAX_RELEASE_FILES = 65", 1, true), "DockUpdate must accept the current bounded AppDock package")
+assert(dock_update_source:find("MAX_RELEASE_FILES = 80", 1, true), "DockUpdate must accept the current bounded AppDock package")
+assert(dock_update_source:find("total_bytes > MAX_TOTAL_BYTES", 1, true), "DockUpdate must enforce the cumulative download-size limit")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
 assert(dock_update_source:find('["appdock_tbs_account.lua"] = true', 1, true), "DockUpdate must allow the TBS account client")
-for _, module in ipairs({ "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua" }) do
+for _, module in ipairs({ "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua", "appdock_sleepscreen_weather.lua", "appdock_bluetooth.lua", "appdock_transfer.lua", "appdock_youtube_shorts.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua" }) do
     assert(required_source_block:find('"' .. module .. '"', 1, true), "DockUpdate must require the AppDock module " .. module)
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true), "DockUpdate must allow the AppDock module " .. module)
 end
@@ -181,9 +192,18 @@ assert(not dock_update_source:find('assets/wallpaper/appdock_default.svg', 1, tr
 assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage data files without Lua execution")
 assert(required_source_block:find('"features.adf"', 1, true), "DockUpdate must require the AppDock feature pages")
 assert(dock_update_source:find('["features.adf"] = true', 1, true), "DockUpdate must explicitly allowlist the AppDock feature pages")
-    for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua" }) do
+for _, module in ipairs({ "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua" }) do
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true),
         "DockUpdate must explicitly allow the AppDock module " .. module)
+end
+for _, marker in ipairs({
+    '["appdock_bluetooth.lua"] = "7.9.32"',
+    '["appdock_transfer.lua"] = "8.0.1"',
+    '["appdock_sleepscreen_weather.lua"] = "8.2.10"',
+    '["appdock_text.lua"] = "8.2.13"',
+    '["appdock_youtube_shorts.lua"] = "8.2.22"',
+}) do
+    assert(dock_update_source:find(marker, 1, true), "DockUpdate must only request versioned files after their first AppDock release: " .. marker)
 end
 assert(not dock_update_source:find("UPDATE_PASSWORD", 1, true), "DockUpdate must not require a password")
 assert(not dock_update_source:find("input_type = \"password\"", 1, true), "DockUpdate must not show a password prompt")
@@ -235,14 +255,16 @@ local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 1 + #required + #optional_sources + #png_assets,
+assert(#log.requests == 1 + #required + #optional_sources + #png_assets + 2,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.5 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.5")
+assert(catalog:find("dock_update.lua | 1.4.6 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.6")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
     assert(not url:find("appdock_text.lua", 1, true), "Older AppDock releases must not require a nonexistent text module")
+    assert(not url:find("appdock_sleepscreen_weather.lua", 1, true), "Older releases must not request sleep-screen weather before 8.2.10")
+    assert(not url:find("appdock_youtube_shorts.lua", 1, true), "Older releases must not request YouTube Shorts before 8.2.22")
 end
 
 -- Starting with 8.2.13, the same bounded updater must include the new helper.
@@ -263,5 +285,40 @@ for _, url in ipairs(log.requests) do
     if url:find("appdock_text.lua", 1, true) then text_requests = text_requests + 1 end
 end
 assert(text_requests == 1, "The new helper must be fetched exactly once from the fixed allowlist")
+for _, module in ipairs({ "appdock_bluetooth.lua", "appdock_transfer.lua", "appdock_sleepscreen_weather.lua" }) do
+    local requests = 0
+    for _, url in ipairs(log.requests) do if url:find(module, 1, true) then requests = requests + 1 end end
+    assert(requests == 1, "AppDock 8.2.13 must fetch the available module exactly once: " .. module)
+end
+for _, url in ipairs(log.requests) do
+    assert(not url:find("appdock_youtube_shorts.lua", 1, true), "AppDock 8.2.13 must not request a module first released in 8.2.22")
+end
+
+-- Verify the complete current AppDock 8.3.5 package, including all newly
+-- versioned modules, all 23 PNG assets, and both inert AppDock data files.
+feed = feed:gsub("8%.2%.13", "8.3.5")
+packaged_sources["_meta.lua"] = "return { version = '8.3.5' }\n"
+packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-8.3.5' }\n"
+log.requests = {}
+local current_instance = {}
+app.buildPane(current_instance, context)[5].callback()
+local current_pane = app.buildPane(current_instance, context)
+current_pane[7].callback()
+assert(log.shown and log.shown.ok_callback, "Installing the current AppDock release must still require explicit confirmation")
+log.shown.ok_callback()
+assert(#required + #versioned_sources + #png_assets == 69, "The current AppDock fixture must represent all 69 files in the live plugin tree")
+assert(#log.requests == 1 + #required + #versioned_sources + #png_assets, "DockUpdate must fetch every current plugin file exactly once")
+for _, name in ipairs(required) do
+    local installed = assert(io.open(active .. "/" .. name, "rb")):read("*a")
+    assert(installed == packaged_sources[name], "DockUpdate must install the complete current package file " .. name)
+end
+for _, name in ipairs(versioned_sources) do
+    local installed = assert(io.open(active .. "/" .. name, "rb")):read("*a")
+    assert(installed == packaged_sources[name], "DockUpdate must install current versioned module " .. name)
+end
+for _, name in ipairs(png_assets) do
+    local installed = assert(io.open(active .. "/" .. name, "rb")):read("*a")
+    assert(installed == packaged_sources[name], "DockUpdate must install current bundled asset " .. name)
+end
 os.execute("rm -rf " .. root)
 print("DockUpdate test: OK")

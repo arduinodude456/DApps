@@ -46,29 +46,39 @@ local RAW_ROOT = "https://raw.githubusercontent.com/" .. REPOSITORY
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- AppDock 8.2.1's appdock_dapps.lua is about 244 KiB. Keep a strict bounded
--- source limit with headroom for the current DApp host and modest growth.
+-- The current AppDock 8.3.5 package has 69 files. Keep explicit headroom while
+-- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 256 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 512 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
-local MAX_RELEASE_FILES = 65
+local MAX_RELEASE_FILES = 80
 local MAX_RELEASE_NOTES = 16 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
-    "appdock_appstore.lua", "appdock_browser.lua",
+    "appdock_appstore.lua", "appdock_audio.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
-    "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
+    "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_tbs_account.lua",
+    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
-    "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua",
+    "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua", "appdock_sleepscreen_weather.lua",
+    "appdock_transfer.lua", "appdock_youtube_shorts.lua",
     "appdock_suggestions.db", "features.adf",
+    "assets/lockscreen/appdock_lockscreen_hero.png",
+    "assets/logos/analog_clock.png", "assets/logos/app_store.png", "assets/logos/appdock.png",
+    "assets/logos/battery.png", "assets/logos/calculator.png", "assets/logos/calendar.png",
+    "assets/logos/dchat.png", "assets/logos/display.png", "assets/logos/dockupdate.png",
+    "assets/logos/document.png", "assets/logos/file_manager.png", "assets/logos/help.png",
+    "assets/logos/minecraft.png", "assets/logos/music.png", "assets/logos/network.png",
+    "assets/logos/notes.png", "assets/logos/settings.png", "assets/logos/web_browser.png",
+    "assets/screensaver/happy_ereader_01.png", "assets/screensaver/happy_ereader_02.png",
+    "assets/screensaver/happy_ereader_03.png", "assets/screensaver/happy_ereader_04.png",
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
@@ -89,13 +99,25 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_sleepscreen_store.lua"] = true,
     ["appdock_theme.lua"] = true, ["appdock_wallpaper.lua"] = true,
     ["appdock_device_controls.lua"] = true,
-    ["appdock_audio.lua"] = true, ["appdock_bwr.lua"] = true,
+    ["appdock_audio.lua"] = true, ["appdock_bluetooth.lua"] = true, ["appdock_bwr.lua"] = true,
     ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
+    ["appdock_transfer.lua"] = true, ["appdock_youtube_shorts.lua"] = true,
+    ["appdock_sleepscreen_weather.lua"] = true,
     ["appdock_dialogs.lua"] = true,
     ["appdock_text.lua"] = true,
     ["appdock_draw.lua"] = true,
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
     ["appdock_suggestions.lua"] = true, ["appdock_tbs_account.lua"] = true,
+}
+-- Modules added after older stable releases are allowlisted but requested only
+-- from the first tag that contains them. This keeps updates from old installs
+-- working without silently skipping files from today's package.
+local SOURCE_MIN_VERSION = {
+    ["appdock_bluetooth.lua"] = "7.9.32",
+    ["appdock_transfer.lua"] = "8.0.1",
+    ["appdock_sleepscreen_weather.lua"] = "8.2.10",
+    ["appdock_text.lua"] = "8.2.13",
+    ["appdock_youtube_shorts.lua"] = "8.2.22",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -245,12 +267,12 @@ end
 local function releaseEntries(tag)
     local entries = {}
     local included = {}
-    -- Older releases do not contain the additive text module. Never request
-    -- a nonexistent file while updating to an older published release.
-    local text_version = compareVersions(tag, "8.2.13")
-    local include_text = text_version and text_version >= 0
+    local function availableAtTag(path)
+        local minimum = SOURCE_MIN_VERSION[path]
+        return not minimum or compareVersions(tag, minimum) >= 0
+    end
     for path in pairs(ALLOWED_SOURCE_FILES) do
-        if path ~= "appdock_text.lua" or include_text then
+        if availableAtTag(path) then
             entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "source" }
             included[path] = true
         end
@@ -264,7 +286,7 @@ local function releaseEntries(tag)
         included[path] = true
     end
     for _, path in ipairs(REQUIRED_FILES) do
-        if not included[path] and (path ~= "appdock_text.lua" or include_text) then
+        if availableAtTag(path) and not included[path] then
             return nil, _("The fixed AppDock file list is missing a required module: ") .. path
         end
     end
@@ -357,6 +379,7 @@ local function stageRelease(release, entries, target)
     local created, mkdir_err = lfs.mkdir(stage)
     if not created then return nil, mkdir_err or _("The update staging folder could not be created.") end
 
+    local total_bytes = 0
     for entry_index, entry in ipairs(entries) do
         local is_asset = entry.kind == "asset"
         local is_data = entry.kind == "data"
@@ -364,6 +387,11 @@ local function stageRelease(release, entries, target)
         local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         local source, fetch_err = fetch(RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
+        total_bytes = total_bytes + #source
+        if total_bytes > MAX_TOTAL_BYTES then
+            removeTree(stage)
+            return nil, _("The AppDock release exceeds the total download limit.")
+        end
         if entry.size and #source ~= entry.size then removeTree(stage); return nil, _("Downloaded file size does not match release metadata: ") .. entry.path end
         if is_asset then
             if not validAsset(entry.path, source) then removeTree(stage); return nil, _("Downloaded asset is invalid: ") .. entry.path end
@@ -626,7 +654,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.5",
+    version = "1.4.6",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
