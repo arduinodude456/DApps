@@ -44,4 +44,4 @@ tetris.lua | 1.0.0 | other
 minecraft.lua | 4.7.3 | minecraft
 reading_time.lua | 1.0.0 | timer
 graphics_test.lua | 1.0.0 | notes
-InkBlog/inkblog.lua | 1.1.0 | notes
+InkBlog/inkblog.lua | 1.1.1 | notes

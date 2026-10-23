@@ -61,6 +61,7 @@ Deno.test("first TBS login creates a matching Auth user, profile, and scoped ses
   assertEquals(calls.join(","), "create,upsert:inkblog_profiles,generate:magiclink,verify:magiclink");
   assertStringIncludes(syntheticEmailForTest(ACCOUNT), ".invalid");
   assertNotEquals(createdAttributes.value?.password, "");
+  assertEquals((createdAttributes.value?.password as string).length, 64);
 });
 
 function syntheticEmailForTest(accountId: string): string { return `tbs-${accountId}@accounts.inkblog.invalid`; }

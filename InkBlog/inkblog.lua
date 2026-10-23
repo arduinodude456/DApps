@@ -1936,7 +1936,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.1.0",
+    version = "1.1.1",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",

@@ -80,7 +80,11 @@ export async function verifyTbsDevice(
 }
 
 function syntheticEmail(accountId: string): string { return `tbs-${accountId}@accounts.inkblog.invalid`; }
-function randomPassword(): string { return `${crypto.randomUUID()}${crypto.randomUUID()}${crypto.randomUUID()}`; }
+function randomPassword(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
 function isTbsLinked(user: User | null, accountId: string): user is User {
   return !!user && user.id === accountId && user.app_metadata?.inkblog_tbs_account_id === accountId;
 }
