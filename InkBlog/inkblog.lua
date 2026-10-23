@@ -290,6 +290,7 @@ local function sessionShape(raw)
         access_token = token,
         refresh_token = refresh,
         expires_at = tonumber(raw.expires_at) or 0,
+        tbs_account_id = validUuid(raw.tbs_account_id) and raw.tbs_account_id or "",
         user = { id = validUuid(user.id) and user.id or "", email = type(user.email) == "string" and user.email:sub(1, 240) or "" },
     }
 end
@@ -327,6 +328,7 @@ local function saveDrafts(drafts)
     return atomicJsonWrite(DRAFTS_FILE, { items = clean })
 end
 
+local getTbsIdentity
 local function stateFor(instance)
     instance.inkblog = instance.inkblog or {
         settings = loadSettings(), session = loadSession(), drafts = loadDrafts(),
@@ -342,6 +344,19 @@ local function stateFor(instance)
     state.session = sessionShape(state.session)
     state.posts, state.comments, state.notifications = state.posts or {}, state.comments or {}, state.notifications or {}
     state.drafts, state.image_cache, state.image_order = state.drafts or {}, state.image_cache or {}, state.image_order or {}
+    if state.session.tbs_account_id ~= "" then
+        local tbs = getTbsIdentity and getTbsIdentity() or nil
+        if not tbs or tbs.account_id ~= state.session.tbs_account_id then
+            state.session = sessionShape({})
+            saveSession(state.session)
+            state.profile, state.author_profile, state.notifications = nil, nil, {}
+            state.posts, state.comments, state.selected_post, state.selected_author_id = {}, {}, nil, nil
+            state.list_page, state.list_offset, state.comment_page, state.comment_offset = 0, 0, 0, 0
+            for _, cached in pairs(state.image_cache) do if cached.file then pcall(os.remove, cached.file) end end
+            state.image_cache, state.image_order = {}, {}
+            state.status = _("The AppDock TBS account changed. InkBlog will use the account currently signed in on this reader.")
+        end
+    end
     return state
 end
 
@@ -426,6 +441,32 @@ local function authHeaders(session)
     return headers
 end
 
+getTbsIdentity = function()
+    local ok, Account = pcall(require, "appdock_tbs_account")
+    if not ok or type(Account) ~= "table" or type(Account.get) ~= "function" or type(Account.isSignedIn) ~= "function" then
+        return nil, _("The AppDock TBS account module is unavailable. Update AppDock and try again.")
+    end
+    local signed_ok, signed = pcall(Account.isSignedIn, nil)
+    if not signed_ok or signed ~= true then return nil, _("Sign in to your TBS account in AppDock first.") end
+    local loaded, account = pcall(Account.get, nil)
+    if not loaded or type(account) ~= "table" or not validUuid(account.account_id)
+        or type(account.device_id) ~= "string" or type(account.device_secret) ~= "string" then
+        return nil, _("The TBS account credentials on this reader are incomplete.")
+    end
+    local display_name = ""
+    if G_reader_settings and type(G_reader_settings.readSetting) == "function" then
+        local settings_ok, settings = pcall(G_reader_settings.readSetting, G_reader_settings, "appdock_homescreen", {})
+        local profile = settings_ok and type(settings) == "table" and settings.tbs_account or nil
+        if type(profile) == "table" then display_name = trim(profile.display_name or profile.username) end
+    end
+    return {
+        account_id = account.account_id:lower(),
+        device_id = account.device_id,
+        device_secret = account.device_secret,
+        display_name = display_name,
+    }
+end
+
 local function applySessionResult(state, result, code, err, purpose)
     if type(result) ~= "table" then
         state.status = err or _("Sign-in failed. Check the email, password, and connection.")
@@ -442,11 +483,43 @@ local function applySessionResult(state, result, code, err, purpose)
     state.session = sessionShape(result)
     state.session.expires_at = os.time() + math.max(0, tonumber(result.expires_in) or 0)
     saveSession(state.session)
-    state.status = purpose == "refresh" and _("Session refreshed.") or _("Signed in. Your profile is ready for ink.")
+    state.status = purpose == "refresh" and _("Session refreshed.")
+        or purpose == "tbs" and _("TBS account connected. Your InkBlog profile is ready.")
+        or _("Signed in. Your profile is ready for ink.")
+    return true
+end
+
+local function signInWithTbs(state)
+    local account, account_error
+    if getTbsIdentity then account, account_error = getTbsIdentity() end
+    if not account then return nil, account_error or _("Sign in to your TBS account in AppDock first.") end
+    local headers = {
+        ["x-tbs-account-id"] = account.account_id,
+        ["x-tbs-device-id"] = account.device_id,
+        ["x-tbs-device-secret"] = account.device_secret,
+    }
+    local result, code, err = rawRequest("/functions/v1/inkblog-tbs-auth", "POST", { display_name = account.display_name }, headers)
+    if not applySessionResult(state, result, code, err, "tbs") then return nil, state.status end
+    if state.session.user.id ~= account.account_id then
+        state.session = sessionShape({})
+        saveSession(state.session)
+        return nil, _("The InkBlog session did not match the TBS account on this reader.")
+    end
+    state.session.tbs_account_id = account.account_id
+    saveSession(state.session)
     return true
 end
 
 local function refreshSession(state)
+    if state.session.tbs_account_id ~= "" then
+        local renewed, renewal_error = signInWithTbs(state)
+        if not renewed then
+            state.session = sessionShape({})
+            saveSession(state.session)
+            return nil, renewal_error
+        end
+        return true
+    end
     if state.session.refresh_token == "" then return nil, _("Sign in before using this action.") end
     local result, code, err = rawRequest("/auth/v1/token?grant_type=refresh_token", "POST", { refresh_token = state.session.refresh_token }, {})
     if not applySessionResult(state, result, code, err, "refresh") then return nil, state.status end
@@ -454,7 +527,23 @@ local function refreshSession(state)
 end
 
 local function ensureAccess(state)
-    if state.session.access_token == "" then return nil, _("Sign in before using this action.") end
+    if state.session.tbs_account_id ~= "" then
+        local account, account_error
+        if getTbsIdentity then account, account_error = getTbsIdentity() end
+        if not account then
+            state.session = sessionShape({})
+            saveSession(state.session)
+            return nil, account_error or _("Sign in to your TBS account in AppDock first.")
+        end
+        if account.account_id ~= state.session.tbs_account_id then
+            state.session = sessionShape({})
+            saveSession(state.session)
+        end
+    end
+    if state.session.access_token == "" then
+        if state.session.refresh_token ~= "" then return refreshSession(state) end
+        return signInWithTbs(state)
+    end
     if state.session.expires_at > 0 and state.session.expires_at <= os.time() + 30 then return refreshSession(state) end
     return true
 end
@@ -501,12 +590,21 @@ local function wifiReady()
 end
 
 -- Deferring lets the busy indicator paint once before the short bounded request.
-local function runNetwork(state, context, busy, operation)
+local function runNetwork(state, context, busy, operation, require_session)
     if state.loading then return end
     if not wifiReady() then state.status = _("Network is off. Turn on Wi-Fi, then retry."); requestRebuild(context); return end
     state.loading, state.status = true, busy
     requestRebuild(context)
     local function job()
+        if require_session then
+            local authenticated, auth_error = ensureAccess(state)
+            if not authenticated then
+                state.loading = false
+                state.status = auth_error or _("Use the TBS account signed in on this reader.")
+                requestRebuild(context)
+                return
+            end
+        end
         local ok, err = pcall(operation)
         state.loading = false
         if not ok then state.status = _("InkBlog could not complete that action.") end
@@ -847,8 +945,8 @@ local function changeCommentBatch(state, context, offset)
 end
 
 local function loadOwnProfile(state, context)
-    if state.session.user.id == "" then return end
     runNetwork(state, context, _("Loading your profile…"), function()
+        if state.session.user.id == "" then state.status = _("The InkBlog profile could not be linked to the TBS account."); return end
         local query = "id=eq." .. urlEncode(state.session.user.id) .. "&select=id,display_name,bio,avatar_path"
         local result, code, err = restRequest(state, "GET", "profiles", query)
         if type(result) ~= "table" then state.status = err or _("Profile could not be loaded."); return end
@@ -861,7 +959,7 @@ local function loadOwnProfile(state, context)
         else
             state.status = _("Your profile is ready.")
         end
-    end)
+    end, true)
 end
 
 local function loadAuthor(state, context, author_id)
@@ -1107,7 +1205,7 @@ local function promptPostImage(state, context)
                         state.editor.body = tostring(state.editor.body or "") .. marker
                         state.editor.images[#state.editor.images + 1] = { path = result.path, alt = trim(alt):sub(1, 160) }
                         state.pending_image_path, state.status = nil, _("Image uploaded in grayscale and marked in the draft.")
-                    end)
+                    end, true)
                 end } } },
             }
             showInput(alt_dialog)
@@ -1138,7 +1236,7 @@ local function promptAvatarUpload(state, context)
                     rawRequest("/functions/v1/inkblog-media?bucket=inkblog-avatars&path=" .. urlEncode(old_avatar), "DELETE", nil, authHeaders(state.session))
                 end
                 state.status = _("Avatar uploaded. Tap Avatar laden to cache it locally.")
-            end)
+            end, true)
         end } } },
     }
     showInput(dialog)
@@ -1147,7 +1245,6 @@ end
 local function syncEditor(state, context, publish)
     local record, local_err = captureLocalDraft(state)
     if not record then state.status = local_err; requestRebuild(context); return end
-    if state.session.user.id == "" then state.status = _("Draft stored locally. Sign in when you are ready to sync it."); requestRebuild(context); return end
     local title = trim(state.editor.title or "")
     if title == "" then state.status = _("Give the post a title before syncing."); requestRebuild(context); return end
     runNetwork(state, context, publish and _("Publishing ink…") or _("Saving draft…"), function()
@@ -1172,7 +1269,7 @@ local function syncEditor(state, context, publish)
             captureLocalDraft(state)
             state.status = _("Draft saved locally and to InkBlog.")
         end
-    end)
+    end, true)
 end
 
 local function deletePost(state, context, post)
@@ -1191,7 +1288,7 @@ local function deletePost(state, context, post)
             state.view, state.selected_post, state.status = "profile", nil, _("Post deleted.")
             for index = #state.posts, 1, -1 do if state.posts[index].id == post.id then table.remove(state.posts, index) end end
         else state.status = err or _("Post could not be deleted.") end
-    end)
+    end, true)
 end
 
 local function confirmDeletePost(state, context, post)
@@ -1215,7 +1312,7 @@ local function toggleLike(state, context, item, target_type)
             item.like_count = math.max(0, (tonumber(item.like_count) or 0) + (item.liked and 1 or -1))
             state.status = item.liked and _("Klecks added.") or _("Klecks removed.")
         else state.status = err or _("Klecks could not be changed.") end
-    end)
+    end, true)
 end
 
 local function promptComment(state, context, parent)
@@ -1236,7 +1333,7 @@ local function promptComment(state, context, parent)
                     state.comments[#state.comments + 1] = result[1]
                     state.status = _("Margin note added.")
                 else state.status = err or _("Margin note could not be added.") end
-            end)
+            end, true)
         end } } },
     }
     showInput(dialog)
@@ -1250,7 +1347,7 @@ local function deleteComment(state, context, comment)
             state.status = _("Margin note deleted.")
             for index = #state.comments, 1, -1 do if state.comments[index].id == comment.id then table.remove(state.comments, index) end end
         else state.status = err or _("Margin note could not be deleted.") end
-    end)
+    end, true)
 end
 
 local function confirmDeleteComment(state, context, comment)
@@ -1269,7 +1366,7 @@ local function promptReport(state, context, item, target_type)
             runNetwork(state, context, _("Sending report…"), function()
                 local result, code, err = restRequest(state, "POST", "reports", nil, { reporter_id = state.session.user.id, target_type = target_type, target_id = item.id, reason = reason })
                 state.status = code and code >= 200 and code < 300 and _("Report sent to moderation.") or (err or _("Report could not be sent."))
-            end)
+            end, true)
         end } } },
     }
     showInput(dialog)
@@ -1303,7 +1400,7 @@ local function toggleFollow(state, context)
             result, code, err = restRequest(state, "POST", "follows", nil, { follower_id = state.session.user.id, following_id = profile.id })
         end
         if code and code >= 200 and code < 300 then profile.followed = not profile.followed; state.status = profile.followed and _("Following this blog.") or _("No longer following this blog.") else state.status = err or _("Follow state could not be changed.") end
-    end)
+    end, true)
 end
 
 local function toggleBlock(state, context)
@@ -1317,7 +1414,7 @@ local function toggleBlock(state, context)
             result, code, err = restRequest(state, "POST", "blocks", nil, { blocker_id = state.session.user.id, blocked_id = profile.id })
         end
         if code and code >= 200 and code < 300 then profile.blocked = not profile.blocked; state.status = profile.blocked and _("Author blocked.") or _("Author unblocked.") else state.status = err or _("Block state could not be changed.") end
-    end)
+    end, true)
 end
 
 local function loadNotifications(state, context)
@@ -1326,7 +1423,7 @@ local function loadNotifications(state, context)
         local query = "recipient_id=eq." .. urlEncode(state.session.user.id) .. "&select=id,actor_id,kind,target_type,target_id,read_at,created_at&order=created_at.desc&limit=60"
         local result, code, err = restRequest(state, "GET", "notifications", query)
         if type(result) == "table" then state.notifications, state.list_page, state.status = result, 0, (#result == 0 and _("No notifications.") or _("Notifications loaded.")) else state.status = err or _("Notifications could not be loaded.") end
-    end)
+    end, true)
     requestRebuild(context)
 end
 
@@ -1342,7 +1439,7 @@ local function openNotification(state, context, note)
                     state.selected_post, state.article_page, state.article_tab, state.view, state.status = post[1], 1, "read", "article", _("Post opened.")
                 else state.status = post_err or _("That post is no longer available.") end
             else state.status = _("This notification has no openable post.") end
-        end)
+        end, true)
     elseif note.target_type == "post" then
         getPostAndOpen(state, context, note.target_id)
     end
@@ -1552,10 +1649,8 @@ local function navTo(state, context, view)
     if view == "feed" then listPosts(state, context, "feed", nil)
     elseif view == "discover" then listPosts(state, context, "discover", nil)
     elseif view == "write" then beginNewPost(state, context)
-    elseif view == "profile" then
-        if state.session.user.id == "" then state.status = _("Sign in or register to keep an InkBlog profile."); requestRebuild(context) else loadOwnProfile(state, context) end
-    elseif view == "notifications" then
-        if state.session.user.id == "" then state.status = _("Sign in to read notifications."); requestRebuild(context) else loadNotifications(state, context) end
+    elseif view == "profile" then loadOwnProfile(state, context)
+    elseif view == "notifications" then loadNotifications(state, context)
     end
 end
 
@@ -1701,7 +1796,7 @@ local function promptProfileEdit(state, context)
                     runNetwork(state, context, _("Saving profile…"), function()
                         local result, code, err = restRequest(state, "PATCH", "profiles", "id=eq." .. urlEncode(state.session.user.id), { display_name = display_name, bio = bio }, { ["prefer"] = "return=representation" })
                         if type(result) == "table" and result[1] then state.profile, state.status = result[1], _("Profile saved.") else state.status = err or _("Profile could not be saved.") end
-                    end)
+                    end, true)
                 end } } },
             }
             showInput(bio_dialog)
@@ -1741,10 +1836,9 @@ local function renderProfile(layer, state, context, width, top, bottom, px)
     local margin, gap = px(12), px(7)
     if state.session.user.id == "" then
         addText(layer, _("InkBlog account"), margin, top, width - 2 * margin, px(18), { serif = true, bold = true })
-        addBox(layer, _("Sign in to publish, follow, leave margin notes, and receive notifications. Registration requires email confirmation before sign-in."), margin, top + px(31), width - 2 * margin, px(84), px(14), { serif = true })
-        addButton(layer, _("Sign in"), margin, top + px(124), math.floor((width - 2 * margin - gap) / 2), px(44), function() promptCredentials(state, context, false) end, true)
-        addButton(layer, _("Register"), margin + math.floor((width - 2 * margin - gap) / 2) + gap, top + px(124), math.floor((width - 2 * margin - gap) / 2), px(44), function() promptCredentials(state, context, true) end)
-        addText(layer, _("No device identity is reused or changed."), margin, top + px(181), width - 2 * margin, px(10), { color = GRAY_666 })
+        addBox(layer, _("InkBlog uses the TBS account already signed in on this reader. On first use, your InkBlog account and profile are created automatically—no extra password or email registration."), margin, top + px(31), width - 2 * margin, px(84), px(14), { serif = true })
+        addButton(layer, _("TBS-Konto verwenden"), margin, top + px(124), width - 2 * margin, px(44), function() loadOwnProfile(state, context) end, true)
+        addButton(layer, _("Existing InkBlog email account"), margin, top + px(176), width - 2 * margin, px(44), function() promptCredentials(state, context, false) end)
         return
     end
     local profile = state.profile or { id = state.session.user.id, display_name = state.session.user.email:match("^([^@]+)") or _("Reader"), bio = _("Tap Profil bearbeiten to add a bio.") }
@@ -1842,17 +1936,19 @@ end
 
 return {
     id = APP_ID,
-    version = "1.0.0",
+    version = "1.1.0",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",
     logo = "notes",
+    requires_tbs_account = true,
     buildPane = buildPane,
     openFile = acceptFile,
     _test = {
         ActionButton = ActionButton, InkLogo = InkLogo, COLORS = { black = BLACK, white = WHITE, gray333 = GRAY_333, gray666 = GRAY_666, grayccc = GRAY_CCC },
         stateFor = stateFor, markdownBlocks = markdownBlocks, paginateBlocks = paginateBlocks, utf8Cut = utf8Cut, utf8Length = utf8Length,
         validManagedPath = validManagedPath, imageMimeForPath = imageMimeForPath, restPath = restPath, applySessionResult = applySessionResult,
+        getTbsIdentity = function() return getTbsIdentity and getTbsIdentity() end,
         captureLocalDraft = captureLocalDraft, loadDrafts = loadDrafts, saveDrafts = saveDrafts, buildPane = buildPane,
         rawRequest = rawRequest, cacheImageNow = cacheImageNow, LOGO_ROWS = LOGO_ROWS,
     },

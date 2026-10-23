@@ -109,6 +109,25 @@ local function context(width, height)
     }
 end
 
+check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
+check(app.version == "1.1.0", "catalog version exposes the TBS-linked release")
+local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
+package.loaded["appdock_tbs_account"] = nil
+package.preload["appdock_tbs_account"] = function()
+    return {
+        isSignedIn = function() return true end,
+        get = function() return { account_id = TBS_ACCOUNT_ID, device_id = "tbs_test_device_0123456789", device_secret = "test_secret_never_persist_this_value" } end,
+    }
+end
+local tbs_identity = app._test.getTbsIdentity()
+check(tbs_identity and tbs_identity.account_id == TBS_ACCOUNT_ID, "InkBlog reads the existing AppDock TBS account")
+check(tbs_identity and tbs_identity.device_id == "tbs_test_device_0123456789", "InkBlog obtains device credentials only through the official TBS client")
+local switched = app._test.stateFor({ inkblog = {
+    session = { access_token = "stale", refresh_token = "stale", tbs_account_id = "123e4567-e89b-12d3-a456-426614174000", user = { id = "123e4567-e89b-12d3-a456-426614174000" } },
+    posts = { { id = "private-cache" } }, comments = {}, notifications = {}, drafts = {}, image_cache = {}, image_order = {},
+} })
+check(switched.session.user.id == "" and #switched.posts == 0, "switching TBS identities clears old session and account-specific post cache")
+
 -- buildPane must remain a pure visual build: it may not require or request HTTPS.
 local normal_instance = {}
 local pane = app.buildPane(normal_instance, context(600, 760))
