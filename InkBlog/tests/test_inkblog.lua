@@ -94,6 +94,15 @@ _G.G_reader_settings = {
     saveSetting = function() end,
 }
 
+local keyboard_requests = {}
+package.preload["appdock_keyboard"] = function()
+    return {
+        open = function(options) keyboard_requests[#keyboard_requests + 1] = options; return {} end,
+        attach = function() return true end,
+        isEnabled = function() return true end,
+    }
+end
+
 local test_file = debug.getinfo(1, "S").source:sub(2)
 local app = dofile(test_file:gsub("tests/test_inkblog.lua$", "inkblog.lua"))
 
@@ -110,7 +119,7 @@ local function context(width, height)
 end
 
 check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
-check(app.version == "1.1.1", "catalog version exposes the TBS-linked release")
+check(app.version == "1.2.0", "catalog version exposes the multiline-editor release")
 local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
 package.loaded["appdock_tbs_account"] = nil
 package.preload["appdock_tbs_account"] = function()
@@ -146,6 +155,42 @@ for _, widget in ipairs(small_layer) do
         local x, y = widget.overlap_offset[1], widget.overlap_offset[2]
         check(x >= 0 and y >= 0 and x + widget.dimen.w <= 600 and y + widget.dimen.h <= 350, "interactive card remains within split-pane bounds")
     end
+end
+
+local write_instance = {}
+local write_state = app._test.stateFor(write_instance)
+write_state.view = "write"
+write_state.editor = { title = "Ein Titel", body = "Erste Zeile\nZweite Zeile", images = {} }
+local write_pane = app.buildPane(write_instance, context(600, 760))
+local title_field, body_field
+for _, widget in ipairs(write_pane[1]) do
+    if widget.inkblog_editor_field == "title" then title_field = widget end
+    if widget.inkblog_editor_field == "body" then body_field = widget end
+end
+check(title_field and body_field, "write view exposes visible editable title and multiline body fields")
+body_field:onTapInkBlogAction()
+check(keyboard_requests[#keyboard_requests] and keyboard_requests[#keyboard_requests].multiline == true,
+    "body field opens the AppDock keyboard in multiline mode")
+keyboard_requests[#keyboard_requests].on_submit("Erste Zeile\nZweite Zeile\nDritte Zeile")
+check(write_state.editor.body == "Erste Zeile\nZweite Zeile\nDritte Zeile", "multiline keyboard preserves newline-separated Markdown")
+title_field:onTapInkBlogAction()
+check(keyboard_requests[#keyboard_requests] and keyboard_requests[#keyboard_requests].multiline == false,
+    "title field opens the AppDock keyboard in single-line mode")
+keyboard_requests[#keyboard_requests].on_submit("Neuer Titel")
+check(write_state.editor.title == "Neuer Titel", "title keyboard saves its value into the editor")
+
+local compact_write_instance = {}
+local compact_write_state = app._test.stateFor(compact_write_instance)
+compact_write_state.view = "write"
+local compact_write_pane = app.buildPane(compact_write_instance, context(600, 350))
+local compact_fields = {}
+for _, widget in ipairs(compact_write_pane[1]) do
+    if widget.inkblog_editor_field then compact_fields[#compact_fields + 1] = widget end
+end
+check(#compact_fields == 2, "compact split pane still exposes both write fields")
+for _, rect in ipairs(compact_write_pane[1]._inkblog_button_bounds or {}) do
+    check(rect.x >= 0 and rect.y >= 0 and rect.x + rect.w <= 600 and rect.y + rect.h <= 350,
+        "compact write control remains within split-pane bounds")
 end
 
 -- Auth errors should be readable and a later successful retry should persist a session.

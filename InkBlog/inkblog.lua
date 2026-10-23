@@ -24,6 +24,8 @@ local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local _ = require("gettext")
+local ok_appdock_keyboard, AppDockKeyboard = pcall(require, "appdock_keyboard")
+if not ok_appdock_keyboard then AppDockKeyboard = nil end
 
 local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
 if not ok_lfs then pcall(function() lfs = require("lfs") end) end
@@ -365,6 +367,9 @@ local function requestRebuild(context)
 end
 
 local function showInput(dialog)
+    if AppDockKeyboard and type(AppDockKeyboard.attach) == "function" then
+        pcall(AppDockKeyboard.attach, dialog)
+    end
     UIManager:show(dialog)
     if dialog.onShowKeyboard then dialog:onShowKeyboard() end
     return dialog
@@ -1093,32 +1098,47 @@ local function editPost(state, context, post)
     requestRebuild(context)
 end
 
-local function promptEditorTitle(state, context)
-    local dialog
-    dialog = InputDialog:new{
-        title = _("Title"), input = state.editor.title or "", input_hint = _("A quiet, clear title"),
-        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Save"), is_enter_default = true, callback = function()
-            local title = dialog:getInputText()
-            UIManager:close(dialog)
-            if #title > 600 then state.status = _("Titles are limited to 600 bytes.") else state.editor.title = title; state.status = _("Title kept locally.") end
+local function openEditorField(state, context, field)
+    if not AppDockKeyboard or type(AppDockKeyboard.open) ~= "function" then
+        state.status = _("The AppDock keyboard is unavailable. Update AppDock and try again.")
+        requestRebuild(context)
+        return
+    end
+    if type(AppDockKeyboard.isEnabled) == "function" and not AppDockKeyboard.isEnabled() then
+        state.status = _("Enable the AppDock keyboard in AppDock settings to edit this field.")
+        requestRebuild(context)
+        return
+    end
+    local is_body = field == "body"
+    local keyboard
+    local options = {
+        value = tostring(state.editor[field] or ""),
+        title = is_body and _("Write in ink · Markdown") or _("Post title"),
+        placeholder = is_body and _("Type Markdown; ↵ adds a new line") or _("A quiet, clear title"),
+        multiline = is_body,
+        on_cancel = function()
+            if keyboard then UIManager:close(keyboard) end
             requestRebuild(context)
-        end } } },
-    }
-    showInput(dialog)
-end
-
-local function promptEditorBody(state, context)
-    local dialog
-    dialog = InputDialog:new{
-        title = _("Write in ink"), input = state.editor.body or "", input_hint = _("Markdown: headings, emphasis, lists, quotes, code, links, and inkblog images"),
-        buttons = { { { text = _("Cancel"), callback = function() UIManager:close(dialog) end }, { text = _("Keep text"), is_enter_default = true, callback = function()
-            local body = dialog:getInputText()
-            UIManager:close(dialog)
-            if #body > MAX_POST_BYTES then state.status = _("Posts are limited to 96 KiB.") else state.editor.body = body; state.status = _("All entered Markdown was kept locally.") end
+        end,
+        on_submit = function(value)
+            if keyboard then UIManager:close(keyboard) end
+            value = tostring(value or "")
+            local limit = is_body and MAX_POST_BYTES or 600
+            if #value > limit then
+                state.status = is_body and _("Posts are limited to 96 KiB.") or _("Titles are limited to 600 bytes.")
+            else
+                state.editor[field] = value
+                state.status = is_body and _("Markdown text kept locally.") or _("Title kept locally.")
+            end
             requestRebuild(context)
-        end } } },
+        end,
     }
-    showInput(dialog)
+    local ok, opened_keyboard = pcall(AppDockKeyboard.open, options)
+    keyboard = opened_keyboard
+    if not ok or not keyboard then
+        state.status = _("The AppDock keyboard could not be opened. Update AppDock and try again.")
+        requestRebuild(context)
+    end
 end
 
 local function insertFormat(state, context, kind)
@@ -1808,28 +1828,51 @@ end
 local function renderWrite(layer, state, context, width, top, bottom, px)
     local margin, gap = px(12), px(6)
     addText(layer, _("Neue Tinte aufnehmen"), margin, top, width - 2 * margin, px(18), { serif = true, bold = true })
-    local actions_y, actions_h = top + px(25), px(44)
-    local w4 = math.floor((width - 2 * margin - 3 * gap) / 4)
-    addButton(layer, _("Titel"), margin, actions_y, w4, actions_h, function() promptEditorTitle(state, context) end)
-    addButton(layer, _("Text"), margin + (w4 + gap), actions_y, w4, actions_h, function() promptEditorBody(state, context) end, true)
-    addButton(layer, _("Entwurf"), margin + 2 * (w4 + gap), actions_y, w4, actions_h, function() syncEditor(state, context, false) end)
-    addButton(layer, _("Publizieren"), margin + 3 * (w4 + gap), actions_y, w4, actions_h, function() syncEditor(state, context, true) end, true)
-    local marks_y = actions_y + actions_h + gap
-    local marks = { { "H", "heading" }, { "B", "bold" }, { "I", "italic" }, { "Liste", "list" }, { "Zitat", "quote" }, { "Code", "code" }, { "Link", "link" }, { "Bild", "image" } }
-    local mark_w = math.max(px(42), math.floor((width - 2 * margin - (#marks - 1) * gap) / #marks))
-    for index, mark in ipairs(marks) do
-        addButton(layer, mark[1], margin + (index - 1) * (mark_w + gap), marks_y, mark_w, actions_h, function()
-            if mark[2] == "image" then promptPostImage(state, context) else insertFormat(state, context, mark[2]) end
-        end)
-    end
-    local content_y, content_h = marks_y + actions_h + px(7), bottom - (marks_y + actions_h + px(58))
+    local compact = bottom - top < px(400)
+    local actions_h = px(compact and 40 or 44)
+    local actions_y = bottom - actions_h - px(16)
+    local half = math.floor((width - 2 * margin - gap) / 2)
+    addButton(layer, _("Entwurf"), margin, actions_y, half, actions_h, function() syncEditor(state, context, false) end)
+    addButton(layer, _("Publizieren"), margin + half + gap, actions_y, half, actions_h, function() syncEditor(state, context, true) end, true)
+
+    local title_label_y = top + px(4)
+    local title_y = title_label_y + px(17)
+    local title_h = px(compact and 36 or 44)
+    addText(layer, _("Titel · antippen zum Bearbeiten"), margin, title_label_y, width - 2 * margin, px(13), { bold = true })
     local title = trim(state.editor.title or "")
-    addText(layer, title ~= "" and title or _("Untitled"), margin, content_y, width - 2 * margin, px(20), { serif = true, bold = true })
-    local blocks = markdownBlocks(state.editor.body or "")
-    local preview_blocks = paginateBlocks(blocks, width - 2 * margin, math.max(px(48), content_h - px(29)), px)[1]
-    renderFallbackBlocks(layer, preview_blocks, margin, content_y + px(28), width - 2 * margin, math.max(px(48), content_h - px(29)), px)
-    addButton(layer, _("Verwerfen"), margin, bottom - px(44), math.floor((width - 2 * margin - gap) / 2), px(44), function() beginNewPost(state, context) end)
-    addButton(layer, _("Vorschau"), margin + math.floor((width - 2 * margin - gap) / 2) + gap, bottom - px(44), math.floor((width - 2 * margin - gap) / 2), px(44), function() state.status = _("The reading view is a paginated Markdown preview; all source text stays in the editor."); requestRebuild(context) end, true)
+    local title_field = addButton(layer, _("Titel"), margin, title_y, width - 2 * margin, title_h,
+        function() openEditorField(state, context, "title") end, false,
+        title ~= "" and title or _("Titel hier eingeben …"))
+    if title_field then title_field.inkblog_editor_field = "title" end
+
+    local body_label_y = title_y + title_h + px(7)
+    local body_y = body_label_y + px(17)
+    local marks_h = compact and 0 or px(40)
+    local marks_y = actions_y - (compact and px(7) or marks_h + px(8))
+    local body_bottom = marks_y - px(7)
+    local body_h = math.max(px(56), body_bottom - body_y)
+    addText(layer, _("Text · Markdown · mehrzeilig"), margin, body_label_y, width - 2 * margin, px(13), { bold = true })
+    local body = tostring(state.editor.body or "")
+    local body_preview
+    if body == "" then
+        body_preview = _("Text hier antippen und mehrzeilig schreiben …")
+    else
+        local head, tail = utf8Cut(body, compact and 220 or 700)
+        body_preview = head .. (tail ~= "" and "\n…" or "")
+    end
+    local body_field = addButton(layer, _("Text bearbeiten"), margin, body_y, width - 2 * margin, body_h,
+        function() openEditorField(state, context, "body") end, false, body_preview)
+    if body_field then body_field.inkblog_editor_field = "body" end
+
+    if not compact then
+        local marks = { { "H", "heading" }, { "B", "bold" }, { "I", "italic" }, { "Liste", "list" }, { "Zitat", "quote" }, { "Code", "code" }, { "Link", "link" }, { "Bild", "image" } }
+        local mark_w = math.max(px(42), math.floor((width - 2 * margin - (#marks - 1) * gap) / #marks))
+        for index, mark in ipairs(marks) do
+            addButton(layer, mark[1], margin + (index - 1) * (mark_w + gap), marks_y, mark_w, marks_h, function()
+                if mark[2] == "image" then promptPostImage(state, context) else insertFormat(state, context, mark[2]) end
+            end)
+        end
+    end
 end
 
 local function renderProfile(layer, state, context, width, top, bottom, px)
@@ -1936,7 +1979,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.1.1",
+    version = "1.2.0",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",
