@@ -23,6 +23,7 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local ok_theme, Theme = pcall(require, "appdock_theme")
 local _ = require("gettext")
 local ok_appdock_keyboard, AppDockKeyboard = pcall(require, "appdock_keyboard")
 if not ok_appdock_keyboard then AppDockKeyboard = nil end
@@ -67,43 +68,57 @@ local REST_TABLES = {
 local CONNECT_TIMEOUT = 8
 local REQUEST_TIMEOUT = 20
 
--- InkBlog owns an old-paper palette rather than inheriting an unrelated host
--- theme. Colour E-Ink devices get warm paper inks; monochrome devices receive
--- intentionally high-contrast, established grayscale equivalents.
-local WHITE = Blitbuffer.COLOR_WHITE
-local BLACK = Blitbuffer.COLOR_BLACK
-local function exactGray(value, fallback)
-    local color8 = Blitbuffer.Color8
-    if type(color8) == "function" then
-        local ok, color = pcall(color8, value)
-        if ok and color ~= nil then return color end
-    elseif type(color8) == "table" and type(color8.new) == "function" then
-        local ok, color = pcall(color8.new, color8, value)
-        if ok and color ~= nil then return color end
+-- Follow DChat's AppDock contract: use the resolved pane palette (or the
+-- optional AppDock theme module), with named KOReader colors as fallbacks.
+local C = {
+    WHITE = Blitbuffer.COLOR_WHITE,
+    BLACK = Blitbuffer.COLOR_BLACK,
+    GRAY_333 = Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK,
+    GRAY_666 = Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK,
+    GRAY_CCC = Blitbuffer.COLOR_LIGHT_GRAY or Blitbuffer.COLOR_WHITE,
+}
+C.THEME_GREEN = Blitbuffer.COLOR_DARK_GREEN or C.GRAY_666
+C.THEME_NAVY = Blitbuffer.COLOR_DARK_BLUE or C.THEME_GREEN
+C.THEME_TEAL = Blitbuffer.COLOR_DARK_CYAN or C.THEME_GREEN
+C.THEME_GOLD = Blitbuffer.COLOR_DARK_YELLOW or C.THEME_GREEN
+C.PAPER, C.PAPER_CARD, C.PARCHMENT = C.WHITE, C.GRAY_CCC, C.GRAY_666
+C.SEPIA, C.INK_BLUE, C.OCHRE, C.MOSS = C.GRAY_333, C.BLACK, C.THEME_GOLD, C.THEME_GREEN
+
+local function paletteFor(context)
+    if context and type(context.palette) == "table" then return context.palette end
+    local appdock = context and context.manager and context.manager.appdock
+    if ok_theme and type(Theme) == "table" and type(Theme.getPalette) == "function" then
+        local ok, palette = pcall(Theme.getPalette, appdock)
+        if ok and type(palette) == "table" then return palette end
     end
-    return fallback
+    return {
+        background = C.WHITE, surface = C.GRAY_CCC, surface_variant = C.GRAY_666,
+        primary = C.THEME_GREEN, on_primary = C.WHITE,
+        secondary = C.THEME_NAVY, on_secondary = C.WHITE,
+        tertiary = C.THEME_TEAL, on_tertiary = C.WHITE,
+        on_surface = C.BLACK, on_variant = C.GRAY_333,
+    }
 end
-local GRAY_333 = exactGray(0x33, Blitbuffer.COLOR_DARK_GRAY or BLACK)
-local GRAY_666 = exactGray(0x66, Blitbuffer.COLOR_GRAY_8 or GRAY_333)
-local GRAY_CCC = exactGray(0xCC, Blitbuffer.COLOR_LIGHT_GRAY or WHITE)
-local function colorInk(red, green, blue, fallback)
-    local screen = Device and Device.screen
-    if screen and type(screen.isColorEnabled) == "function" and type(Blitbuffer.ColorRGB32) == "function" then
-        local enabled_ok, enabled = pcall(screen.isColorEnabled, screen)
-        if enabled_ok and enabled then
-            local made, color = pcall(Blitbuffer.ColorRGB32, red, green, blue, 0xFF)
-            if made and color ~= nil then return color end
-        end
-    end
-    return fallback
+
+local function applyPalette(context)
+    local palette = paletteFor(context)
+    C.active_palette = {
+        background = palette.background or C.WHITE,
+        surface = palette.surface or C.GRAY_CCC,
+        surface_variant = palette.surface_variant or palette.tertiary or C.GRAY_666,
+        primary = palette.primary or C.THEME_GREEN,
+        on_primary = palette.on_primary or C.WHITE,
+        secondary = palette.secondary or C.THEME_NAVY,
+        on_secondary = palette.on_secondary or C.WHITE,
+        tertiary = palette.tertiary or C.THEME_TEAL,
+        on_tertiary = palette.on_tertiary or C.WHITE,
+        on_surface = palette.on_surface or C.BLACK,
+        on_variant = palette.on_variant or palette.on_surface or C.GRAY_333,
+    }
+    C.PAPER, C.PAPER_CARD, C.PARCHMENT = C.active_palette.background, C.active_palette.surface, C.active_palette.surface_variant
+    C.SEPIA, C.INK_BLUE, C.OCHRE, C.MOSS = C.active_palette.on_variant, C.active_palette.on_surface, C.active_palette.tertiary, C.active_palette.secondary
+    C.GRAY_333, C.GRAY_666, C.GRAY_CCC = C.active_palette.on_variant, C.active_palette.secondary, C.active_palette.surface
 end
-local PAPER = colorInk(246, 238, 216, WHITE)
-local PAPER_CARD = colorInk(255, 248, 229, WHITE)
-local PARCHMENT = colorInk(229, 211, 169, GRAY_CCC)
-local SEPIA = colorInk(104, 73, 48, GRAY_333)
-local INK_BLUE = colorInk(37, 62, 74, BLACK)
-local OCHRE = colorInk(171, 112, 35, GRAY_666)
-local MOSS = colorInk(74, 102, 73, GRAY_333)
 
 local function scale(value)
     return Device.screen:scaleBySize(value)
@@ -873,9 +888,10 @@ local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "
 
 function ActionButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local background = self.disabled and PARCHMENT or self.button_background or (self.primary and INK_BLUE or PAPER_CARD)
-    local foreground = self.disabled and SEPIA or self.button_foreground or (self.primary and PAPER or INK_BLUE)
-    local border = self.button_border or (self.primary and INK_BLUE or SEPIA)
+    local palette = C.active_palette or paletteFor()
+    local background = self.disabled and C.PARCHMENT or self.button_background or (self.primary and palette.primary or palette.surface)
+    local foreground = self.disabled and C.SEPIA or self.button_foreground or (self.primary and palette.on_primary or palette.on_surface)
+    local border = self.button_border or (self.primary and palette.primary or palette.surface_variant)
     local inset = math.max(2, math.floor(math.min(self.width, self.height) * .12))
     local content
     if self.body then
@@ -934,13 +950,13 @@ end
 local function addText(layer, text, x, y, width, size, options)
     options = options or {}
     local font_size = math.max(14, math.floor(tonumber(size) or 14))
-    layer[#layer + 1] = TextWidget:new{ text = tostring(text or ""), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or INK_BLUE, bold = options.bold == true, max_width = math.max(1, width), overlap_offset = { x, y } }
+    layer[#layer + 1] = TextWidget:new{ text = tostring(text or ""), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or C.INK_BLUE, bold = options.bold == true, max_width = math.max(1, width), overlap_offset = { x, y } }
 end
 
 local function addBox(layer, text, x, y, width, height, size, options)
     options = options or {}
     local font_size = math.max(options.serif and 16 or 14, math.floor(tonumber(size) or 14))
-    local box = TextBoxWidget:new{ text = tostring(text or ""), width = math.max(1, width), height = math.max(1, height), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or INK_BLUE, bgcolor = options.bg or PAPER_CARD, line_height = options.line_height or .30, alignment = options.alignment or "left" }
+    local box = TextBoxWidget:new{ text = tostring(text or ""), width = math.max(1, width), height = math.max(1, height), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or C.INK_BLUE, bgcolor = options.bg or C.PAPER_CARD, line_height = options.line_height or .30, alignment = options.alignment or "left" }
     box.overlap_offset = { x, y }
     layer[#layer + 1] = box
     return box
@@ -971,9 +987,9 @@ local function avatarWidget(profile, state, size)
         interior = created and widget or nil
     end
     if not interior then
-        interior = CenterContainer:new{ dimen = Geom:new{ w = size - scale(4), h = size - scale(4) }, TextWidget:new{ text = initialFor(profile and profile.display_name), face = Font:getFace("cfont", math.max(scale(14), math.floor(size * .45))), fgcolor = SEPIA, bold = true, max_width = size - scale(8) } }
+        interior = CenterContainer:new{ dimen = Geom:new{ w = size - scale(4), h = size - scale(4) }, TextWidget:new{ text = initialFor(profile and profile.display_name), face = Font:getFace("cfont", math.max(scale(14), math.floor(size * .45))), fgcolor = C.SEPIA, bold = true, max_width = size - scale(8) } }
     end
-    return FrameContainer:new{ width = size, height = size, padding = scale(2), bordersize = 1, color = SEPIA, radius = math.floor(size / 2), background = PARCHMENT, interior }
+    return FrameContainer:new{ width = size, height = size, padding = scale(2), bordersize = 1, color = C.SEPIA, radius = math.floor(size / 2), background = C.PARCHMENT, interior }
 end
 
 local function normalizedPost(record, fallback_profile)
@@ -1814,7 +1830,7 @@ function InkLogo:paintTo(bb, x, y)
             if not first then break end
             local last = first
             while last < 64 and row:sub(last + 1, last + 1) == "1" do last = last + 1 end
-            bb:paintRect(start_x + (first - 1) * unit, start_y + (row_index - 1) * unit, (last - first + 1) * unit, unit, SEPIA)
+            bb:paintRect(start_x + (first - 1) * unit, start_y + (row_index - 1) * unit, (last - first + 1) * unit, unit, C.SEPIA)
             column = last + 1
         end
     end
@@ -1823,24 +1839,24 @@ end
 local function buildBase(width, height)
     local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
     local layer = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false }
-    layer[#layer + 1] = FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = PAPER, CenterContainer:new{ dimen = pane.dimen, HorizontalSpan:new{ width = 0 } } }
+    layer[#layer + 1] = FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = C.PAPER, CenterContainer:new{ dimen = pane.dimen, HorizontalSpan:new{ width = 0 } } }
     pane[1] = layer
     return pane, layer
 end
 
 local function addHeader(layer, state, width, px, label)
     local margin, logo_size = px(12), px(31)
-    layer[#layer + 1] = FrameContainer:new{ width = width, height = px(48), padding = 0, bordersize = 0, background = PARCHMENT, CenterContainer:new{ dimen = Geom:new{ w = width, h = px(48) }, HorizontalSpan:new{ width = 0 } } }
+    layer[#layer + 1] = FrameContainer:new{ width = width, height = px(48), padding = 0, bordersize = 0, background = C.PARCHMENT, CenterContainer:new{ dimen = Geom:new{ w = width, h = px(48) }, HorizontalSpan:new{ width = 0 } } }
     local logo = InkLogo:new{ width = logo_size, height = logo_size }
     logo.overlap_offset = { margin, px(8) }
     layer[#layer + 1] = logo
-    addText(layer, label or _("InkBlog"), margin + logo_size + px(7), px(10), width - margin * 2 - logo_size - px(7), px(20), { serif = true, bold = true, color = INK_BLUE })
-    addText(layer, _("Write in ink. Read in peace."), margin + logo_size + px(7), px(33), width - margin * 2 - logo_size - px(7), px(10), { color = MOSS })
+    addText(layer, label or _("InkBlog"), margin + logo_size + px(7), px(10), width - margin * 2 - logo_size - px(7), px(20), { serif = true, bold = true, color = C.INK_BLUE })
+    addText(layer, _("Write in ink. Read in peace."), margin + logo_size + px(7), px(33), width - margin * 2 - logo_size - px(7), px(10), { color = C.MOSS })
 end
 
 local function addStatus(layer, state, width, y, px)
     local prefix = state.loading and _("Working · ") or ""
-    addText(layer, prefix .. tostring(state.status or ""), px(12), y, width - px(24), px(10), { color = SEPIA })
+    addText(layer, prefix .. tostring(state.status or ""), px(12), y, width - px(24), px(10), { color = C.SEPIA })
 end
 
 local function navTo(state, context, view)
@@ -1880,7 +1896,7 @@ local function renderPostList(layer, state, context, width, top, bottom, px, tit
         addButton(layer, _("Laden"), margin, toolbar_y, width - 2 * margin, toolbar_h, function() listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, true)
         local y, remaining = toolbar_y + toolbar_h + gap, bottom - (toolbar_y + toolbar_h + gap)
         if #state.posts == 0 then
-            addBox(layer, _("No cached posts. Tap Laden; network is only used after that explicit action."), margin, y, width - 2 * margin, math.max(1, remaining), px(14), { serif = true, color = SEPIA })
+            addBox(layer, _("No cached posts. Tap Laden; network is only used after that explicit action."), margin, y, width - 2 * margin, math.max(1, remaining), px(14), { serif = true, color = C.SEPIA })
         else
             local position = clamp((state.list_page or 0) + 1, 1, #state.posts)
             local post = state.posts[position]
@@ -1893,7 +1909,7 @@ local function renderPostList(layer, state, context, width, top, bottom, px, tit
     addText(layer, title, margin, top, width - 2 * margin, px(16), { serif = true, bold = true })
     local toolbar_y, toolbar_h = top + px(25), px(44)
     local half = math.floor((width - 2 * margin - gap) / 2)
-    addButton(layer, state.settings.sort == "popular" and _("Beliebt · ✓") or _("Beliebt"), margin, toolbar_y, half, toolbar_h, function() state.settings.sort = state.settings.sort == "popular" and "newest" or "popular"; saveSettings(state.settings); listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, state.settings.sort == "popular", nil, nil, { background = OCHRE, foreground = PAPER, border = OCHRE })
+    addButton(layer, state.settings.sort == "popular" and _("Beliebt · ✓") or _("Beliebt"), margin, toolbar_y, half, toolbar_h, function() state.settings.sort = state.settings.sort == "popular" and "newest" or "popular"; saveSettings(state.settings); listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, state.settings.sort == "popular", nil, nil, { background = C.OCHRE, foreground = C.active_palette.on_tertiary, border = C.OCHRE })
     addButton(layer, _("Laden"), margin + half + gap, toolbar_y, half, toolbar_h, function() listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, true)
     local available = bottom - (toolbar_y + toolbar_h) - px(52)
     local card_height = math.max(px(66), math.min(px(106), math.floor(available / 3)))
@@ -1905,7 +1921,7 @@ local function renderPostList(layer, state, context, width, top, bottom, px, tit
     local first = (page - 1) * per_page + 1
     local y = toolbar_y + toolbar_h + gap
     if #state.posts == 0 then
-        addBox(layer, _("No cached posts. Tap Laden; network is only used after that explicit action."), margin, y + px(10), width - 2 * margin, math.max(px(62), available - px(20)), px(14), { serif = true, color = GRAY_333 })
+        addBox(layer, _("No cached posts. Tap Laden; network is only used after that explicit action."), margin, y + px(10), width - 2 * margin, math.max(px(62), available - px(20)), px(14), { serif = true, color = C.GRAY_333 })
     else
         for index = first, math.min(#state.posts, first + per_page - 1) do
             local post = state.posts[index]
@@ -1931,7 +1947,7 @@ local function renderFallbackBlocks(layer, blocks, x, y, width, height, px)
         local lines = physicalLineCount(block.text or "", chars_per_line)
         local h = math.max(px(20), lines * math.max(px(17), math.floor(size * 1.35)) + px(5))
         if cursor + h > y + height then break end
-        local options = { serif = block.kind ~= "code", color = block.kind == "quote" and SEPIA or INK_BLUE, bg = block.kind == "code" and PARCHMENT or PAPER_CARD, line_height = .30 }
+        local options = { serif = block.kind ~= "code", color = block.kind == "quote" and C.SEPIA or C.INK_BLUE, bg = block.kind == "code" and C.PARCHMENT or C.PAPER_CARD, line_height = .30 }
         addBox(layer, plainInlineText(block.text), x + (block.kind == "quote" and px(9) or 0), cursor, width - (block.kind == "quote" and px(9) or 0), h, size, options)
         cursor = cursor + h + px(4)
     end
@@ -1948,13 +1964,13 @@ local function renderArticle(layer, state, context, width, top, bottom, px)
     end
     local compact = bottom - top < px(300)
     local profile = authorProfileFor(post)
-    local title_height = px(compact and 52 or 74)
+    local title_height = px(compact and 68 or 102)
     addText(layer, postTitleFor(post), margin, top, width - 2 * margin, px(22), { serif = true, bold = true })
-    local avatar = avatarWidget(profile, state, px(compact and 28 or 36))
+    local avatar = avatarWidget(profile, state, px(compact and 42 or 64))
     avatar.inkblog_avatar_path, avatar.inkblog_avatar_owner = profile.avatar_path, profile.id
     avatar.overlap_offset = { margin, top + px(compact and 22 or 26) }
     layer[#layer + 1] = avatar
-    addText(layer, profile.display_name .. " · " .. tostring(post.published_at ~= "" and post.published_at or post.created_at or ""), margin + px(compact and 36 or 44), top + px(compact and 29 or 35), width - 2 * margin - px(compact and 36 or 44), px(10), { color = SEPIA })
+    addText(layer, profile.display_name .. " · " .. tostring(post.published_at ~= "" and post.published_at or post.created_at or ""), margin + px(compact and 36 or 44), top + px(compact and 29 or 35), width - 2 * margin - px(compact and 36 or 44), px(10), { color = C.SEPIA })
     local actions_y, action_h = top + title_height, px(44)
     local w4 = math.floor((width - 2 * margin - 3 * gap) / 4)
     addButton(layer, _("‹ Liste"), margin, actions_y, w4, action_h, function() state.view = state.mode == "blog" and "author" or "feed"; requestRebuild(context) end)
@@ -2101,7 +2117,7 @@ local function renderProfile(layer, state, context, width, top, bottom, px)
     local profile = state.profile or { id = state.session.user.id, display_name = state.session.user.email:match("^([^@]+)") or _("Reader"), bio = _("Tap Profil bearbeiten to add a bio.") }
     local avatar = avatarWidget(profile, state, px(58)); avatar.overlap_offset = { margin, top }; layer[#layer + 1] = avatar
     addText(layer, profile.display_name or _("Reader"), margin + px(69), top + px(3), width - margin * 2 - px(69), px(19), { serif = true, bold = true })
-    addText(layer, profile.bio or "", margin + px(69), top + px(28), width - margin * 2 - px(69), px(11), { color = GRAY_333 })
+    addText(layer, profile.bio or "", margin + px(69), top + px(28), width - margin * 2 - px(69), px(11), { color = C.GRAY_333 })
     local buttons_y, half = top + px(68), math.floor((width - 2 * margin - gap) / 2)
     addButton(layer, _("Profil bearbeiten"), margin, buttons_y, half, px(44), function() promptProfileEdit(state, context) end)
     addButton(layer, _("Avatar"), margin + half + gap, buttons_y, half, px(44), function() promptAvatarUpload(state, context) end)
@@ -2112,7 +2128,7 @@ local function renderProfile(layer, state, context, width, top, bottom, px)
     local item_w = math.floor((width - 2 * margin - gap) / 2)
     addButton(layer, _("Meine Beiträge"), margin, below + px(23), item_w, px(44), function() state.view = "mine"; listPosts(state, context, "mine", nil) end, true)
     addButton(layer, string.format(_("Entwürfe (%d)"), #state.drafts), margin + item_w + gap, below + px(23), item_w, px(44), function() state.view = "drafts"; requestRebuild(context) end)
-    if state.pending_image_path then addText(layer, _("Image handover ready: ") .. state.pending_image_path:match("([^/]+)$"), margin, below + px(76), width - 2 * margin, px(10), { color = GRAY_666 }) end
+    if state.pending_image_path then addText(layer, _("Image handover ready: ") .. state.pending_image_path:match("([^/]+)$"), margin, below + px(76), width - 2 * margin, px(10), { color = C.GRAY_666 }) end
 end
 
 local function renderDrafts(layer, state, context, width, top, bottom, px)
@@ -2136,7 +2152,7 @@ local function renderAuthor(layer, state, context, width, top, bottom, px)
     local avatar = avatarWidget(profile, state, avatar_size); avatar.overlap_offset = { margin, top }; layer[#layer + 1] = avatar
     local profile_left = margin + avatar_size + px(10)
     addText(layer, profile.display_name or _("Author"), profile_left, top + px(2), width - margin - profile_left, px(18), { serif = true, bold = true })
-    addText(layer, profile.bio or "", profile_left, top + px(27), width - margin - profile_left, px(10), { color = SEPIA })
+    addText(layer, profile.bio or "", profile_left, top + px(27), width - margin - profile_left, px(10), { color = C.SEPIA })
     local half = math.floor((width - 2 * margin - gap) / 2)
     local actions_y, actions_h = top + px(compact and 45 or 62), px(compact and 40 or 44)
     addButton(layer, profile.followed and _("Folge ich ✓") or _("Folgen"), margin, actions_y, half, actions_h, function() toggleFollow(state, context) end, profile.followed)
@@ -2165,6 +2181,7 @@ local function renderNotifications(layer, state, context, width, top, bottom, px
 end
 
 local function buildPane(instance, context)
+    applyPalette(context)
     local state = stateFor(instance)
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
@@ -2207,7 +2224,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.3.1",
+    version = "1.3.2",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",
@@ -2216,7 +2233,8 @@ return {
     buildPane = buildPane,
     openFile = acceptFile,
     _test = {
-        ActionButton = ActionButton, InkLogo = InkLogo, COLORS = { black = BLACK, white = WHITE, gray333 = GRAY_333, gray666 = GRAY_666, grayccc = GRAY_CCC, ink = INK_BLUE, paper = PAPER, parchment = PARCHMENT, sepia = SEPIA, ochre = OCHRE, moss = MOSS },
+        ActionButton = ActionButton, InkLogo = InkLogo,
+        getColors = function() return { black = C.BLACK, white = C.WHITE, gray333 = C.GRAY_333, gray666 = C.GRAY_666, grayccc = C.GRAY_CCC, ink = C.INK_BLUE, paper = C.PAPER, parchment = C.PARCHMENT, sepia = C.SEPIA, ochre = C.OCHRE, moss = C.MOSS } end,
         stateFor = stateFor, markdownBlocks = markdownBlocks, paginateBlocks = paginateBlocks, utf8Cut = utf8Cut, utf8Length = utf8Length,
         validManagedPath = validManagedPath, imageMimeForPath = imageMimeForPath, restPath = restPath, applySessionResult = applySessionResult, normalizedPost = normalizedPost, enrichPostWithProfile = enrichPostWithProfile,
         getTbsIdentity = function() return getTbsIdentity and getTbsIdentity() end,

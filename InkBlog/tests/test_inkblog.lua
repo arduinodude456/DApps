@@ -3,7 +3,6 @@
 
 local temp_root = "/tmp/inkblog-test-" .. tostring(os.time())
 os.execute("mkdir -p " .. string.format("%q", temp_root))
-local colour_enabled = false
 
 local function class(parent)
     local cls = {}
@@ -52,7 +51,10 @@ local Decode = setmetatable({ simple = {} }, { __call = function(_, raw)
     return table.remove(decoded_responses, 1) or {}
 end })
 package.preload["json"] = function() return { encode = simpleJson, decode = Decode } end
-package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "#FFF", COLOR_BLACK = "#000", COLOR_DARK_GRAY = "#333", COLOR_GRAY_8 = "#666", COLOR_LIGHT_GRAY = "#CCC", ColorRGB32 = function(red, green, blue) return string.format("rgb:%d,%d,%d", red, green, blue) end } end
+package.preload["ffi/blitbuffer"] = function() return {
+    COLOR_WHITE = "#FFF", COLOR_BLACK = "#000", COLOR_DARK_GRAY = "#333", COLOR_GRAY_8 = "#666", COLOR_LIGHT_GRAY = "#CCC",
+    COLOR_DARK_GREEN = "#164A34", COLOR_DARK_BLUE = "#203A68", COLOR_DARK_CYAN = "#166A72", COLOR_DARK_YELLOW = "#9A6810",
+} end
 package.preload["ui/widget/container/centercontainer"] = function() return Widget end
 package.preload["ui/widget/confirmbox"] = function() return Widget end
 package.preload["datastorage"] = function() return { getDataDir = function() return temp_root end } end
@@ -126,16 +128,17 @@ local function check(condition, message)
     if not condition then error("TEST FAILED: " .. message, 2) end
 end
 
-local function context(width, height)
+local function context(width, height, palette)
     return {
         dimen = { w = width, h = height },
         px = function(value) return value end,
+        palette = palette,
         requestRebuild = function() end,
     }
 end
 
 check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
-check(app.version == "1.3.1", "catalog version exposes the corrected old-paper profile release")
+check(app.version == "1.3.2", "catalog version exposes the DChat-palette old-paper release")
 local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
 package.loaded["appdock_tbs_account"] = nil
 package.preload["appdock_tbs_account"] = function()
@@ -242,6 +245,7 @@ for _, widget in ipairs(rendered_article[1]) do
     if widget.inkblog_action == "open_author_profile" then profile_button = widget end
 end
 check(article_avatar, "opened article includes the author's round avatar stamp")
+check(article_avatar and article_avatar.width == 64, "normal article displays a larger 64 px author avatar")
 check(profile_button, "a foreign article exposes a clear profile action")
 profile_button:onTapInkBlogAction()
 check(article_state.view == "author", "profile action opens the foreign author's public account")
@@ -269,6 +273,9 @@ for _, widget in ipairs(own_rendered_article[1]) do
     if type(widget.text) == "string" and widget.text:find("A quiet page", 1, true) then compact_article_text = widget; break end
 end
 check(compact_article_text, "compact article keeps a visible content block below its controls")
+local compact_avatar
+for _, widget in ipairs(own_rendered_article[1]) do if widget.inkblog_avatar_owner == article_record.author_id then compact_avatar = widget end end
+check(compact_avatar and compact_avatar.width == 42, "compact article displays a larger 42 px author avatar")
 
 local missing_article_instance = {}
 local missing_article_state = app._test.stateFor(missing_article_instance)
@@ -458,12 +465,19 @@ button:paintTo({}, 37, 91)
 local range = button.ges_events.TapInkBlogAction[1].range
 check(range.x == 37 and range.y == 91 and range.w == 120 and range.h == 44, "touch range follows paint offset")
 
--- The old-paper palette falls back to clear grayscale on monochrome readers.
-local colors = app._test.COLORS
-check(colors.ink == "#000" and colors.paper == "#FFF" and colors.parchment == "#CCC" and colors.sepia == "#333", "old-paper palette keeps high contrast in monochrome")
-colour_enabled = true
-local colour_app = dofile(test_file:gsub("tests/test_inkblog.lua$", "inkblog.lua"))
-check(colour_app._test.COLORS.paper == "rgb:246,238,216" and colour_app._test.COLORS.ink == "rgb:37,62,74", "old-paper palette uses RGB inks on colour E-Ink devices")
+-- DChat/AppDock resolves colors into context.palette. InkBlog uses that exact
+-- palette contract instead of constructing unsupported RGB values itself.
+local palette = {
+    background = "paper-background", surface = "paper-surface", surface_variant = "paper-edge",
+    primary = "theme-primary", on_primary = "theme-primary-text", secondary = "theme-secondary", on_secondary = "theme-secondary-text",
+    tertiary = "theme-tertiary", on_tertiary = "theme-tertiary-text", on_surface = "theme-ink", on_variant = "theme-muted",
+}
+local palette_pane = app.buildPane({}, context(600, 760, palette))
+local colors = app._test.getColors()
+check(colors.paper == "paper-background" and colors.parchment == "paper-edge" and colors.ink == "theme-ink", "InkBlog uses the AppDock-provided DChat palette for old-paper surfaces and text")
+local palette_button = app._test.ActionButton:new{ width = 120, height = 44, primary = true, title = "Theme" }
+check(palette_button[1].background == "theme-primary", "primary InkBlog buttons use the AppDock primary color")
+check(palette_pane.dimen.w == 600, "palette-backed pane builds with normal geometry")
 check(#app._test.LOGO_ROWS == 64 and #app._test.LOGO_ROWS[1] == 64, "inline 64x64 logo present")
 
-print("InkBlog tests passed: stable publishing, author profiles, avatar stamps, old-paper fallback, auth retry, local drafts, UTF-8 markdown, pagination and touch offsets.")
+print("InkBlog tests passed: stable publishing, author profiles, avatar stamps, AppDock theme palette, auth retry, local drafts, UTF-8 markdown, pagination and touch offsets.")
