@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">InkBlog</title>
+  <desc id="desc">Schwarzer Tintentropfen mit weißer Federspitze im Negativraum.</desc>
+  <path fill="#000000" d="M64 5C56 20 20 54 20 78a44 44 0 0 0 88 0C108 54 72 20 64 5Z"/>
+  <path fill="#FFFFFF" d="M64 40 44 78 59 100h10l15-22Z"/>
+  <path fill="#000000" d="M62 63h4v38h-4Z"/>
+  <circle fill="#000000" cx="64" cy="63" r="5"/>
+</svg>
