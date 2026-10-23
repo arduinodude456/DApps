@@ -850,7 +850,8 @@ function ActionButton:init()
     local inset = math.max(2, math.floor(math.min(self.width, self.height) * .12))
     local content
     if self.body then
-        content = TextBoxWidget:new{ text = self.body, width = math.max(1, self.width - inset * 2), height = math.max(1, self.height - inset * 2), face = Font:getFace("smallinfofont", math.max(14, math.floor(self.height * .31))), fgcolor = foreground, bgcolor = background, line_height = 0.31, alignment = "left" }
+        local body_font_size = math.min(18, math.max(14, math.floor(self.height * .16)))
+        content = TextBoxWidget:new{ text = self.body, width = math.max(1, self.width - inset * 2), height = math.max(1, self.height - inset * 2), face = Font:getFace("smallinfofont", body_font_size), fgcolor = foreground, bgcolor = background, line_height = 0.31, alignment = "left" }
     else
         content = CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", math.max(14, math.floor(self.height * .32))), fgcolor = foreground, bold = true, max_width = math.max(1, self.width - inset * 2) } }
     end
@@ -2006,7 +2007,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.2.1",
+    version = "1.2.2",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",

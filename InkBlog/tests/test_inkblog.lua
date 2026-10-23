@@ -119,7 +119,7 @@ local function context(width, height)
 end
 
 check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
-check(app.version == "1.2.1", "catalog version exposes the crash-safe action release")
+check(app.version == "1.2.2", "catalog version exposes the readable body-field release")
 local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
 package.loaded["appdock_tbs_account"] = nil
 package.preload["appdock_tbs_account"] = function()
@@ -168,6 +168,9 @@ for _, widget in ipairs(write_pane[1]) do
     if widget.inkblog_editor_field == "body" then body_field = widget end
 end
 check(title_field and body_field, "write view exposes visible editable title and multiline body fields")
+local body_preview_widget = body_field[1] and body_field[1][1]
+check(body_preview_widget and body_preview_widget.face and body_preview_widget.face.size <= 18,
+    "large multiline body field keeps its preview font within the readable 18pt cap")
 body_field:onTapInkBlogAction()
 check(keyboard_requests[#keyboard_requests] and keyboard_requests[#keyboard_requests].multiline == true,
     "body field opens the AppDock keyboard in multiline mode")
