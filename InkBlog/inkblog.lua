@@ -363,7 +363,9 @@ local function stateFor(instance)
 end
 
 local function requestRebuild(context)
-    if context and type(context.requestRebuild) == "function" then context.requestRebuild("ui") end
+    if context and type(context.requestRebuild) == "function" then
+        pcall(context.requestRebuild, "ui")
+    end
 end
 
 local function showInput(dialog)
@@ -602,7 +604,13 @@ local function runNetwork(state, context, busy, operation, require_session)
     requestRebuild(context)
     local function job()
         if require_session then
-            local authenticated, auth_error = ensureAccess(state)
+            local checked, authenticated, auth_error = pcall(ensureAccess, state)
+            if not checked then
+                state.loading = false
+                state.status = _("InkBlog could not verify the account. Check the TBS account and retry.")
+                requestRebuild(context)
+                return
+            end
             if not authenticated then
                 state.loading = false
                 state.status = auth_error or _("Use the TBS account signed in on this reader.")
@@ -615,7 +623,16 @@ local function runNetwork(state, context, busy, operation, require_session)
         if not ok then state.status = _("InkBlog could not complete that action.") end
         requestRebuild(context)
     end
-    if UIManager and type(UIManager.tickAfterNext) == "function" then UIManager:tickAfterNext(job) else job() end
+    if UIManager and type(UIManager.tickAfterNext) == "function" then
+        local scheduled = pcall(UIManager.tickAfterNext, UIManager, job)
+        if not scheduled then
+            state.loading = false
+            state.status = _("InkBlog could not start that request. Check the connection and retry.")
+            requestRebuild(context)
+        end
+    else
+        job()
+    end
 end
 
 local function markdownImagePaths(markdown)
@@ -824,7 +841,7 @@ local function paginateBlocks(blocks, content_width, content_height, px)
     return pages
 end
 
-local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "", body = nil, callback = nil, primary = false, disabled = false, dimen = nil }
+local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "", body = nil, callback = nil, primary = false, disabled = false, dimen = nil, state = nil, context = nil }
 
 function ActionButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -848,7 +865,16 @@ function ActionButton:paintTo(bb, x, y)
 end
 
 function ActionButton:onTapInkBlogAction()
-    if not self.disabled and self.callback then self.callback() end
+    if not self.disabled and self.callback then
+        local ok = pcall(self.callback)
+        if not ok then
+            if type(self.state) == "table" then
+                self.state.loading = false
+                self.state.status = _("InkBlog could not complete that action. Your local content remains available.")
+            end
+            requestRebuild(self.context)
+        end
+    end
     return true
 end
 
@@ -867,7 +893,7 @@ local function addButton(layer, title, x, y, width, height, callback, primary, b
     local candidate = { x = x, y = y, w = width, h = height }
     layer._inkblog_button_bounds = layer._inkblog_button_bounds or {}
     for _, occupied in ipairs(layer._inkblog_button_bounds) do if rectanglesOverlap(candidate, occupied) then return nil end end
-    local button = ActionButton:new{ title = title, body = body, width = width, height = height, callback = callback, primary = primary == true, disabled = disabled == true }
+    local button = ActionButton:new{ title = title, body = body, width = width, height = height, callback = callback, primary = primary == true, disabled = disabled == true, state = layer._inkblog_state, context = layer._inkblog_context }
     button.overlap_offset = { x, y }
     layer[#layer + 1] = button
     layer._inkblog_button_bounds[#layer._inkblog_button_bounds + 1] = candidate
@@ -1712,7 +1738,7 @@ local function renderPostList(layer, state, context, width, top, bottom, px, tit
             local post = state.posts[index]
             local author = post.display_name or _("Unknown author")
             local meta = author .. " · " .. tostring(post.like_count or 0) .. " Klecks · " .. tostring(post.comment_count or 0) .. " Randnotizen"
-            local card = ActionButton:new{ title = "", body = tostring(post.title or _("Untitled")) .. "\n" .. meta .. "\n" .. postPreview(post, math.max(48, math.floor(width / px(5)))), width = width - 2 * margin, height = card_height, callback = function() openPost(state, context, post) end }
+            local card = ActionButton:new{ title = "", body = tostring(post.title or _("Untitled")) .. "\n" .. meta .. "\n" .. postPreview(post, math.max(48, math.floor(width / px(5)))), width = width - 2 * margin, height = card_height, callback = function() openPost(state, context, post) end, state = state, context = context }
             card.overlap_offset = { margin, y }
             layer[#layer + 1] = card
             y = y + card_height + gap
@@ -1777,7 +1803,7 @@ local function renderArticle(layer, state, context, width, top, bottom, px)
         for index = (page - 1) * per_page + 1, math.min(#comments, page * per_page) do
             local comment = comments[index]
             local inset = comment.parent_id and px(16) or 0
-            local copy = ActionButton:new{ title = "", body = (comment.display_name or _("Reader")) .. " · " .. tostring(comment.like_count or 0) .. " Klecks\n" .. postPreview({ markdown = comment.body }, math.max(36, math.floor(width / px(6)))), width = width - 2 * margin - inset, height = card_h, callback = function() promptCommentActions(state, context, comment) end }
+            local copy = ActionButton:new{ title = "", body = (comment.display_name or _("Reader")) .. " · " .. tostring(comment.like_count or 0) .. " Klecks\n" .. postPreview({ markdown = comment.body }, math.max(36, math.floor(width / px(6)))), width = width - 2 * margin - inset, height = card_h, callback = function() promptCommentActions(state, context, comment) end, state = state, context = context }
             copy.overlap_offset = { margin + inset, y }; layer[#layer + 1] = copy
             y = y + card_h + gap
         end
@@ -1909,7 +1935,7 @@ local function renderDrafts(layer, state, context, width, top, bottom, px)
     if #state.drafts == 0 then addBox(layer, _("No local drafts. A failed publish is always kept here for retry."), margin, y, width - 2 * margin, card_h, px(14), { serif = true }) end
     for index, draft in ipairs(state.drafts) do
         if index > 3 then break end
-        local card = ActionButton:new{ title = "", body = (draft.title ~= "" and draft.title or _("Untitled")) .. "\n" .. postPreview({ markdown = draft.body }, 120), width = width - 2 * margin, height = card_h, callback = function() editDraft(state, context, draft) end }
+        local card = ActionButton:new{ title = "", body = (draft.title ~= "" and draft.title or _("Untitled")) .. "\n" .. postPreview({ markdown = draft.body }, 120), width = width - 2 * margin, height = card_h, callback = function() editDraft(state, context, draft) end, state = state, context = context }
         card.overlap_offset = { margin, y }; layer[#layer + 1] = card; y = y + card_h + gap
     end
 end
@@ -1937,7 +1963,7 @@ local function renderNotifications(layer, state, context, width, top, bottom, px
         if index > 3 then break end
         local marker = note.read_at and "" or "• "
         local body = marker .. tostring(note.kind or _("Activity")) .. "\n" .. tostring(note.created_at or "")
-        local card = ActionButton:new{ title = "", body = body, width = width - 2 * margin, height = card_h, callback = function() openNotification(state, context, note) end, primary = not note.read_at }
+        local card = ActionButton:new{ title = "", body = body, width = width - 2 * margin, height = card_h, callback = function() openNotification(state, context, note) end, primary = not note.read_at, state = state, context = context }
         card.overlap_offset = { margin, y }; layer[#layer + 1] = card; y = y + card_h + gap
     end
 end
@@ -1947,6 +1973,7 @@ local function buildPane(instance, context)
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
     local pane, layer = buildBase(width, height)
+    layer._inkblog_state, layer._inkblog_context = state, context
     local top, nav_space = px(52), px(56)
     local bottom = height - nav_space
     addHeader(layer, state, width, px, state.view == "article" and _("InkBlog · Lesen") or _("InkBlog"))
@@ -1979,7 +2006,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.2.0",
+    version = "1.2.1",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",

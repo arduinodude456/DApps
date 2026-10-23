@@ -119,7 +119,7 @@ local function context(width, height)
 end
 
 check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
-check(app.version == "1.2.0", "catalog version exposes the multiline-editor release")
+check(app.version == "1.2.1", "catalog version exposes the crash-safe action release")
 local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
 package.loaded["appdock_tbs_account"] = nil
 package.preload["appdock_tbs_account"] = function()
@@ -192,6 +192,48 @@ for _, rect in ipairs(compact_write_pane[1]._inkblog_button_bounds or {}) do
     check(rect.x >= 0 and rect.y >= 0 and rect.x + rect.w <= 600 and rect.y + rect.h <= 350,
         "compact write control remains within split-pane bounds")
 end
+
+local article_instance = {}
+local article_state = app._test.stateFor(article_instance)
+local article_record = {
+    id = "223e4567-e89b-12d3-a456-426614174000", author_id = "323e4567-e89b-12d3-a456-426614174000",
+    title = "Crash-proof article", markdown = "# A quiet page\n\nA paragraph with **emphasis**.",
+    created_at = "2026-10-23T12:00:00Z", like_count = 0, comment_count = 0,
+}
+article_state.posts, article_state.view, article_state.mode = { article_record }, "feed", "feed"
+local feed_pane = app.buildPane(article_instance, context(600, 760))
+local article_card
+for _, widget in ipairs(feed_pane[1]) do
+    if widget.body and widget.body:find("Crash-proof article", 1, true) then article_card = widget; break end
+end
+check(article_card, "feed renders a tappable article card")
+article_card:onTapInkBlogAction()
+check(article_state.view == "article" and article_state.selected_post == article_record, "article card tap opens the selected article")
+local rendered_article = app.buildPane(article_instance, context(600, 760))
+check(rendered_article.dimen.w == 600 and rendered_article.dimen.h == 760, "opened article renders without a pane exception")
+
+local publish_instance = {}
+local publish_state = app._test.stateFor(publish_instance)
+publish_state.view = "write"
+publish_state.editor = { title = "Offline publish retry", body = "The complete text stays local.", images = {} }
+local publish_pane = app.buildPane(publish_instance, context(600, 760))
+local publish_button
+for _, widget in ipairs(publish_pane[1]) do if widget.title == "Publizieren" then publish_button = widget; break end end
+check(publish_button, "write screen exposes a publish button")
+publish_button:onTapInkBlogAction()
+check(not publish_state.loading and #publish_state.drafts == 1, "failed TBS/network publication does not strand the UI and retains a local draft")
+check(publish_state.drafts[1].body == "The complete text stays local.", "publish retry retains every body byte locally")
+
+local failure_state = { loading = true, status = "" }
+local failure_context = context(600, 760)
+failure_context.requestRebuild = function() error("simulated stale AppDock host") end
+local failure_button = app._test.ActionButton:new{
+    width = 120, height = 44, state = failure_state, context = failure_context,
+    callback = function() error("simulated callback failure") end,
+}
+failure_button:onTapInkBlogAction()
+check(not failure_state.loading and failure_state.status:find("local content", 1, true) ~= nil,
+    "unexpected tap errors are contained and translated into visible status")
 
 -- Auth errors should be readable and a later successful retry should persist a session.
 local auth_state = { session = {}, status = "" }
