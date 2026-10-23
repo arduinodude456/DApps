@@ -3,6 +3,7 @@
 
 local temp_root = "/tmp/inkblog-test-" .. tostring(os.time())
 os.execute("mkdir -p " .. string.format("%q", temp_root))
+local colour_enabled = false
 
 local function class(parent)
     local cls = {}
@@ -46,13 +47,16 @@ local function simpleJson(value)
     return "{" .. table.concat(parts, ",") .. "}"
 end
 
-local Decode = setmetatable({ simple = {} }, { __call = function(_, raw) return {} end })
+local decoded_responses = {}
+local Decode = setmetatable({ simple = {} }, { __call = function(_, raw)
+    return table.remove(decoded_responses, 1) or {}
+end })
 package.preload["json"] = function() return { encode = simpleJson, decode = Decode } end
-package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "#FFF", COLOR_BLACK = "#000", COLOR_DARK_GRAY = "#333", COLOR_GRAY_8 = "#666", COLOR_LIGHT_GRAY = "#CCC" } end
+package.preload["ffi/blitbuffer"] = function() return { COLOR_WHITE = "#FFF", COLOR_BLACK = "#000", COLOR_DARK_GRAY = "#333", COLOR_GRAY_8 = "#666", COLOR_LIGHT_GRAY = "#CCC", ColorRGB32 = function(red, green, blue) return string.format("rgb:%d,%d,%d", red, green, blue) end } end
 package.preload["ui/widget/container/centercontainer"] = function() return Widget end
 package.preload["ui/widget/confirmbox"] = function() return Widget end
 package.preload["datastorage"] = function() return { getDataDir = function() return temp_root end } end
-package.preload["device"] = function() return { screen = { scaleBySize = function(_, value) return value end } } end
+package.preload["device"] = function() return { screen = { scaleBySize = function(_, value) return value end, isColorEnabled = function() return colour_enabled end } } end
 package.preload["ui/font"] = function() return { getFace = function(_, name, size) return { name = name, size = size } end } end
 package.preload["ui/widget/container/framecontainer"] = function() return Widget end
 package.preload["ui/geometry"] = function() return { new = function(_, value) return value end } end
@@ -87,12 +91,17 @@ package.preload["libs/libkoreader-lfs"] = function()
     }
 end
 
-local http_required = 0
+local http_required, http_responses = 0, {}
 package.preload["ssl.https"] = function()
     http_required = http_required + 1
-    return { request = function() error("network must not occur in buildPane") end }
+    return { request = function(request)
+        local response = table.remove(http_responses, 1)
+        if not response then error("network must not occur in buildPane") end
+        if type(request.sink) == "function" and response.body then request.sink(response.body) end
+        return 1, response.code or 200, response.headers or {}, "OK"
+    end }
 end
-package.preload["socket"] = function() return { skip = function(_, value) return value end } end
+package.preload["socket"] = function() return { skip = function(count, ...) return select(count + 1, ...) end } end
 package.preload["ltn12"] = function() return { source = { string = function(value) return value end } } end
 package.preload["socketutil"] = function() return { set_timeout = function() end, reset_timeout = function() end } end
 
@@ -126,7 +135,7 @@ local function context(width, height)
 end
 
 check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
-check(app.version == "1.2.3", "catalog version exposes the stable article-rendering release")
+check(app.version == "1.3.1", "catalog version exposes the corrected old-paper profile release")
 local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
 package.loaded["appdock_tbs_account"] = nil
 package.preload["appdock_tbs_account"] = function()
@@ -208,7 +217,7 @@ local article_state = app._test.stateFor(article_instance)
 local article_record = {
     id = "223e4567-e89b-12d3-a456-426614174000", author_id = "323e4567-e89b-12d3-a456-426614174000",
     title = "Crash-proof article", markdown = "# A quiet page\n\nA paragraph with **emphasis**.",
-    created_at = "2026-10-23T12:00:00Z", like_count = 0, comment_count = 0,
+    created_at = "2026-10-23T12:00:00Z", avatar_path = "323e4567-e89b-12d3-a456-426614174000/423e4567-e89b-12d3-a456-426614174000.png", like_count = 0, comment_count = 0,
 }
 article_state.posts, article_state.view, article_state.mode = { article_record }, "discover", "discover"
 local feed_pane = app.buildPane(article_instance, context(600, 760))
@@ -217,11 +226,27 @@ for _, widget in ipairs(feed_pane[1]) do
     if widget.body and widget.body:find("Crash-proof article", 1, true) then article_card = widget; break end
 end
 check(article_card, "feed renders a tappable article card")
+local preview_avatar
+for _, widget in ipairs(feed_pane[1]) do
+    if widget.inkblog_avatar_path == article_record.avatar_path then preview_avatar = widget; break end
+end
+check(preview_avatar, "post preview includes the author's round avatar stamp")
 article_card:onTapInkBlogAction()
 check(article_state.view == "article" and article_state.selected_post == article_record, "article card tap opens the selected article")
 local rendered_article = app.buildPane(article_instance, context(600, 760))
 check(rendered_article.dimen.w == 600 and rendered_article.dimen.h == 760, "opened discovered article renders without a pane exception")
 check(html_widget_creations == 0, "article renderer avoids the unstable HtmlBoxWidget paint path")
+local article_avatar, profile_button
+for _, widget in ipairs(rendered_article[1]) do
+    if widget.inkblog_avatar_path == article_record.avatar_path then article_avatar = widget end
+    if widget.inkblog_action == "open_author_profile" then profile_button = widget end
+end
+check(article_avatar, "opened article includes the author's round avatar stamp")
+check(profile_button, "a foreign article exposes a clear profile action")
+profile_button:onTapInkBlogAction()
+check(article_state.view == "author", "profile action opens the foreign author's public account")
+local author_pane = app.buildPane(article_instance, context(600, 760))
+check(author_pane.dimen.h == 760, "foreign author profile renders even when its network load fails")
 
 local own_article_instance = {}
 local own_article_state = app._test.stateFor(own_article_instance)
@@ -239,6 +264,11 @@ local own_rendered_article = app.buildPane(own_article_instance, context(600, 35
 check(own_rendered_article.dimen.w == 600 and own_rendered_article.dimen.h == 350,
     "own article renders inside a 600x350 AppDock split pane")
 check(html_widget_creations == 0, "neither discovered nor own articles instantiate HtmlBoxWidget")
+local compact_article_text
+for _, widget in ipairs(own_rendered_article[1]) do
+    if type(widget.text) == "string" and widget.text:find("A quiet page", 1, true) then compact_article_text = widget; break end
+end
+check(compact_article_text, "compact article keeps a visible content block below its controls")
 
 local missing_article_instance = {}
 local missing_article_state = app._test.stateFor(missing_article_instance)
@@ -268,6 +298,76 @@ check(publish_button, "write screen exposes a publish button")
 publish_button:onTapInkBlogAction()
 check(not publish_state.loading and #publish_state.drafts == 1, "failed TBS/network publication does not strand the UI and retains a local draft")
 check(publish_state.drafts[1].body == "The complete text stays local.", "publish retry retains every body byte locally")
+
+-- A successful POST supplies only post columns. InkBlog must enrich and sanitize
+-- that response before moving to the reader, which is the crash-prone transition.
+local successful_publish_instance = {}
+local successful_publish_state = app._test.stateFor(successful_publish_instance)
+local AVATAR_PATH = "323e4567-e89b-12d3-a456-426614174000/523e4567-e89b-12d3-a456-426614174000.png"
+successful_publish_state.session = {
+    access_token = "access", refresh_token = "refresh", expires_at = os.time() + 3600, tbs_account_id = "",
+    user = { id = TBS_ACCOUNT_ID, email = "reader@example.org" },
+}
+successful_publish_state.profile = { id = TBS_ACCOUNT_ID, display_name = "Ink Reader", bio = "A quiet shelf.", avatar_path = AVATAR_PATH }
+successful_publish_state.view = "write"
+successful_publish_state.editor = { title = "A complete post", body = "This must not crash KOReader.", images = {} }
+http_responses[#http_responses + 1] = { code = 201, body = "[post]" }
+decoded_responses[#decoded_responses + 1] = { {
+    id = "623e4567-e89b-12d3-a456-426614174000", author_id = TBS_ACCOUNT_ID,
+    title = "A complete post", markdown = "This must not crash KOReader.", status = "published", created_at = "2026-10-23T12:00:00Z",
+} }
+http_responses[#http_responses + 1] = { code = 200, body = "[profile]" }
+decoded_responses[#decoded_responses + 1] = { { id = TBS_ACCOUNT_ID, display_name = "Ink Reader", bio = "A quiet shelf.", avatar_path = AVATAR_PATH } }
+http_responses[#http_responses + 1] = { code = 200, body = "\137PNG\r\n\26\nportrait" }
+local successful_publish_pane = app.buildPane(successful_publish_instance, context(600, 760))
+local successful_publish_button
+for _, widget in ipairs(successful_publish_pane[1]) do if widget.title == "Publizieren" then successful_publish_button = widget; break end end
+check(successful_publish_button, "write screen exposes a publish button for the successful path")
+successful_publish_button:onTapInkBlogAction()
+check(not successful_publish_state.loading and successful_publish_state.view == "article", "successful publication reaches the reader without leaving a loading state")
+check(successful_publish_state.selected_post and successful_publish_state.selected_post.display_name == "Ink Reader", "POST response is enriched with the public author name")
+check(successful_publish_state.selected_post and successful_publish_state.selected_post.avatar_path == AVATAR_PATH, "POST response is enriched with the public author avatar")
+check(successful_publish_state.image_cache[AVATAR_PATH], "published article caches its author avatar within the bounded cache")
+local successful_article_pane = app.buildPane(successful_publish_instance, context(600, 760))
+check(successful_article_pane.dimen.h == 760, "enriched successful publication renders safely in the reader")
+
+-- A direct foreign post must not inherit the signed-in reader's name or avatar
+-- while the public profile lookup completes.
+local FOREIGN_AUTHOR_ID = "723e4567-e89b-12d3-a456-426614174000"
+local FOREIGN_AVATAR_PATH = FOREIGN_AUTHOR_ID .. "/823e4567-e89b-12d3-a456-426614174000.png"
+local foreign_state = app._test.stateFor({})
+foreign_state.session = successful_publish_state.session
+foreign_state.profile = successful_publish_state.profile
+http_responses[#http_responses + 1] = { code = 200, body = "[foreign profile]" }
+decoded_responses[#decoded_responses + 1] = { { id = FOREIGN_AUTHOR_ID, display_name = "Foreign Ink", bio = "Another shelf.", avatar_path = FOREIGN_AVATAR_PATH } }
+local foreign_post = app._test.enrichPostWithProfile(foreign_state, {
+    id = "923e4567-e89b-12d3-a456-426614174000", author_id = FOREIGN_AUTHOR_ID,
+    title = "Foreign post", markdown = "A separate author.", status = "published", created_at = "2026-10-23T12:00:00Z",
+})
+check(foreign_post and foreign_post.display_name == "Foreign Ink" and foreign_post.avatar_path == FOREIGN_AVATAR_PATH,
+    "direct foreign post resolves the fetched foreign profile before rendering")
+local multilingual_title = string.rep("界", 240)
+local normalized_multilingual = app._test.normalizedPost({ id = "a23e4567-e89b-12d3-a456-426614174000", author_id = FOREIGN_AUTHOR_ID, title = multilingual_title, markdown = "" })
+check(app._test.utf8Length(normalized_multilingual.title) == 240, "normalization preserves a valid 240-character Unicode title")
+
+local compact_author_instance = {}
+local compact_author_state = app._test.stateFor(compact_author_instance)
+compact_author_state.view, compact_author_state.mode, compact_author_state.selected_author_id = "author", "blog", FOREIGN_AUTHOR_ID
+compact_author_state.author_profile = { id = FOREIGN_AUTHOR_ID, display_name = "Foreign Ink", bio = "Another shelf.", avatar_path = FOREIGN_AVATAR_PATH }
+compact_author_state.posts = { foreign_post }
+local compact_author_pane = app.buildPane(compact_author_instance, context(600, 350))
+local compact_author_card
+for _, widget in ipairs(compact_author_pane[1]) do
+    if widget.body and widget.body:find("Foreign post", 1, true) then compact_author_card = widget; break end
+end
+check(compact_author_card, "compact foreign profile keeps one loaded post visible")
+for _, widget in ipairs(compact_author_pane[1]) do
+    if widget.ges_events and widget.dimen and widget.overlap_offset then
+        local x, y = widget.overlap_offset[1], widget.overlap_offset[2]
+        check(x >= 0 and y >= 0 and x + widget.dimen.w <= 600 and y + widget.dimen.h <= 350,
+            "compact foreign profile keeps every interactive element inside the pane")
+    end
+end
 
 local failure_state = { loading = true, status = "" }
 local failure_context = context(600, 760)
@@ -343,6 +443,9 @@ for _, group in ipairs(stress_pages) do
 end
 check(table.concat(seen_heading) == long_heading, "long heading text remains intact")
 check(table.concat(seen_code) == long_code, "code newlines remain intact")
+local near_limit_pages = app._test.paginateBlocks({ { kind = "paragraph", text = string.rep("x", 96 * 1024) } }, 190, 90, function(value) return value end)
+check(#near_limit_pages > 100, "a near-limit unbroken post paginates deterministically without native layout allocation")
+check(app._test.base64Encode("Man") == "TWFu" and app._test.base64Encode("Ma") == "TWE=", "chunked base64 preserves standard padding")
 check(app._test.restPath("posts", "limit=8") == "/rest/v1/inkblog_posts?limit=8", "PostgREST path uses the InkBlog table")
 check(app._test.restPath("profiles", nil) == "/rest/v1/inkblog_profiles", "profile route uses the InkBlog table")
 check(app._test.restPath("dchat_direct_messages", nil) == nil, "unknown legacy tables are refused")
@@ -355,9 +458,12 @@ button:paintTo({}, 37, 91)
 local range = button.ges_events.TapInkBlogAction[1].range
 check(range.x == 37 and range.y == 91 and range.w == 120 and range.h == 44, "touch range follows paint offset")
 
--- The UI stays independent from any context theme and uses the required gray scale.
+-- The old-paper palette falls back to clear grayscale on monochrome readers.
 local colors = app._test.COLORS
-check(colors.black == "#000" and colors.white == "#FFF" and colors.gray333 == "#333" and colors.gray666 == "#666" and colors.grayccc == "#CCC", "strict monochrome palette")
+check(colors.ink == "#000" and colors.paper == "#FFF" and colors.parchment == "#CCC" and colors.sepia == "#333", "old-paper palette keeps high contrast in monochrome")
+colour_enabled = true
+local colour_app = dofile(test_file:gsub("tests/test_inkblog.lua$", "inkblog.lua"))
+check(colour_app._test.COLORS.paper == "rgb:246,238,216" and colour_app._test.COLORS.ink == "rgb:37,62,74", "old-paper palette uses RGB inks on colour E-Ink devices")
 check(#app._test.LOGO_ROWS == 64 and #app._test.LOGO_ROWS[1] == 64, "inline 64x64 logo present")
 
-print("InkBlog tests passed: build isolation, auth retry, local drafts, UTF-8 markdown, pagination, touch offsets, monochrome.")
+print("InkBlog tests passed: stable publishing, author profiles, avatar stamps, old-paper fallback, auth retry, local drafts, UTF-8 markdown, pagination and touch offsets.")

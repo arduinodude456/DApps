@@ -45,6 +45,7 @@ local DRAFTS_FILE = "drafts.json"
 local IMAGE_DIR = DATA_DIR .. "/images"
 local MAX_RESPONSE_BYTES = 1024 * 1024
 local MAX_POST_BYTES = 96 * 1024
+local MAX_TITLE_BYTES = 240 * 4
 local MAX_IMAGE_BYTES = 700 * 1024
 local MAX_CACHED_IMAGES = 8
 -- The database RPCs cap every batch at 50.  Small batches also make page turns
@@ -66,9 +67,9 @@ local REST_TABLES = {
 local CONNECT_TIMEOUT = 8
 local REQUEST_TIMEOUT = 20
 
--- These values intentionally do not consult context.palette or appdock_theme.
--- Color8 makes the requested #333, #666 and #CCC exact on KOReader builds
--- which expose it.  Named colors are only a compatibility fallback.
+-- InkBlog owns an old-paper palette rather than inheriting an unrelated host
+-- theme. Colour E-Ink devices get warm paper inks; monochrome devices receive
+-- intentionally high-contrast, established grayscale equivalents.
 local WHITE = Blitbuffer.COLOR_WHITE
 local BLACK = Blitbuffer.COLOR_BLACK
 local function exactGray(value, fallback)
@@ -85,6 +86,24 @@ end
 local GRAY_333 = exactGray(0x33, Blitbuffer.COLOR_DARK_GRAY or BLACK)
 local GRAY_666 = exactGray(0x66, Blitbuffer.COLOR_GRAY_8 or GRAY_333)
 local GRAY_CCC = exactGray(0xCC, Blitbuffer.COLOR_LIGHT_GRAY or WHITE)
+local function colorInk(red, green, blue, fallback)
+    local screen = Device and Device.screen
+    if screen and type(screen.isColorEnabled) == "function" and type(Blitbuffer.ColorRGB32) == "function" then
+        local enabled_ok, enabled = pcall(screen.isColorEnabled, screen)
+        if enabled_ok and enabled then
+            local made, color = pcall(Blitbuffer.ColorRGB32, red, green, blue, 0xFF)
+            if made and color ~= nil then return color end
+        end
+    end
+    return fallback
+end
+local PAPER = colorInk(246, 238, 216, WHITE)
+local PAPER_CARD = colorInk(255, 248, 229, WHITE)
+local PARCHMENT = colorInk(229, 211, 169, GRAY_CCC)
+local SEPIA = colorInk(104, 73, 48, GRAY_333)
+local INK_BLUE = colorInk(37, 62, 74, BLACK)
+local OCHRE = colorInk(171, 112, 35, GRAY_666)
+local MOSS = colorInk(74, 102, 73, GRAY_333)
 
 local function scale(value)
     return Device.screen:scaleBySize(value)
@@ -273,6 +292,32 @@ local function initialFor(name)
     name = trim(name or "?")
     local letter = name:match("^%s*(.)") or "?"
     return letter:upper()
+end
+
+local function textField(value, maximum)
+    if type(value) ~= "string" then return "" end
+    value = value:gsub("%z", "")
+    if #value <= maximum then return value end
+    local position, safe_end = 1, 0
+    while position <= #value do
+        local next_position = utf8Next(value, position)
+        if next_position - 1 > maximum then break end
+        safe_end, position = next_position - 1, next_position
+    end
+    return value:sub(1, safe_end)
+end
+
+local function displayNameFor(value, fallback)
+    local name = trim(textField(value, 80))
+    return name ~= "" and name or fallback
+end
+
+local function postTitleFor(post)
+    local title = type(post) == "table" and trim(textField(post.title, MAX_TITLE_BYTES)) or ""
+    if title == "" then return _("Untitled") end
+    if utf8Length(title) <= 240 then return title end
+    local visible = utf8Cut(title, 240)
+    return visible
 end
 
 local function utcNow()
@@ -733,9 +778,10 @@ local function blockFontSize(block, px)
 end
 
 -- Count physical display lines, preserving hard newlines (especially code).
--- The optional TextBox measurement is used when the host exposes one; the
--- deterministic width-aware count remains the safe fallback for test and old
--- KOReader builds.
+-- This deterministic estimator deliberately avoids constructing TextBoxWidget
+-- instances while paginating. A near-limit unbroken post would otherwise make
+-- hundreds of native layouts before the first visible page, which can exhaust
+-- KOReader's renderer memory during the publish-to-reader transition.
 local function physicalLineCount(text, chars_per_line)
     local lines, column, position = 1, 0, 1
     text = tostring(text or "")
@@ -753,25 +799,7 @@ local function physicalLineCount(text, chars_per_line)
 end
 
 local function measureBlockLines(block, content_width, px, chars_per_line)
-    local measured
-    local size = blockFontSize(block, px)
-    local ok, widget = pcall(function()
-        return TextBoxWidget:new{ text = plainInlineText(block.text or ""), width = content_width,
-            face = Font:getFace(block.kind == "code" and "smallinfofont" or "cfont", size),
-            line_height = .30 }
-    end)
-    if ok and widget then
-        local dimen = widget.dimen
-        if not dimen and type(widget.getSize) == "function" then
-            local sized, result = pcall(widget.getSize, widget)
-            if sized then dimen = result end
-        end
-        if dimen and tonumber(dimen.h) and tonumber(dimen.h) > 0 then
-            local line_height = math.max(1, math.floor(size * 1.35))
-            measured = math.max(1, math.ceil(tonumber(dimen.h) / line_height))
-        end
-    end
-    return math.max(measured or 0, physicalLineCount(block.text or "", chars_per_line))
+    return physicalLineCount(block and block.text or "", chars_per_line)
 end
 
 -- Split exact UTF-8 source into pieces that individually fit a physical-line
@@ -841,12 +869,13 @@ local function paginateBlocks(blocks, content_width, content_height, px)
     return pages
 end
 
-local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "", body = nil, callback = nil, primary = false, disabled = false, dimen = nil, state = nil, context = nil }
+local ActionButton = InputContainer:extend{ width = nil, height = nil, title = "", body = nil, callback = nil, primary = false, disabled = false, dimen = nil, state = nil, context = nil, button_background = nil, button_foreground = nil, button_border = nil }
 
 function ActionButton:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local background = self.primary and BLACK or WHITE
-    local foreground = self.primary and WHITE or BLACK
+    local background = self.disabled and PARCHMENT or self.button_background or (self.primary and INK_BLUE or PAPER_CARD)
+    local foreground = self.disabled and SEPIA or self.button_foreground or (self.primary and PAPER or INK_BLUE)
+    local border = self.button_border or (self.primary and INK_BLUE or SEPIA)
     local inset = math.max(2, math.floor(math.min(self.width, self.height) * .12))
     local content
     if self.body then
@@ -855,7 +884,7 @@ function ActionButton:init()
     else
         content = CenterContainer:new{ dimen = self.dimen, TextWidget:new{ text = self.title or "", face = Font:getFace("smallinfofont", math.max(14, math.floor(self.height * .32))), fgcolor = foreground, bold = true, max_width = math.max(1, self.width - inset * 2) } }
     end
-    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = self.body and inset or 0, bordersize = self.primary and 0 or 1, radius = math.max(2, math.floor(self.height * .18)), background = self.disabled and GRAY_CCC or background, content }
+    self[1] = FrameContainer:new{ width = self.width, height = self.height, padding = self.body and inset or 0, bordersize = self.primary and 0 or 1, color = border, radius = math.max(2, math.floor(self.height * .18)), background = background, content }
     self.ges_events = { TapInkBlogAction = { GestureRange:new{ ges = "tap", range = self.dimen } } }
 end
 
@@ -886,7 +915,7 @@ end
 -- All interactive geometry is derived from the caller's px function.  A
 -- compact pane may intentionally choose smaller controls; this helper never
 -- replaces their requested height with Device.screen's unrelated scale.
-local function addButton(layer, title, x, y, width, height, callback, primary, body, disabled)
+local function addButton(layer, title, x, y, width, height, callback, primary, body, disabled, style)
     x, y = math.floor(tonumber(x) or -1), math.floor(tonumber(y) or -1)
     width, height = math.floor(tonumber(width) or 0), math.floor(tonumber(height) or 0)
     local bounds = layer and layer.dimen
@@ -894,7 +923,8 @@ local function addButton(layer, title, x, y, width, height, callback, primary, b
     local candidate = { x = x, y = y, w = width, h = height }
     layer._inkblog_button_bounds = layer._inkblog_button_bounds or {}
     for _, occupied in ipairs(layer._inkblog_button_bounds) do if rectanglesOverlap(candidate, occupied) then return nil end end
-    local button = ActionButton:new{ title = title, body = body, width = width, height = height, callback = callback, primary = primary == true, disabled = disabled == true, state = layer._inkblog_state, context = layer._inkblog_context }
+    style = type(style) == "table" and style or {}
+    local button = ActionButton:new{ title = title, body = body, width = width, height = height, callback = callback, primary = primary == true, disabled = disabled == true, state = layer._inkblog_state, context = layer._inkblog_context, button_background = style.background, button_foreground = style.foreground, button_border = style.border }
     button.overlap_offset = { x, y }
     layer[#layer + 1] = button
     layer._inkblog_button_bounds[#layer._inkblog_button_bounds + 1] = candidate
@@ -904,16 +934,32 @@ end
 local function addText(layer, text, x, y, width, size, options)
     options = options or {}
     local font_size = math.max(14, math.floor(tonumber(size) or 14))
-    layer[#layer + 1] = TextWidget:new{ text = tostring(text or ""), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or BLACK, bold = options.bold == true, max_width = math.max(1, width), overlap_offset = { x, y } }
+    layer[#layer + 1] = TextWidget:new{ text = tostring(text or ""), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or INK_BLUE, bold = options.bold == true, max_width = math.max(1, width), overlap_offset = { x, y } }
 end
 
 local function addBox(layer, text, x, y, width, height, size, options)
     options = options or {}
     local font_size = math.max(options.serif and 16 or 14, math.floor(tonumber(size) or 14))
-    local box = TextBoxWidget:new{ text = tostring(text or ""), width = math.max(1, width), height = math.max(1, height), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or BLACK, bgcolor = options.bg or WHITE, line_height = options.line_height or .30, alignment = options.alignment or "left" }
+    local box = TextBoxWidget:new{ text = tostring(text or ""), width = math.max(1, width), height = math.max(1, height), face = Font:getFace(options.serif and "cfont" or "smallinfofont", font_size), fgcolor = options.color or INK_BLUE, bgcolor = options.bg or PAPER_CARD, line_height = options.line_height or .30, alignment = options.alignment or "left" }
     box.overlap_offset = { x, y }
     layer[#layer + 1] = box
     return box
+end
+
+local function authorProfileFor(post, fallback, expected_author_id)
+    post = type(post) == "table" and post or {}
+    fallback = type(fallback) == "table" and fallback or {}
+    local author_id = validUuid(expected_author_id) and expected_author_id
+        or (validUuid(post.author_id) and post.author_id or nil)
+    local matching_fallback = validUuid(fallback.id) and fallback.id == author_id and fallback or {}
+    local avatar_path = validManagedPath(post.avatar_path) and post.avatar_path
+        or (validManagedPath(matching_fallback.avatar_path) and matching_fallback.avatar_path or nil)
+    return {
+        id = author_id,
+        display_name = displayNameFor(post.display_name, displayNameFor(matching_fallback.display_name, _("Author"))),
+        bio = textField(post.bio, 1000) ~= "" and textField(post.bio, 1000) or textField(matching_fallback.bio, 1000),
+        avatar_path = avatar_path,
+    }
 end
 
 local function avatarWidget(profile, state, size)
@@ -925,9 +971,67 @@ local function avatarWidget(profile, state, size)
         interior = created and widget or nil
     end
     if not interior then
-        interior = CenterContainer:new{ dimen = Geom:new{ w = size - scale(4), h = size - scale(4) }, TextWidget:new{ text = initialFor(profile and profile.display_name), face = Font:getFace("cfont", math.max(scale(14), math.floor(size * .45))), fgcolor = BLACK, bold = true, max_width = size - scale(8) } }
+        interior = CenterContainer:new{ dimen = Geom:new{ w = size - scale(4), h = size - scale(4) }, TextWidget:new{ text = initialFor(profile and profile.display_name), face = Font:getFace("cfont", math.max(scale(14), math.floor(size * .45))), fgcolor = SEPIA, bold = true, max_width = size - scale(8) } }
     end
-    return FrameContainer:new{ width = size, height = size, padding = scale(2), bordersize = 1, radius = math.floor(size / 2), background = WHITE, interior }
+    return FrameContainer:new{ width = size, height = size, padding = scale(2), bordersize = 1, color = SEPIA, radius = math.floor(size / 2), background = PARCHMENT, interior }
+end
+
+local function normalizedPost(record, fallback_profile)
+    if type(record) ~= "table" or not validUuid(record.id) or not validUuid(record.author_id) then return nil end
+    local profile = authorProfileFor(record, fallback_profile)
+    return {
+        id = record.id,
+        author_id = record.author_id,
+        title = textField(record.title, MAX_TITLE_BYTES),
+        markdown = textField(record.markdown, MAX_POST_BYTES),
+        status = record.status == "draft" and "draft" or "published",
+        created_at = textField(record.created_at, 80),
+        updated_at = textField(record.updated_at, 80),
+        published_at = textField(record.published_at, 80),
+        display_name = profile.display_name,
+        avatar_path = profile.avatar_path,
+        like_count = math.max(0, math.floor(tonumber(record.like_count) or 0)),
+        comment_count = math.max(0, math.floor(tonumber(record.comment_count) or 0)),
+        liked = record.liked == true,
+        followed = record.followed == true,
+    }
+end
+
+-- PostgREST returns only post columns after INSERT/PATCH. Resolve the public
+-- profile before opening the reader, while keeping a complete safe fallback if
+-- that second, best-effort request is unavailable.
+local function enrichPostWithProfile(state, record)
+    local fallback = state and state.profile or nil
+    local post = normalizedPost(record, fallback)
+    if not post then return nil end
+    local profiles = restRequest(state, "GET", "profiles", "id=eq." .. urlEncode(post.author_id) .. "&select=id,display_name,bio,avatar_path")
+    if type(profiles) == "table" and type(profiles[1]) == "table" then
+        local profile = profiles[1]
+        local resolved = authorProfileFor(profile, nil, post.author_id)
+        post.display_name, post.avatar_path = resolved.display_name, resolved.avatar_path
+        if state and state.session and post.author_id == state.session.user.id then state.profile = profile end
+    end
+    return post
+end
+
+local cacheImageNow
+local cachePostAvatars
+local openPost
+local postPreview
+
+local function addPostPreviewCard(layer, state, context, post, x, y, width, height, px)
+    local profile = authorProfileFor(post)
+    local avatar_size = math.max(px(28), math.min(px(40), math.floor(height * .42)))
+    local indent = string.rep(" ", math.max(5, math.ceil(avatar_size / math.max(1, px(7)))))
+    local meta = profile.display_name .. " · " .. tostring(math.max(0, math.floor(tonumber(post.like_count) or 0))) .. " Klecks · " .. tostring(math.max(0, math.floor(tonumber(post.comment_count) or 0))) .. " Randnotizen"
+    local body = indent .. postTitleFor(post) .. "\n" .. indent .. meta .. "\n" .. postPreview(post, math.max(40, math.floor(width / math.max(1, px(5)))))
+    local card = addButton(layer, "", x, y, width, height, function() openPost(state, context, post) end, false, body)
+    if not card then return nil end
+    local avatar = avatarWidget(profile, state, avatar_size)
+    avatar.inkblog_avatar_path, avatar.inkblog_avatar_owner = profile.avatar_path, profile.id
+    avatar.overlap_offset = { x + px(7), y + px(6) }
+    layer[#layer + 1] = avatar
+    return card
 end
 
 local function listPosts(state, context, mode, author_id)
@@ -936,6 +1040,7 @@ local function listPosts(state, context, mode, author_id)
         local result, code, err = rpcRequest(state, "inkblog_list_posts", { p_mode = mode, p_author = author_id, p_sort = state.settings.sort, p_limit = PAGE_SIZE, p_offset = 0 })
         if type(result) ~= "table" then state.status = err or _("Posts could not be loaded."); return end
         state.posts = result
+        if cachePostAvatars then cachePostAvatars(state, state.posts, 3) end
         state.posts_has_more = #result == PAGE_SIZE
         state.status = #result == 0 and _("No posts on this page yet.") or _("Fresh ink loaded.")
     end)
@@ -947,6 +1052,7 @@ local function changePostBatch(state, context, offset)
         local result, _, err = rpcRequest(state, "inkblog_list_posts", { p_mode = state.mode, p_author = state.mode == "blog" and state.selected_author_id or nil, p_sort = state.settings.sort, p_limit = PAGE_SIZE, p_offset = offset })
         if type(result) ~= "table" then state.status = err or _("The next page could not be loaded."); return end
         state.posts, state.list_offset, state.list_page = result, offset, 0
+        if cachePostAvatars then cachePostAvatars(state, state.posts, 3) end
         state.posts_has_more = #result == PAGE_SIZE
         state.status = #result == 0 and _("No more posts on this page.") or _("Next page loaded.")
     end)
@@ -1001,6 +1107,7 @@ local function loadAuthor(state, context, author_id)
         local result, code, err = restRequest(state, "GET", "profiles", "id=eq." .. urlEncode(author_id) .. "&select=id,display_name,bio,avatar_path")
         if type(result) ~= "table" then state.status = err or _("Author profile could not be loaded."); return end
         state.author_profile = result[1] or { id = author_id, display_name = _("Unknown author"), bio = "" }
+        if cacheImageNow and validManagedPath(state.author_profile.avatar_path) then cacheImageNow(state, state.author_profile.avatar_path, "avatar") end
         -- The profile endpoint is intentionally direct; relationship state is
         -- separately resolved so Follow/Block labels survive a reopened blog.
         if state.session.user.id ~= "" then
@@ -1012,12 +1119,16 @@ local function loadAuthor(state, context, author_id)
             state.author_profile.followed, state.author_profile.blocked = false, false
         end
         local posts, post_code, post_err = rpcRequest(state, "inkblog_list_posts", { p_mode = "blog", p_author = author_id, p_sort = state.settings.sort, p_limit = PAGE_SIZE, p_offset = 0 })
-        if type(posts) == "table" then state.posts = posts; state.list_page = 0; state.list_offset = 0; state.posts_has_more = #posts == PAGE_SIZE; state.status = _("Author blog loaded.") else state.status = post_err or _("The author profile loaded, but not the posts.") end
+        if type(posts) == "table" then
+            state.posts, state.list_page, state.list_offset, state.posts_has_more = posts, 0, 0, #posts == PAGE_SIZE
+            if cachePostAvatars then cachePostAvatars(state, state.posts, 3) end
+            state.status = _("Author blog loaded.")
+        else state.status = post_err or _("The author profile loaded, but not the posts.") end
     end)
     requestRebuild(context)
 end
 
-local function openPost(state, context, post)
+openPost = function(state, context, post)
     if type(post) ~= "table" or not validUuid(post.id) then return end
     state.selected_post, state.article_page, state.article_tab, state.comments = post, 1, "read", {}
     state.view = "article"
@@ -1028,8 +1139,10 @@ local function getPostAndOpen(state, context, post_id)
     if not validUuid(post_id) then state.status = _("This notification has no readable post."); requestRebuild(context); return end
     runNetwork(state, context, _("Opening post…"), function()
         local result, code, err = restRequest(state, "GET", "posts", "id=eq." .. urlEncode(post_id) .. "&select=id,author_id,title,markdown,status,created_at,updated_at,published_at")
-        if type(result) ~= "table" or not result[1] then state.status = err or _("That post is no longer available."); return end
-        state.selected_post, state.article_page, state.article_tab, state.view = result[1], 1, "read", "article"
+        local post = type(result) == "table" and enrichPostWithProfile(state, result[1]) or nil
+        if not post then state.status = err or _("That post is no longer available."); return end
+        if cacheImageNow and validManagedPath(post.avatar_path) then cacheImageNow(state, post.avatar_path, "avatar") end
+        state.selected_post, state.article_page, state.article_tab, state.view = post, 1, "read", "article"
         state.status = _("Post opened.")
     end)
 end
@@ -1087,7 +1200,7 @@ end
 local function captureLocalDraft(state)
     local editor = state.editor or {}
     local title, body = tostring(editor.title or ""), tostring(editor.body or "")
-    if #title > 600 or #body > MAX_POST_BYTES then return nil, _("A title or draft is too long to store safely.") end
+    if #title > MAX_TITLE_BYTES or #body > MAX_POST_BYTES then return nil, _("A title or draft is too long to store safely.") end
     local local_id = editor.local_id or localDraftId()
     editor.local_id = local_id
     local record = { local_id = local_id, remote_id = editor.remote_id, title = title, body = body, images = copyTable(editor.images or {}), updated_at = utcNow() }
@@ -1150,9 +1263,9 @@ local function openEditorField(state, context, field)
         on_submit = function(value)
             if keyboard then UIManager:close(keyboard) end
             value = tostring(value or "")
-            local limit = is_body and MAX_POST_BYTES or 600
-            if #value > limit then
-                state.status = is_body and _("Posts are limited to 96 KiB.") or _("Titles are limited to 600 bytes.")
+            local limit = is_body and MAX_POST_BYTES or MAX_TITLE_BYTES
+            if #value > limit or (not is_body and utf8Length(trim(value)) > 240) then
+                state.status = is_body and _("Posts are limited to 96 KiB.") or _("Titles are limited to 240 characters.")
             else
                 state.editor[field] = value
                 state.status = is_body and _("Markdown text kept locally.") or _("Title kept locally.")
@@ -1180,7 +1293,7 @@ local function insertFormat(state, context, kind)
     requestRebuild(context)
 end
 
-local function base64Encode(data)
+local function base64EncodeBlock(data)
     local alphabet, output = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", {}
     for index = 1, #data, 3 do
         local a, b, c = data:byte(index, index + 2)
@@ -1191,6 +1304,18 @@ local function base64Encode(data)
             .. (c and alphabet:sub(n % 64 + 1, n % 64 + 1) or "=")
     end
     return table.concat(output)
+end
+
+local function base64Encode(data)
+    if type(data) ~= "string" or data == "" then return "" end
+    -- 12 KiB is divisible by three, so blocks need no internal padding. This
+    -- keeps a 700 KiB upload to a few dozen chunks instead of ~239,000 Lua
+    -- table entries and avoids an avoidable low-memory KOReader crash.
+    local block_size, chunks = 12 * 1024, {}
+    for first = 1, #data, block_size do
+        chunks[#chunks + 1] = base64EncodeBlock(data:sub(first, math.min(#data, first + block_size - 1)))
+    end
+    return table.concat(chunks)
 end
 
 local function imageMimeForPath(path)
@@ -1290,12 +1415,21 @@ local function promptAvatarUpload(state, context)
 end
 
 local function syncEditor(state, context, publish)
+    if type(state.editor) ~= "table" then
+        state.status = _("The editor is not ready yet. Your local content remains available.")
+        requestRebuild(context)
+        return
+    end
     local record, local_err = captureLocalDraft(state)
     if not record then state.status = local_err; requestRebuild(context); return end
-    local title = trim(state.editor.title or "")
-    if title == "" then state.status = _("Give the post a title before syncing."); requestRebuild(context); return end
+    local title = trim(textField(state.editor.title, MAX_TITLE_BYTES))
+    if title == "" or utf8Length(title) > 240 then
+        state.status = title == "" and _("Give the post a title before syncing.") or _("Titles are limited to 240 characters.")
+        requestRebuild(context)
+        return
+    end
     runNetwork(state, context, publish and _("Publishing ink…") or _("Saving draft…"), function()
-        local fields = { title = state.editor.title, markdown = state.editor.body, status = publish and "published" or "draft", updated_at = utcNow() }
+        local fields = { title = title, markdown = record.body, status = publish and "published" or "draft", updated_at = utcNow() }
         if publish then fields.published_at = utcNow() end
         local result, code, err
         if validUuid(state.editor.remote_id) then
@@ -1304,14 +1438,16 @@ local function syncEditor(state, context, publish)
             fields.author_id = state.session.user.id
             result, code, err = restRequest(state, "POST", "posts", nil, fields, { ["prefer"] = "return=representation" })
         end
-        if type(result) ~= "table" or not result[1] then
+        local saved = type(result) == "table" and enrichPostWithProfile(state, result[1]) or nil
+        if not saved then
             state.status = err or _("Sync failed. The complete draft remains local for retry.")
             return
         end
-        state.editor.remote_id, record.remote_id = result[1].id, result[1].id
+        state.editor.remote_id, record.remote_id = saved.id, saved.id
         if publish then
             removeLocalDraft(state, record.local_id)
-            state.selected_post, state.view, state.status = result[1], "article", _("Published. Read in peace.")
+            if cacheImageNow and validManagedPath(saved.avatar_path) then cacheImageNow(state, saved.avatar_path, "avatar") end
+            state.selected_post, state.view, state.status = saved, "article", _("Published. Read in peace.")
         else
             captureLocalDraft(state)
             state.status = _("Draft saved locally and to InkBlog.")
@@ -1482,8 +1618,10 @@ local function openNotification(state, context, note)
             if code and code >= 200 and code < 300 then note.read_at = utcNow() end
             if note.target_type == "post" and validUuid(note.target_id) then
                 local post, post_code, post_err = restRequest(state, "GET", "posts", "id=eq." .. urlEncode(note.target_id) .. "&select=id,author_id,title,markdown,status,created_at,updated_at,published_at")
-                if type(post) == "table" and post[1] then
-                    state.selected_post, state.article_page, state.article_tab, state.view, state.status = post[1], 1, "read", "article", _("Post opened.")
+                local selected = type(post) == "table" and enrichPostWithProfile(state, post[1]) or nil
+                if selected then
+                    if cacheImageNow and validManagedPath(selected.avatar_path) then cacheImageNow(state, selected.avatar_path, "avatar") end
+                    state.selected_post, state.article_page, state.article_tab, state.view, state.status = selected, 1, "read", "article", _("Post opened.")
                 else state.status = post_err or _("That post is no longer available.") end
             else state.status = _("This notification has no openable post.") end
         end, true)
@@ -1492,7 +1630,7 @@ local function openNotification(state, context, note)
     end
 end
 
-local function cacheImageNow(state, managed_path, kind)
+cacheImageNow = function(state, managed_path, kind)
     if not validManagedPath(managed_path) then return nil, _("Unsafe image path was rejected.") end
     if state.image_cache[managed_path] then return true end
     if not ensureDir(IMAGE_DIR) then return nil, _("Image cache is unavailable.") end
@@ -1518,6 +1656,22 @@ local function cacheImageNow(state, managed_path, kind)
         state.image_cache[oldest] = nil
     end
     return true
+end
+
+cachePostAvatars = function(state, posts, maximum)
+    local seen, loaded = {}, 0
+    maximum = math.max(1, math.min(MAX_CACHED_IMAGES, math.floor(tonumber(maximum) or 3)))
+    for _, post in ipairs(type(posts) == "table" and posts or {}) do
+        if loaded >= maximum then break end
+        local profile = authorProfileFor(post)
+        local path = profile.avatar_path
+        if path and not seen[path] and not state.image_cache[path] then
+            seen[path] = true
+            local cached = cacheImageNow(state, path, "avatar")
+            if cached then loaded = loaded + 1 end
+        end
+    end
+    return loaded
 end
 
 local function downloadArticleImages(state, context)
@@ -1549,7 +1703,7 @@ local function ownPost(state, post)
     return post and state.session.user and post.author_id == state.session.user.id
 end
 
-local function postPreview(post, width_chars)
+postPreview = function(post, width_chars)
     local source = plainInlineText(post and post.markdown or "")
     local head, tail = utf8Cut(source, width_chars or 130)
     return tail ~= "" and head .. " …" or head
@@ -1660,7 +1814,7 @@ function InkLogo:paintTo(bb, x, y)
             if not first then break end
             local last = first
             while last < 64 and row:sub(last + 1, last + 1) == "1" do last = last + 1 end
-            bb:paintRect(start_x + (first - 1) * unit, start_y + (row_index - 1) * unit, (last - first + 1) * unit, unit, BLACK)
+            bb:paintRect(start_x + (first - 1) * unit, start_y + (row_index - 1) * unit, (last - first + 1) * unit, unit, SEPIA)
             column = last + 1
         end
     end
@@ -1669,23 +1823,24 @@ end
 local function buildBase(width, height)
     local pane = WidgetContainer:new{ dimen = Geom:new{ w = width, h = height } }
     local layer = OverlapGroup:new{ dimen = pane.dimen, allow_mirroring = false }
-    layer[#layer + 1] = FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = WHITE, CenterContainer:new{ dimen = pane.dimen, HorizontalSpan:new{ width = 0 } } }
+    layer[#layer + 1] = FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = PAPER, CenterContainer:new{ dimen = pane.dimen, HorizontalSpan:new{ width = 0 } } }
     pane[1] = layer
     return pane, layer
 end
 
 local function addHeader(layer, state, width, px, label)
     local margin, logo_size = px(12), px(31)
+    layer[#layer + 1] = FrameContainer:new{ width = width, height = px(48), padding = 0, bordersize = 0, background = PARCHMENT, CenterContainer:new{ dimen = Geom:new{ w = width, h = px(48) }, HorizontalSpan:new{ width = 0 } } }
     local logo = InkLogo:new{ width = logo_size, height = logo_size }
     logo.overlap_offset = { margin, px(8) }
     layer[#layer + 1] = logo
-    addText(layer, label or _("InkBlog"), margin + logo_size + px(7), px(10), width - margin * 2 - logo_size - px(7), px(20), { serif = true, bold = true })
-    addText(layer, _("Write in ink. Read in peace."), margin + logo_size + px(7), px(33), width - margin * 2 - logo_size - px(7), px(10), { color = GRAY_666 })
+    addText(layer, label or _("InkBlog"), margin + logo_size + px(7), px(10), width - margin * 2 - logo_size - px(7), px(20), { serif = true, bold = true, color = INK_BLUE })
+    addText(layer, _("Write in ink. Read in peace."), margin + logo_size + px(7), px(33), width - margin * 2 - logo_size - px(7), px(10), { color = MOSS })
 end
 
 local function addStatus(layer, state, width, y, px)
     local prefix = state.loading and _("Working · ") or ""
-    addText(layer, prefix .. tostring(state.status or ""), px(12), y, width - px(24), px(10), { color = GRAY_666 })
+    addText(layer, prefix .. tostring(state.status or ""), px(12), y, width - px(24), px(10), { color = SEPIA })
 end
 
 local function navTo(state, context, view)
@@ -1718,10 +1873,27 @@ end
 
 local function renderPostList(layer, state, context, width, top, bottom, px, title)
     local margin, gap = px(12), px(7)
+    local compact = bottom - top < px(200)
+    if compact then
+        addText(layer, title, margin, top, width - 2 * margin, px(16), { serif = true, bold = true })
+        local toolbar_y, toolbar_h = top + px(22), px(40)
+        addButton(layer, _("Laden"), margin, toolbar_y, width - 2 * margin, toolbar_h, function() listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, true)
+        local y, remaining = toolbar_y + toolbar_h + gap, bottom - (toolbar_y + toolbar_h + gap)
+        if #state.posts == 0 then
+            addBox(layer, _("No cached posts. Tap Laden; network is only used after that explicit action."), margin, y, width - 2 * margin, math.max(1, remaining), px(14), { serif = true, color = SEPIA })
+        else
+            local position = clamp((state.list_page or 0) + 1, 1, #state.posts)
+            local post = state.posts[position]
+            if type(post) == "table" and validUuid(post.id) then
+                addPostPreviewCard(layer, state, context, post, margin, y, width - 2 * margin, math.max(1, math.min(px(100), remaining)), px)
+            end
+        end
+        return
+    end
     addText(layer, title, margin, top, width - 2 * margin, px(16), { serif = true, bold = true })
     local toolbar_y, toolbar_h = top + px(25), px(44)
     local half = math.floor((width - 2 * margin - gap) / 2)
-    addButton(layer, state.settings.sort == "popular" and _("Beliebt · ✓") or _("Beliebt"), margin, toolbar_y, half, toolbar_h, function() state.settings.sort = state.settings.sort == "popular" and "newest" or "popular"; saveSettings(state.settings); listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, state.settings.sort == "popular")
+    addButton(layer, state.settings.sort == "popular" and _("Beliebt · ✓") or _("Beliebt"), margin, toolbar_y, half, toolbar_h, function() state.settings.sort = state.settings.sort == "popular" and "newest" or "popular"; saveSettings(state.settings); listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, state.settings.sort == "popular", nil, nil, { background = OCHRE, foreground = PAPER, border = OCHRE })
     addButton(layer, _("Laden"), margin + half + gap, toolbar_y, half, toolbar_h, function() listPosts(state, context, state.mode, state.mode == "blog" and state.selected_author_id or nil) end, true)
     local available = bottom - (toolbar_y + toolbar_h) - px(52)
     local card_height = math.max(px(66), math.min(px(106), math.floor(available / 3)))
@@ -1737,12 +1909,10 @@ local function renderPostList(layer, state, context, width, top, bottom, px, tit
     else
         for index = first, math.min(#state.posts, first + per_page - 1) do
             local post = state.posts[index]
-            local author = post.display_name or _("Unknown author")
-            local meta = author .. " · " .. tostring(post.like_count or 0) .. " Klecks · " .. tostring(post.comment_count or 0) .. " Randnotizen"
-            local card = ActionButton:new{ title = "", body = tostring(post.title or _("Untitled")) .. "\n" .. meta .. "\n" .. postPreview(post, math.max(48, math.floor(width / px(5)))), width = width - 2 * margin, height = card_height, callback = function() openPost(state, context, post) end, state = state, context = context }
-            card.overlap_offset = { margin, y }
-            layer[#layer + 1] = card
-            y = y + card_height + gap
+            if type(post) == "table" and validUuid(post.id) then
+                addPostPreviewCard(layer, state, context, post, margin, y, width - 2 * margin, card_height, px)
+                y = y + card_height + gap
+            end
         end
     end
     addPagination(layer, state, context, page, total, width, bottom - px(44), px, function(value)
@@ -1761,7 +1931,7 @@ local function renderFallbackBlocks(layer, blocks, x, y, width, height, px)
         local lines = physicalLineCount(block.text or "", chars_per_line)
         local h = math.max(px(20), lines * math.max(px(17), math.floor(size * 1.35)) + px(5))
         if cursor + h > y + height then break end
-        local options = { serif = block.kind ~= "code", color = block.kind == "quote" and GRAY_333 or BLACK, bg = block.kind == "code" and GRAY_CCC or WHITE, line_height = .30 }
+        local options = { serif = block.kind ~= "code", color = block.kind == "quote" and SEPIA or INK_BLUE, bg = block.kind == "code" and PARCHMENT or PAPER_CARD, line_height = .30 }
         addBox(layer, plainInlineText(block.text), x + (block.kind == "quote" and px(9) or 0), cursor, width - (block.kind == "quote" and px(9) or 0), h, size, options)
         cursor = cursor + h + px(4)
     end
@@ -1776,27 +1946,37 @@ local function renderArticle(layer, state, context, width, top, bottom, px)
         state.status = _( "That post is unavailable; returned to the list." )
         return
     end
-    local title_height = px(52)
-    addText(layer, tostring(post.title or _("Untitled")), margin, top, width - 2 * margin, px(22), { serif = true, bold = true })
-    local author = tostring(post.display_name or _("Author"))
-    addText(layer, author .. " · " .. tostring(post.published_at or post.created_at or ""), margin, top + px(29), width - 2 * margin, px(10), { color = GRAY_666 })
+    local compact = bottom - top < px(300)
+    local profile = authorProfileFor(post)
+    local title_height = px(compact and 52 or 74)
+    addText(layer, postTitleFor(post), margin, top, width - 2 * margin, px(22), { serif = true, bold = true })
+    local avatar = avatarWidget(profile, state, px(compact and 28 or 36))
+    avatar.inkblog_avatar_path, avatar.inkblog_avatar_owner = profile.avatar_path, profile.id
+    avatar.overlap_offset = { margin, top + px(compact and 22 or 26) }
+    layer[#layer + 1] = avatar
+    addText(layer, profile.display_name .. " · " .. tostring(post.published_at ~= "" and post.published_at or post.created_at or ""), margin + px(compact and 36 or 44), top + px(compact and 29 or 35), width - 2 * margin - px(compact and 36 or 44), px(10), { color = SEPIA })
     local actions_y, action_h = top + title_height, px(44)
     local w4 = math.floor((width - 2 * margin - 3 * gap) / 4)
     addButton(layer, _("‹ Liste"), margin, actions_y, w4, action_h, function() state.view = state.mode == "blog" and "author" or "feed"; requestRebuild(context) end)
     addButton(layer, post.liked and _("Klecks ✓") or _("Klecks"), margin + (w4 + gap), actions_y, w4, action_h, function() toggleLike(state, context, post, "post") end, post.liked)
     addButton(layer, _("Randnotiz"), margin + 2 * (w4 + gap), actions_y, w4, action_h, function() state.article_tab = "comments"; loadComments(state, context, post.id) end)
-    addButton(layer, ownPost(state, post) and _("Löschen") or _("Autor"), margin + 3 * (w4 + gap), actions_y, w4, action_h, function()
+    local author_action = addButton(layer, ownPost(state, post) and _("Löschen") or _("Profil"), margin + 3 * (w4 + gap), actions_y, w4, action_h, function()
         if ownPost(state, post) then confirmDeletePost(state, context, post) else loadAuthor(state, context, post.author_id) end
     end)
-    local row2_y = actions_y + action_h + gap
-    local half = math.floor((width - 2 * margin - gap) / 2)
-    addButton(layer, state.article_tab == "comments" and _("Lesen") or _("Bilder laden"), margin, row2_y, half, action_h, function()
-        if state.article_tab == "comments" then state.article_tab = "read"; requestRebuild(context) else downloadArticleImages(state, context) end
-    end)
-    addButton(layer, ownPost(state, post) and _("Bearbeiten") or _("Melden"), margin + half + gap, row2_y, half, action_h, function()
-        if ownPost(state, post) then editPost(state, context, post) else promptReport(state, context, post, "post") end
-    end, ownPost(state, post))
-    local content_y, content_h = row2_y + action_h + px(7), bottom - (row2_y + action_h + px(58))
+    if author_action then author_action.inkblog_action = ownPost(state, post) and "delete_post" or "open_author_profile" end
+    local content_y = actions_y + action_h + px(7)
+    if not compact then
+        local row2_y = actions_y + action_h + gap
+        local half = math.floor((width - 2 * margin - gap) / 2)
+        addButton(layer, state.article_tab == "comments" and _("Lesen") or _("Bilder laden"), margin, row2_y, half, action_h, function()
+            if state.article_tab == "comments" then state.article_tab = "read"; requestRebuild(context) else downloadArticleImages(state, context) end
+        end)
+        addButton(layer, ownPost(state, post) and _("Bearbeiten") or _("Melden"), margin + half + gap, row2_y, half, action_h, function()
+            if ownPost(state, post) then editPost(state, context, post) else promptReport(state, context, post) end
+        end, ownPost(state, post))
+        content_y = row2_y + action_h + px(7)
+    end
+    local content_h = math.max(1, bottom - px(52) - content_y)
     if state.article_tab == "comments" then
         local comments = state.comments or {}
         local card_h = math.max(px(52), math.floor(content_h / 3))
@@ -1950,13 +2130,21 @@ end
 
 local function renderAuthor(layer, state, context, width, top, bottom, px)
     local margin, gap = px(12), px(7)
+    local compact = bottom - top < px(300)
     local profile = state.author_profile or { id = state.selected_author_id, display_name = _("Author"), bio = _("Tap Laden to fetch this blog.") }
-    local avatar = avatarWidget(profile, state, px(54)); avatar.overlap_offset = { margin, top }; layer[#layer + 1] = avatar
-    addText(layer, profile.display_name or _("Author"), margin + px(64), top + px(2), width - 2 * margin - px(64), px(18), { serif = true, bold = true })
-    addText(layer, profile.bio or "", margin + px(64), top + px(27), width - 2 * margin - px(64), px(10), { color = GRAY_333 })
+    local avatar_size = px(compact and 38 or 54)
+    local avatar = avatarWidget(profile, state, avatar_size); avatar.overlap_offset = { margin, top }; layer[#layer + 1] = avatar
+    local profile_left = margin + avatar_size + px(10)
+    addText(layer, profile.display_name or _("Author"), profile_left, top + px(2), width - margin - profile_left, px(18), { serif = true, bold = true })
+    addText(layer, profile.bio or "", profile_left, top + px(27), width - margin - profile_left, px(10), { color = SEPIA })
     local half = math.floor((width - 2 * margin - gap) / 2)
-    addButton(layer, profile.followed and _("Folge ich ✓") or _("Folgen"), margin, top + px(62), half, px(44), function() toggleFollow(state, context) end, profile.followed)
-    addButton(layer, profile.blocked and _("Blockiert ✓") or _("Blockieren"), margin + half + gap, top + px(62), half, px(44), function() toggleBlock(state, context) end, profile.blocked)
+    local actions_y, actions_h = top + px(compact and 45 or 62), px(compact and 40 or 44)
+    addButton(layer, profile.followed and _("Folge ich ✓") or _("Folgen"), margin, actions_y, half, actions_h, function() toggleFollow(state, context) end, profile.followed)
+    addButton(layer, profile.blocked and _("Blockiert ✓") or _("Blockieren"), margin + half + gap, actions_y, half, actions_h, function() toggleBlock(state, context) end, profile.blocked)
+    if compact then
+        renderPostList(layer, state, context, width, actions_y + actions_h + px(9), bottom, px, _("Blog"))
+        return
+    end
     addButton(layer, _("Avatar laden"), margin, top + px(113), width - 2 * margin, px(44), function() downloadAvatar(state, context, profile) end)
     renderPostList(layer, state, context, width, top + px(164), bottom, px, _("Blog"))
 end
@@ -2019,7 +2207,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.2.3",
+    version = "1.3.1",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",
@@ -2028,11 +2216,11 @@ return {
     buildPane = buildPane,
     openFile = acceptFile,
     _test = {
-        ActionButton = ActionButton, InkLogo = InkLogo, COLORS = { black = BLACK, white = WHITE, gray333 = GRAY_333, gray666 = GRAY_666, grayccc = GRAY_CCC },
+        ActionButton = ActionButton, InkLogo = InkLogo, COLORS = { black = BLACK, white = WHITE, gray333 = GRAY_333, gray666 = GRAY_666, grayccc = GRAY_CCC, ink = INK_BLUE, paper = PAPER, parchment = PARCHMENT, sepia = SEPIA, ochre = OCHRE, moss = MOSS },
         stateFor = stateFor, markdownBlocks = markdownBlocks, paginateBlocks = paginateBlocks, utf8Cut = utf8Cut, utf8Length = utf8Length,
-        validManagedPath = validManagedPath, imageMimeForPath = imageMimeForPath, restPath = restPath, applySessionResult = applySessionResult,
+        validManagedPath = validManagedPath, imageMimeForPath = imageMimeForPath, restPath = restPath, applySessionResult = applySessionResult, normalizedPost = normalizedPost, enrichPostWithProfile = enrichPostWithProfile,
         getTbsIdentity = function() return getTbsIdentity and getTbsIdentity() end,
         captureLocalDraft = captureLocalDraft, loadDrafts = loadDrafts, saveDrafts = saveDrafts, buildPane = buildPane,
-        rawRequest = rawRequest, cacheImageNow = cacheImageNow, LOGO_ROWS = LOGO_ROWS,
+        rawRequest = rawRequest, cacheImageNow = cacheImageNow, base64Encode = base64Encode, LOGO_ROWS = LOGO_ROWS,
     },
 }
