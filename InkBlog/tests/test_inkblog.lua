@@ -63,6 +63,13 @@ package.preload["ui/widget/inputdialog"] = function() return Widget end
 package.preload["ui/widget/overlapgroup"] = function() return Widget end
 package.preload["ui/widget/textboxwidget"] = function() return Widget end
 package.preload["ui/widget/textwidget"] = function() return Widget end
+local html_widget_creations = 0
+package.preload["ui/widget/htmlboxwidget"] = function()
+    return { new = function()
+        html_widget_creations = html_widget_creations + 1
+        return { paintTo = function() error("simulated HtmlBoxWidget paint crash") end }
+    end }
+end
 package.preload["ui/uimanager"] = function()
     return { show = function() end, close = function() end, tickAfterNext = function(_, callback) callback() end }
 end
@@ -119,7 +126,7 @@ local function context(width, height)
 end
 
 check(app.requires_tbs_account == true, "AppDock requires the existing TBS account before launch")
-check(app.version == "1.2.2", "catalog version exposes the readable body-field release")
+check(app.version == "1.2.3", "catalog version exposes the stable article-rendering release")
 local TBS_ACCOUNT_ID = "323e4567-e89b-12d3-a456-426614174000"
 package.loaded["appdock_tbs_account"] = nil
 package.preload["appdock_tbs_account"] = function()
@@ -203,7 +210,7 @@ local article_record = {
     title = "Crash-proof article", markdown = "# A quiet page\n\nA paragraph with **emphasis**.",
     created_at = "2026-10-23T12:00:00Z", like_count = 0, comment_count = 0,
 }
-article_state.posts, article_state.view, article_state.mode = { article_record }, "feed", "feed"
+article_state.posts, article_state.view, article_state.mode = { article_record }, "discover", "discover"
 local feed_pane = app.buildPane(article_instance, context(600, 760))
 local article_card
 for _, widget in ipairs(feed_pane[1]) do
@@ -213,7 +220,42 @@ check(article_card, "feed renders a tappable article card")
 article_card:onTapInkBlogAction()
 check(article_state.view == "article" and article_state.selected_post == article_record, "article card tap opens the selected article")
 local rendered_article = app.buildPane(article_instance, context(600, 760))
-check(rendered_article.dimen.w == 600 and rendered_article.dimen.h == 760, "opened article renders without a pane exception")
+check(rendered_article.dimen.w == 600 and rendered_article.dimen.h == 760, "opened discovered article renders without a pane exception")
+check(html_widget_creations == 0, "article renderer avoids the unstable HtmlBoxWidget paint path")
+
+local own_article_instance = {}
+local own_article_state = app._test.stateFor(own_article_instance)
+own_article_state.session.user.id = article_record.author_id
+own_article_state.posts, own_article_state.view, own_article_state.mode = { article_record }, "mine", "mine"
+local own_posts_pane = app.buildPane(own_article_instance, context(600, 350))
+local own_article_card
+for _, widget in ipairs(own_posts_pane[1]) do
+    if widget.body and widget.body:find("Crash-proof article", 1, true) then own_article_card = widget; break end
+end
+check(own_article_card, "own-post list renders a tappable article card")
+own_article_card:onTapInkBlogAction()
+check(own_article_state.view == "article", "own-post card tap enters article view")
+local own_rendered_article = app.buildPane(own_article_instance, context(600, 350))
+check(own_rendered_article.dimen.w == 600 and own_rendered_article.dimen.h == 350,
+    "own article renders inside a 600x350 AppDock split pane")
+check(html_widget_creations == 0, "neither discovered nor own articles instantiate HtmlBoxWidget")
+
+local missing_article_instance = {}
+local missing_article_state = app._test.stateFor(missing_article_instance)
+missing_article_state.view, missing_article_state.selected_post = "article", nil
+local missing_article_pane = app.buildPane(missing_article_instance, context(600, 350))
+check(missing_article_state.view == "feed" and missing_article_state.selected_post == nil,
+    "missing selected post safely returns to the feed")
+check(missing_article_pane.dimen.w == 600 and missing_article_state.status:find("unavailable", 1, true),
+    "missing-post fallback keeps pane geometry and shows a readable status")
+
+local incomplete_article_instance = {}
+local incomplete_article_state = app._test.stateFor(incomplete_article_instance)
+incomplete_article_state.view = "article"
+incomplete_article_state.selected_post = { id = "423e4567-e89b-12d3-a456-426614174000", display_name = {} }
+local incomplete_article_pane = app.buildPane(incomplete_article_instance, context(600, 350))
+check(incomplete_article_state.view == "article" and incomplete_article_pane.dimen.h == 350,
+    "valid but incomplete article data renders safely in a split pane")
 
 local publish_instance = {}
 local publish_state = app._test.stateFor(publish_instance)

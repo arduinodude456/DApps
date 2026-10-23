@@ -1770,10 +1770,15 @@ end
 local function renderArticle(layer, state, context, width, top, bottom, px)
     local post = state.selected_post
     local margin, gap = px(12), px(6)
-    if not post then state.view = "feed"; return end
+    if type(post) ~= "table" or not validUuid(post.id) then
+        state.selected_post = nil
+        state.view = state.mode == "blog" and "author" or "feed"
+        state.status = _( "That post is unavailable; returned to the list." )
+        return
+    end
     local title_height = px(52)
     addText(layer, tostring(post.title or _("Untitled")), margin, top, width - 2 * margin, px(22), { serif = true, bold = true })
-    local author = post.display_name or _("Author")
+    local author = tostring(post.display_name or _("Author"))
     addText(layer, author .. " · " .. tostring(post.published_at or post.created_at or ""), margin, top + px(29), width - 2 * margin, px(10), { color = GRAY_666 })
     local actions_y, action_h = top + title_height, px(44)
     local w4 = math.floor((width - 2 * margin - 3 * gap) / 4)
@@ -1818,8 +1823,10 @@ local function renderArticle(layer, state, context, width, top, bottom, px)
         local pages = paginateBlocks(blocks, width - 2 * margin, content_h, px)
         state.article_page = clamp(state.article_page or 1, 1, #pages)
         local page_blocks = pages[state.article_page]
-        local native = nativeHtmlPage(page_blocks, width - 2 * margin, content_h, px, context)
-        if native then native.overlap_offset = { margin, content_y }; layer[#layer + 1] = native else renderFallbackBlocks(layer, page_blocks, margin, content_y, width - 2 * margin, content_h, px) end
+        -- Keep article pages on the same KOReader TextBoxWidget path as the rest
+        -- of the DApp. HtmlBoxWidget can fail later during pane painting on
+        -- some AppDock/KOReader hosts, outside the constructor's pcall boundary.
+        renderFallbackBlocks(layer, page_blocks, margin, content_y, width - 2 * margin, content_h, px)
         addPagination(layer, state, context, state.article_page, #pages, width, bottom - px(44), px, function(value) state.article_page = value end)
     end
 end
@@ -1977,6 +1984,11 @@ local function buildPane(instance, context)
     layer._inkblog_state, layer._inkblog_context = state, context
     local top, nav_space = px(52), px(56)
     local bottom = height - nav_space
+    if state.view == "article" and (type(state.selected_post) ~= "table" or not validUuid(state.selected_post.id)) then
+        state.selected_post = nil
+        state.view = state.mode == "blog" and "author" or "feed"
+        state.status = _("That post is unavailable; returned to the list.")
+    end
     addHeader(layer, state, width, px, state.view == "article" and _("InkBlog · Lesen") or _("InkBlog"))
     if state.view == "feed" then renderPostList(layer, state, context, width, top, bottom, px, _("Feed"))
     elseif state.view == "discover" then renderPostList(layer, state, context, width, top, bottom, px, _("Entdecken"))
@@ -2007,7 +2019,7 @@ end
 
 return {
     id = APP_ID,
-    version = "1.2.2",
+    version = "1.2.3",
     title = "InkBlog",
     subtitle = "Write in ink. Read in peace.",
     symbol = "I",
