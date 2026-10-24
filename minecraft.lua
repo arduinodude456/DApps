@@ -4815,7 +4815,7 @@ end
 
 return {
     id = "minecraft",
-    version = "5.0.0",
+    version = "5.0.1",
     title = "Minecraft 3D 2.0",
     subtitle = "Survival, Creative & Nether Portals",
     symbol = "M",
