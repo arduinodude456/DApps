@@ -460,6 +460,85 @@ local function shellQuote(value)
     return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
 end
 
+local function zipU16(s, i)
+    local a, b = s:byte(i, i + 1)
+    if not b then return nil end
+    return a + b * 256
+end
+
+local function zipU32(s, i)
+    local a, b, c, d = s:byte(i, i + 3)
+    if not d then return nil end
+    return a + b * 256 + c * 65536 + d * 16777216
+end
+
+-- Read ZIP central-directory names directly. Some reader unzip builds can
+-- extract archives but do not implement Info-ZIP's optional `unzip -Z1` mode.
+local function listNetsurfZip(path)
+    local file = io.open(path, "rb")
+    if not file then return nil, "invalid" end
+    local size = file:seek("end")
+    if not size or size < 22 then file:close(); return nil, "invalid" end
+    local tail_start = math.max(0, size - 65557)
+    file:seek("set", tail_start)
+    local tail = file:read("*a") or ""
+    local eocd, scan = nil, 1
+    while true do
+        local found = tail:find("PK\005\006", scan, true)
+        if not found then break end
+        local comment_length = zipU16(tail, found + 20)
+        if comment_length and found + 21 + comment_length == #tail then eocd = found end
+        scan = found + 1
+    end
+    if not eocd then file:close(); return nil, "invalid" end
+    local disk = zipU16(tail, eocd + 4)
+    local directory_disk = zipU16(tail, eocd + 6)
+    local disk_entries = zipU16(tail, eocd + 8)
+    local entry_count = zipU16(tail, eocd + 10)
+    local directory_size = zipU32(tail, eocd + 12)
+    local directory_offset = zipU32(tail, eocd + 16)
+    local eocd_offset = tail_start + eocd - 1
+    if disk ~= 0 or directory_disk ~= 0 or disk_entries ~= entry_count
+        or not entry_count or entry_count == 0 or entry_count > 128
+        or directory_size == 4294967295 or directory_offset == 4294967295
+        or directory_offset + directory_size > eocd_offset then
+        file:close(); return nil, "invalid"
+    end
+    file:seek("set", directory_offset)
+    local names = {}
+    for _ = 1, entry_count do
+        local header = file:read(46)
+        if not header or #header ~= 46 or header:sub(1, 4) ~= "PK\001\002" then
+            file:close(); return nil, "invalid"
+        end
+        local flags = zipU16(header, 9)
+        local name_length = zipU16(header, 29)
+        local extra_length = zipU16(header, 31)
+        local comment_length = zipU16(header, 33)
+        local external_attributes = zipU32(header, 39)
+        if not flags or flags % 2 ~= 0 or not name_length or name_length == 0 then
+            file:close(); return nil, "invalid"
+        end
+        local name = file:read(name_length)
+        if not name or #name ~= name_length then file:close(); return nil, "invalid" end
+        local unix_mode = math.floor((external_attributes or 0) / 65536)
+        local file_type = math.floor(unix_mode / 4096)
+        if name:sub(1, 8) ~= "netsurf/" or name:sub(1, 1) == "/"
+            or name:find("\\", 1, true) or name:find(string.char(0), 1, true) or file_type == 10 then
+            file:close(); return nil, "unsafe"
+        end
+        for component in name:gmatch("[^/]+") do
+            if component == "." or component == ".." then file:close(); return nil, "unsafe" end
+        end
+        names[name] = true
+        if not file:seek("cur", extra_length + comment_length) then
+            file:close(); return nil, "invalid"
+        end
+    end
+    file:close()
+    return names
+end
+
 local function installNetsurf()
     local root = "/mnt/onboard/.adds"
     local target = root .. "/netsurf"
@@ -481,30 +560,25 @@ local function installNetsurf()
     if not body then return nil, _("Could not download Netsurf: ") .. tostring(download_err) end
     local saved, save_err = writeFile(archive, body)
     if not saved then return nil, _("Could not save the Netsurf archive: ") .. tostring(save_err) end
-    local listing_pipe = io.popen("unzip -Z1 " .. shellQuote(archive) .. " 2>/dev/null")
-    if not listing_pipe then os.remove(archive); return nil, _("The unzip utility is unavailable.") end
-    local names, count = {}, 0
-    for name in listing_pipe:lines() do
-        count = count + 1
-        if count > 128 or name:sub(1, 7) ~= "netsurf/" or name:sub(1, 1) == "/"
-            or name:find("..", 1, true) or name:find("\\", 1, true) or name:find("%z") then
-            listing_pipe:close(); os.remove(archive)
-            return nil, _("The Netsurf archive contains an unsafe path.")
-        end
-        names[name] = true
+    local names, list_err = listNetsurfZip(archive)
+    if not names then
+        os.remove(archive)
+        if list_err == "unsafe" then return nil, _("The Netsurf archive contains an unsafe path.") end
+        return nil, _("The Netsurf archive is incomplete or invalid.")
     end
-    local listed = listing_pipe:close()
-    if not listed or not names["netsurf/bin/netsurf-fb"] or not names["netsurf/cacert.pem"] then
+    if not names["netsurf/bin/netsurf-fb"] or not names["netsurf/cacert.pem"] then
         os.remove(archive)
         return nil, _("The Netsurf archive is incomplete or invalid.")
     end
     removeTree(stage)
     if not lfs.mkdir(stage) then os.remove(archive); return nil, _("Could not create the Netsurf staging folder.") end
-    local command = "unzip -tqq " .. shellQuote(archive) .. " >/dev/null 2>&1 && unzip -oq " .. shellQuote(archive) .. " -d " .. shellQuote(stage) .. " >/dev/null 2>&1"
+    local binary = stage .. "/netsurf/bin/netsurf-fb"
+    local command = "unzip -o -q " .. shellQuote(archive) .. " -d " .. shellQuote(stage)
+        .. " >/dev/null 2>&1 && chmod 755 " .. shellQuote(binary) .. " >/dev/null 2>&1"
     local process = io.popen(command .. "; printf '\\n%d' $?", "r")
     local result = process and process:read("*a") or ""
     if process then process:close() end
-    if tonumber(result:match("(%d+)%s*$")) ~= 0 or not lfs.attributes(stage .. "/netsurf/bin/netsurf-fb", "mode") then
+    if tonumber(result:match("(%d+)%s*$")) ~= 0 or not lfs.attributes(binary, "mode") then
         removeTree(stage); os.remove(archive)
         return nil, _("Could not validate or extract Netsurf.")
     end
@@ -717,7 +791,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.8",
+    version = "1.4.9",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
@@ -725,4 +799,5 @@ return {
     buildPane = buildPane,
     backgroundTick = safeBackgroundTick,
     onAutostart = safeBackgroundTick,
+    _test = { listNetsurfZip = listNetsurfZip },
 }

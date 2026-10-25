@@ -164,7 +164,13 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.8" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.9" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+local archive_file = io.open("netsurf.zip", "rb")
+if archive_file then
+    archive_file:close()
+    local archive_names = assert(app._test.listNetsurfZip("netsurf.zip"), "DockUpdate must parse the NetSurf ZIP without unzip -Z1")
+    assert(archive_names["netsurf/bin/netsurf-fb"] and archive_names["netsurf/cacert.pem"], "The published NetSurf archive must contain its browser binary and CA bundle")
+end
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 local required_count = 0
@@ -260,7 +266,7 @@ assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpda
 assert(#log.requests == 1 + #required + #optional_sources + #png_assets + 2,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.8 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.8")
+assert(catalog:find("dock_update.lua | 1.4.9 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.9")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
