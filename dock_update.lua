@@ -55,6 +55,8 @@ local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
 local MAX_RELEASE_FILES = 80
 local MAX_RELEASE_NOTES = 16 * 1024
+local NETSURF_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main/netsurf.zip"
+local NETSURF_MAX_ARCHIVE_BYTES = 7 * 1024 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
     "appdock_appstore.lua", "appdock_audio.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
@@ -453,6 +455,61 @@ local function installRelease(release, entries, target, installed_version)
     return backup
 end
 
+local function shellQuote(value)
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function installNetsurf()
+    local root = "/mnt/onboard/.adds"
+    local target = root .. "/netsurf"
+    if lfs.attributes(target, "mode") then
+        return nil, _("Netsurf is already present in .adds; DockUpdate will not overwrite it.")
+    end
+    local made_adds = lfs.attributes(root, "mode") ~= "directory"
+    if made_adds then
+        local made, mkdir_err = lfs.mkdir(root)
+        if not made then return nil, _("Could not create .adds: ") .. tostring(mkdir_err) end
+    end
+    local archive = root .. "/.netsurf-download.zip"
+    local stage = root .. "/.netsurf-stage"
+    os.remove(archive)
+    local body, download_err = fetch(NETSURF_URL, NETSURF_MAX_ARCHIVE_BYTES, "application/zip,application/octet-stream;q=0.9")
+    if not body then return nil, _("Could not download Netsurf: ") .. tostring(download_err) end
+    local saved, save_err = writeFile(archive, body)
+    if not saved then return nil, _("Could not save the Netsurf archive: ") .. tostring(save_err) end
+    local listing_pipe = io.popen("unzip -Z1 " .. shellQuote(archive) .. " 2>/dev/null")
+    if not listing_pipe then os.remove(archive); return nil, _("The unzip utility is unavailable.") end
+    local names, count = {}, 0
+    for name in listing_pipe:lines() do
+        count = count + 1
+        if count > 128 or name:sub(1, 7) ~= "netsurf/" or name:sub(1, 1) == "/"
+            or name:find("..", 1, true) or name:find("\\", 1, true) or name:find("%z") then
+            listing_pipe:close(); os.remove(archive)
+            return nil, _("The Netsurf archive contains an unsafe path.")
+        end
+        names[name] = true
+    end
+    local listed = listing_pipe:close()
+    if not listed or not names["netsurf/bin/netsurf-fb"] or not names["netsurf/cacert.pem"] then
+        os.remove(archive)
+        return nil, _("The Netsurf archive is incomplete or invalid.")
+    end
+    removeTree(stage)
+    if not lfs.mkdir(stage) then os.remove(archive); return nil, _("Could not create the Netsurf staging folder.") end
+    local command = "unzip -tqq " .. shellQuote(archive) .. " >/dev/null 2>&1 && unzip -oq " .. shellQuote(archive) .. " -d " .. shellQuote(stage) .. " >/dev/null 2>&1"
+    local process = io.popen(command .. "; printf '\\n%d' $?", "r")
+    local result = process and process:read("*a") or ""
+    if process then process:close() end
+    if tonumber(result:match("(%d+)%s*$")) ~= 0 or not lfs.attributes(stage .. "/netsurf/bin/netsurf-fb", "mode") then
+        removeTree(stage); os.remove(archive)
+        return nil, _("Could not validate or extract Netsurf.")
+    end
+    local moved, move_err = os.rename(stage .. "/netsurf", target)
+    removeTree(stage); os.remove(archive)
+    if not moved then return nil, _("Could not install Netsurf in .adds: ") .. tostring(move_err) end
+    return true
+end
+
 local Action = InputContainer:extend{ title = nil, subtitle = nil, callback = nil, width = nil, height = nil, background = nil, foreground = nil, dimen = nil }
 function Action:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -591,19 +648,21 @@ local function confirmInstall(instance, context)
                 .. _("Installed: ") .. tostring(installed_version_or_err) .. "\n"
                 .. _("Release: ") .. release.version .. "\n"
                 .. _("Validated source files: ") .. #entries
-                .. _("\n\nEach source file will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. Your current AppDock folder will be retained as a rollback backup. Restart KOReader after the update."),
+                .. _("\n\nAppDock source files will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. Netsurf will also be downloaded and extracted to .adds/netsurf (an existing installation will not be overwritten). Your current AppDock folder will be retained as a rollback backup. Restart KOReader after the update."),
             ok_text = _("Install update"),
             ok_callback = function()
                 state.updating = true
                 requestRebuild(context)
                 local backup, update_err = installRelease(release, entries, target, installed_version_or_err)
+                local netsurf_ok, netsurf_err
+                if backup then netsurf_ok, netsurf_err = installNetsurf() end
                 state.updating = false
                 if not backup then
                     state.error = _("AppDock update failed: ") .. tostring(update_err)
                     showMessage(state.error)
                 else
                     state.error = nil
-                    showMessage(_("AppDock was updated to ") .. release.version .. _(".\n\nRestart KOReader now to load the new plugin files.\n\nRollback backup:\n") .. backup)
+                    showMessage(_("AppDock was updated to ") .. release.version .. _(".\n\n") .. (netsurf_ok and _("Netsurf was extracted to /mnt/onboard/.adds/netsurf.\n\n") or (_("Netsurf installation failed: ") .. tostring(netsurf_err) .. _("\n\n"))) .. _("Restart KOReader now to load the new plugin files.\n\nRollback backup:\n") .. backup)
                 end
                 requestRebuild(context)
             end,
@@ -654,7 +713,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.6",
+    version = "1.4.7",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
