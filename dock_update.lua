@@ -57,9 +57,11 @@ local MAX_RELEASE_FILES = 80
 local MAX_RELEASE_NOTES = 16 * 1024
 local NETSURF_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main/netsurf.zip"
 local NETSURF_MAX_ARCHIVE_BYTES = 7 * 1024 * 1024
+local DOOM_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main/doom-kobo.zip"
+local DOOM_MAX_ARCHIVE_BYTES = 24 * 1024 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
-    "appdock_appstore.lua", "appdock_audio.lua", "appdock_netsurf.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
+    "appdock_appstore.lua", "appdock_audio.lua", "appdock_doom.lua", "appdock_netsurf.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
@@ -84,7 +86,7 @@ local REQUIRED_FILES = {
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
-    ["appdock_recovery.lua"] = true, ["appdock_netsurf.lua"] = true,
+    ["appdock_recovery.lua"] = true, ["appdock_doom.lua"] = true, ["appdock_netsurf.lua"] = true,
     ["appdock_appstore.lua"] = true, ["appdock_boot.lua"] = true,
     ["appdock_browser.lua"] = true, ["appdock_dapps.lua"] = true,
     ["appdock_filemanager.lua"] = true, ["appdock_groups.lua"] = true, ["appdock_help.lua"] = true,
@@ -121,6 +123,7 @@ local SOURCE_MIN_VERSION = {
     ["appdock_text.lua"] = "8.2.13",
     ["appdock_youtube_shorts.lua"] = "8.2.22",
     ["appdock_netsurf.lua"] = "8.5.2",
+    ["appdock_doom.lua"] = "8.5.3",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -474,7 +477,7 @@ end
 
 -- Read ZIP central-directory names directly. Some reader unzip builds can
 -- extract archives but do not implement Info-ZIP's optional `unzip -Z1` mode.
-local function listNetsurfZip(path)
+local function listArchive(path, root_prefix)
     local file = io.open(path, "rb")
     if not file then return nil, "invalid" end
     local size = file:seek("end")
@@ -523,7 +526,7 @@ local function listNetsurfZip(path)
         if not name or #name ~= name_length then file:close(); return nil, "invalid" end
         local unix_mode = math.floor((external_attributes or 0) / 65536)
         local file_type = math.floor(unix_mode / 4096)
-        if name:sub(1, 8) ~= "netsurf/" or name:sub(1, 1) == "/"
+        if (root_prefix and name:sub(1, #root_prefix) ~= root_prefix) or name:sub(1, 1) == "/"
             or name:find("\\", 1, true) or name:find(string.char(0), 1, true) or file_type == 10 then
             file:close(); return nil, "unsafe"
         end
@@ -537,6 +540,14 @@ local function listNetsurfZip(path)
     end
     file:close()
     return names
+end
+
+local function listNetsurfZip(path)
+    return listArchive(path, "netsurf/")
+end
+
+local function listDoomZip(path)
+    return listArchive(path, nil)
 end
 
 local function installNetsurf()
@@ -585,6 +596,79 @@ local function installNetsurf()
     local moved, move_err = os.rename(stage .. "/netsurf", target)
     removeTree(stage); os.remove(archive)
     if not moved then return nil, _("Could not install Netsurf in .adds: ") .. tostring(move_err) end
+    return true
+end
+
+local DOOM_ARCHIVE_FILES = {
+    [".adds/"] = true, [".adds/doom/"] = true, [".adds/doom/bin/"] = true,
+    [".adds/doom/lib/"] = true, [".adds/doom/home/"] = true,
+    [".adds/doom/bin/doomgeneric-640"] = true,
+    [".adds/doom/bin/doomgeneric-960"] = true,
+    [".adds/doom/freedoom1.wad"] = true, [".adds/doom/freedoom2.wad"] = true,
+    [".adds/doom/DOOMGENERIC-LICENSE.txt"] = true,
+    [".adds/doom/FREEDOOM-LICENSE.txt"] = true,
+}
+
+local function installDoom()
+    local root = "/mnt/onboard/.adds"
+    local target = root .. "/doom"
+    if lfs.attributes("/mnt/onboard", "mode") ~= "directory" then
+        return nil, _("The reader's onboard storage is unavailable.")
+    end
+    if lfs.attributes(target, "mode") then
+        return nil, _("Doom is already present in .adds; DockUpdate will not overwrite it.")
+    end
+    local made_adds = lfs.attributes(root, "mode") ~= "directory"
+    if made_adds then
+        local made, mkdir_err = lfs.mkdir(root)
+        if not made then return nil, _("Could not create .adds: ") .. tostring(mkdir_err) end
+    end
+    local archive = root .. "/.doom-download.zip"
+    local stage = root .. "/.doom-stage"
+    os.remove(archive)
+    local body, download_err = fetch(DOOM_URL, DOOM_MAX_ARCHIVE_BYTES, "application/zip,application/octet-stream;q=0.9")
+    if not body then return nil, _("Could not download Doom: ") .. tostring(download_err) end
+    local saved, save_err = writeFile(archive, body)
+    if not saved then return nil, _("Could not save the Doom archive: ") .. tostring(save_err) end
+    local names, list_err = listDoomZip(archive)
+    if not names then
+        os.remove(archive)
+        if list_err == "unsafe" then return nil, _("The Doom archive contains an unsafe path.") end
+        return nil, _("The Doom archive is incomplete or invalid.")
+    end
+    for name in pairs(names) do
+        if not DOOM_ARCHIVE_FILES[name] then
+            os.remove(archive)
+            return nil, _("The Doom archive contains an unexpected file.")
+        end
+    end
+    for _, required in ipairs({
+        ".adds/doom/bin/doomgeneric-640", ".adds/doom/bin/doomgeneric-960",
+        ".adds/doom/freedoom1.wad", ".adds/doom/freedoom2.wad",
+    }) do
+        if not names[required] then
+            os.remove(archive)
+            return nil, _("The Doom archive is incomplete or invalid.")
+        end
+    end
+    removeTree(stage)
+    if not lfs.mkdir(stage) then os.remove(archive); return nil, _("Could not create the Doom staging folder.") end
+    local binary_640 = stage .. "/.adds/doom/bin/doomgeneric-640"
+    local binary_960 = stage .. "/.adds/doom/bin/doomgeneric-960"
+    local command = "unzip -o -q " .. shellQuote(archive) .. " -d " .. shellQuote(stage)
+        .. " >/dev/null 2>&1 && chmod 755 " .. shellQuote(binary_640) .. " " .. shellQuote(binary_960)
+        .. " >/dev/null 2>&1"
+    local process = io.popen(command .. "; printf '\n%d' $?", "r")
+    local result = process and process:read("*a") or ""
+    if process then process:close() end
+    if tonumber(result:match("(%d+)%s*$")) ~= 0
+        or not lfs.attributes(binary_640, "mode") or not lfs.attributes(binary_960, "mode") then
+        removeTree(stage); os.remove(archive)
+        return nil, _("Could not validate or extract Doom.")
+    end
+    local moved, move_err = os.rename(stage .. "/.adds/doom", target)
+    removeTree(stage); os.remove(archive)
+    if not moved then return nil, _("Could not install Doom in .adds: ") .. tostring(move_err) end
     return true
 end
 
@@ -708,6 +792,43 @@ local function netsurfInstalled()
     return lfs.attributes("/mnt/onboard/.adds/netsurf", "mode") ~= nil
 end
 
+local function doomInstalled()
+    return lfs.attributes("/mnt/onboard/.adds/doom", "mode") ~= nil
+end
+
+local function confirmDoomInstall(instance, context)
+    local state = stateFor(instance)
+    local current_version = context and context.manager and context.manager.appdock and context.manager.appdock.version
+    local supported = compareVersions(tostring(current_version or ""), "8.5.3")
+    if supported == nil or supported < 0 then
+        showMessage(_("Update AppDock to version 8.5.3 or newer before installing Doom."))
+        return
+    end
+    if doomInstalled() then
+        showMessage(_("Doom is already present in .adds; DockUpdate will not overwrite it."))
+        return
+    end
+    UIManager:show(ConfirmBox:new{
+        text = _("Install the Doom package to /mnt/onboard/.adds/doom now?\n\n")
+            .. _("DockUpdate will validate the fixed archive contents, extract it to a staging folder, set both Doom binaries executable, then move it into place. Existing installations are never overwritten."),
+        ok_text = _("Install Doom"),
+        ok_callback = function()
+            state.updating, state.error = true, nil
+            requestRebuild(context)
+            local installed, install_err = installDoom()
+            state.updating = false
+            if installed then
+                state.error = nil
+                showMessage(_("Doom was extracted to /mnt/onboard/.adds/doom. Close and reopen the Doom app to launch it."))
+            else
+                state.error = _("Doom installation failed: ") .. tostring(install_err)
+                showMessage(state.error)
+            end
+            requestRebuild(context)
+        end,
+    })
+end
+
 local function confirmNetsurfInstall(instance, context)
     local state = stateFor(instance)
     local current_version = context and context.manager and context.manager.appdock and context.manager.appdock.version
@@ -803,8 +924,10 @@ local function buildPane(instance, context)
     local latest = release and release.version or _("Not checked")
     local relation = release and compareVersions(release.version, tostring(current_version)) or nil
     local netsurf_version_relation = compareVersions(tostring(current_version), "8.5.2")
+    local retry_doom = relation ~= 1 and netsurf_version_relation ~= nil and netsurf_version_relation >= 0
+        and not doomInstalled()
     local retry_netsurf = relation ~= 1 and netsurf_version_relation ~= nil and netsurf_version_relation >= 0
-        and not netsurfInstalled()
+        and doomInstalled() and not netsurfInstalled()
     local status
     if state.updating then status = _("Installing staged update…")
     elseif state.error then status = shorten(state.error, 170)
@@ -815,8 +938,8 @@ local function buildPane(instance, context)
     else status = _("Release found. The installed version could not be compared automatically.") end
     local notes = release and shorten(release.notes:gsub("\r", ""), 700) or _("Release Notes appear here after a check. Use the notes button to read the complete release announcement.")
     local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    local install_title = relation == 1 and _("Install update") or (retry_netsurf and _("Install NetSurf") or _("Up to date"))
-    local install_subtitle = relation == 1 and (_("AppDock ") .. latest) or (retry_netsurf and _("Retry NetSurf setup") or _("Confirmation required"))
+    local install_title = relation == 1 and _("Install update") or (retry_doom and _("Install Doom") or (retry_netsurf and _("Install NetSurf") or _("Up to date")))
+    local install_subtitle = relation == 1 and (_("AppDock ") .. latest) or (retry_doom and _("Separate game package") or (retry_netsurf and _("Retry NetSurf setup") or _("Confirmation required")))
     local elements = {
         background(width, height),
         TextWidget:new{ text = _("DockUpdate"), face = Font:getFace("cfont", px(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
@@ -824,14 +947,14 @@ local function buildPane(instance, context)
         TextBoxWidget:new{ bgcolor = Blitbuffer.COLOR_WHITE, text = status .. "\n\n" .. notes, face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = notes_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, notes_y } },
         Action:new{ title = _("Check updates"), subtitle = _("GitHub release"), width = third, height = button_h, callback = function() checkForRelease(instance, context) end, overlap_offset = { margin, footer_y } },
         Action:new{ title = _("Release Notes"), subtitle = release and release.tag or _("Check first"), width = third, height = button_h, callback = function() showNotes(instance, context) end, overlap_offset = { margin + third + gap, footer_y } },
-        Action:new{ title = install_title, subtitle = install_subtitle, width = third, height = button_h, background = (relation == 1 or retry_netsurf) and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY, callback = function() if retry_netsurf then confirmNetsurfInstall(instance, context) else confirmInstall(instance, context) end end, overlap_offset = { margin + 2 * (third + gap), footer_y } },
+        Action:new{ title = install_title, subtitle = install_subtitle, width = third, height = button_h, background = (relation == 1 or retry_doom or retry_netsurf) and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY, callback = function() if retry_doom then confirmDoomInstall(instance, context) elseif retry_netsurf then confirmNetsurfInstall(instance, context) else confirmInstall(instance, context) end end, overlap_offset = { margin + 2 * (third + gap), footer_y } },
     }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
 return {
     id = "dock_update",
-    version = "1.4.10",
+    version = "1.4.11",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
@@ -839,5 +962,5 @@ return {
     buildPane = buildPane,
     backgroundTick = safeBackgroundTick,
     onAutostart = safeBackgroundTick,
-    _test = { listNetsurfZip = listNetsurfZip },
+    _test = { listNetsurfZip = listNetsurfZip, listDoomZip = listDoomZip },
 }

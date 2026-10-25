@@ -164,18 +164,25 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.10" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.11" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local archive_file = io.open("netsurf.zip", "rb")
 if archive_file then
     archive_file:close()
     local archive_names = assert(app._test.listNetsurfZip("netsurf.zip"), "DockUpdate must parse the NetSurf ZIP without unzip -Z1")
     assert(archive_names["netsurf/bin/netsurf-fb"] and archive_names["netsurf/cacert.pem"], "The published NetSurf archive must contain its browser binary and CA bundle")
 end
+local doom_archive = io.open("doom-kobo.zip", "rb")
+if doom_archive then
+    doom_archive:close()
+    local doom_names = assert(app._test.listDoomZip("doom-kobo.zip"), "DockUpdate must parse the Doom ZIP")
+    assert(doom_names[".adds/doom/bin/doomgeneric-640"] and doom_names[".adds/doom/bin/doomgeneric-960"], "The Doom archive must contain both Kobo binaries")
+    assert(doom_names[".adds/doom/freedoom1.wad"] and doom_names[".adds/doom/freedoom2.wad"], "The Doom archive must contain the Freedoom IWADs")
+end
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 local required_count = 0
 for _ in required_source_block:gmatch('"[^\"]+"') do required_count = required_count + 1 end
-assert(required_count == 70, "DockUpdate must declare the 69 current plugin files plus the versioned NetSurf browser module")
+assert(required_count == 71, "DockUpdate must declare the 70 current plugin files plus the versioned Doom and NetSurf modules")
 for _, asset in ipairs(png_assets) do
     assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current PNG asset must be required: " .. asset)
 end
@@ -184,6 +191,7 @@ assert(required_source_block:find('"appdock_recovery.lua"', 1, true), "Boot reco
 assert(required_source_block:find('"appdock_text.lua"', 1, true), "Transparent text support must survive every DockUpdate install")
 assert(dock_update_source:find('["appdock_text.lua"] = true', 1, true), "DockUpdate must allow the transparent text module")
 assert(dock_update_source:find('["appdock_netsurf.lua"] = true', 1, true), "DockUpdate must allow the NetSurf browser module")
+assert(dock_update_source:find('["appdock_doom.lua"] = true', 1, true), "DockUpdate must allow the Doom module")
 assert(dock_update_source:find("and not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 80", 1, true), "DockUpdate must accept the current bounded AppDock package")
@@ -210,6 +218,7 @@ for _, marker in ipairs({
     '["appdock_text.lua"] = "8.2.13"',
     '["appdock_youtube_shorts.lua"] = "8.2.22"',
     '["appdock_netsurf.lua"] = "8.5.2"',
+    '["appdock_doom.lua"] = "8.5.3"',
 }) do
     assert(dock_update_source:find(marker, 1, true), "DockUpdate must only request versioned files after their first AppDock release: " .. marker)
 end
@@ -225,10 +234,10 @@ local pane = app.buildPane(instance, context)
 assert(pane and pane.dimen and pane.dimen.w == 600, "DockUpdate must build inside the assigned AppDock dimensions")
 local check, notes, install = pane[5], pane[6], pane[7]
 assert(check.title == "Check updates" and notes.title == "Release Notes" and install.title == "Up to date", "DockUpdate must expose its expected action tiles before a check")
-local retry_pane = app.buildPane({}, { dimen = { w = 600, h = 760 }, manager = { appdock = { version = "8.5.2" } } })
-assert(retry_pane[7].title == "Install NetSurf", "An AppDock 8.5.2 installation must be able to retry NetSurf without another core release")
+local retry_pane = app.buildPane({}, { dimen = { w = 600, h = 760 }, manager = { appdock = { version = "8.5.3" } } })
+assert(retry_pane[7].title == "Install Doom", "An AppDock 8.5.3 installation must be able to install Doom separately")
 retry_pane[7].callback()
-assert(log.shown and log.shown.text:find("Install the NetSurf package", 1, true), "The NetSurf retry must require explicit confirmation")
+assert(log.shown and log.shown.text:find("Install the Doom package", 1, true), "The Doom installation must require explicit confirmation")
 assert(check[1] and check[1][1] and check[1][1][1] and check[1][1][1].text == "Check updates", "DockUpdate action labels must be direct OverlapGroup children")
 local split_context = {
     dimen = { w = 600, h = 360 },
@@ -270,7 +279,7 @@ assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpda
 assert(#log.requests == 1 + #required + #optional_sources + #png_assets + 2,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.10 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.10")
+assert(catalog:find("dock_update.lua | 1.4.11 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.11")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
