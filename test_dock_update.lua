@@ -164,7 +164,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.9" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.10" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local archive_file = io.open("netsurf.zip", "rb")
 if archive_file then
     archive_file:close()
@@ -225,6 +225,10 @@ local pane = app.buildPane(instance, context)
 assert(pane and pane.dimen and pane.dimen.w == 600, "DockUpdate must build inside the assigned AppDock dimensions")
 local check, notes, install = pane[5], pane[6], pane[7]
 assert(check.title == "Check updates" and notes.title == "Release Notes" and install.title == "Up to date", "DockUpdate must expose its expected action tiles before a check")
+local retry_pane = app.buildPane({}, { dimen = { w = 600, h = 760 }, manager = { appdock = { version = "8.5.2" } } })
+assert(retry_pane[7].title == "Install NetSurf", "An AppDock 8.5.2 installation must be able to retry NetSurf without another core release")
+retry_pane[7].callback()
+assert(log.shown and log.shown.text:find("Install the NetSurf package", 1, true), "The NetSurf retry must require explicit confirmation")
 assert(check[1] and check[1][1] and check[1][1][1] and check[1][1][1].text == "Check updates", "DockUpdate action labels must be direct OverlapGroup children")
 local split_context = {
     dimen = { w = 600, h = 360 },
@@ -266,7 +270,7 @@ assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpda
 assert(#log.requests == 1 + #required + #optional_sources + #png_assets + 2,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.9 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.9")
+assert(catalog:find("dock_update.lua | 1.4.10 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.10")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")

@@ -704,6 +704,43 @@ local function showNotes(instance, context)
     })
 end
 
+local function netsurfInstalled()
+    return lfs.attributes("/mnt/onboard/.adds/netsurf", "mode") ~= nil
+end
+
+local function confirmNetsurfInstall(instance, context)
+    local state = stateFor(instance)
+    local current_version = context and context.manager and context.manager.appdock and context.manager.appdock.version
+    local supported = compareVersions(tostring(current_version or ""), "8.5.2")
+    if supported == nil or supported < 0 then
+        showMessage(_("Update AppDock to version 8.5.2 or newer before installing NetSurf."))
+        return
+    end
+    if netsurfInstalled() then
+        showMessage(_("NetSurf is already present in .adds; DockUpdate will not overwrite it."))
+        return
+    end
+    UIManager:show(ConfirmBox:new{
+        text = _("Install the NetSurf package to /mnt/onboard/.adds/netsurf now?\n\n")
+            .. _("DockUpdate will validate the archive, extract it to a staging folder, set the browser binary executable, then move it into place. Existing installations are never overwritten."),
+        ok_text = _("Install NetSurf"),
+        ok_callback = function()
+            state.updating, state.error = true, nil
+            requestRebuild(context)
+            local installed, install_err = installNetsurf()
+            state.updating = false
+            if installed then
+                state.error = nil
+                showMessage(_("NetSurf was extracted to /mnt/onboard/.adds/netsurf. Close and reopen the AppDock browser to launch it."))
+            else
+                state.error = _("NetSurf installation failed: ") .. tostring(install_err)
+                showMessage(state.error)
+            end
+            requestRebuild(context)
+        end,
+    })
+end
+
 local function confirmInstall(instance, context)
     local state = stateFor(instance)
     local target, installed_version_or_err = activePlugin(context)
@@ -765,6 +802,9 @@ local function buildPane(instance, context)
     local release = state.release
     local latest = release and release.version or _("Not checked")
     local relation = release and compareVersions(release.version, tostring(current_version)) or nil
+    local netsurf_version_relation = compareVersions(tostring(current_version), "8.5.2")
+    local retry_netsurf = relation ~= 1 and netsurf_version_relation ~= nil and netsurf_version_relation >= 0
+        and not netsurfInstalled()
     local status
     if state.updating then status = _("Installing staged update…")
     elseif state.error then status = shorten(state.error, 170)
@@ -775,8 +815,8 @@ local function buildPane(instance, context)
     else status = _("Release found. The installed version could not be compared automatically.") end
     local notes = release and shorten(release.notes:gsub("\r", ""), 700) or _("Release Notes appear here after a check. Use the notes button to read the complete release announcement.")
     local third = math.floor((width - 2 * margin - 2 * gap) / 3)
-    local install_title = relation == 1 and _("Install update") or _("Up to date")
-    local install_subtitle = relation == 1 and (_("AppDock ") .. latest) or _("Confirmation required")
+    local install_title = relation == 1 and _("Install update") or (retry_netsurf and _("Install NetSurf") or _("Up to date"))
+    local install_subtitle = relation == 1 and (_("AppDock ") .. latest) or (retry_netsurf and _("Retry NetSurf setup") or _("Confirmation required"))
     local elements = {
         background(width, height),
         TextWidget:new{ text = _("DockUpdate"), face = Font:getFace("cfont", px(18)), bold = true, fgcolor = Blitbuffer.COLOR_BLACK, max_width = width - 2 * margin, overlap_offset = { margin, margin } },
@@ -784,14 +824,14 @@ local function buildPane(instance, context)
         TextBoxWidget:new{ bgcolor = Blitbuffer.COLOR_WHITE, text = status .. "\n\n" .. notes, face = Font:getFace("smallinfofont", px(9)), width = width - 2 * margin, height = notes_h, line_height = 0.32, alignment = "left", fgcolor = Blitbuffer.COLOR_BLACK, overlap_offset = { margin, notes_y } },
         Action:new{ title = _("Check updates"), subtitle = _("GitHub release"), width = third, height = button_h, callback = function() checkForRelease(instance, context) end, overlap_offset = { margin, footer_y } },
         Action:new{ title = _("Release Notes"), subtitle = release and release.tag or _("Check first"), width = third, height = button_h, callback = function() showNotes(instance, context) end, overlap_offset = { margin + third + gap, footer_y } },
-        Action:new{ title = install_title, subtitle = install_subtitle, width = third, height = button_h, background = relation == 1 and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY, callback = function() confirmInstall(instance, context) end, overlap_offset = { margin + 2 * (third + gap), footer_y } },
+        Action:new{ title = install_title, subtitle = install_subtitle, width = third, height = button_h, background = (relation == 1 or retry_netsurf) and Blitbuffer.COLOR_GRAY_8 or Blitbuffer.COLOR_LIGHT_GRAY, callback = function() if retry_netsurf then confirmNetsurfInstall(instance, context) else confirmInstall(instance, context) end end, overlap_offset = { margin + 2 * (third + gap), footer_y } },
     }
     return OverlapGroup:new{ dimen = Geom:new{ w = width, h = height }, allow_mirroring = false, unpack(elements) }
 end
 
 return {
     id = "dock_update",
-    version = "1.4.9",
+    version = "1.4.10",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
