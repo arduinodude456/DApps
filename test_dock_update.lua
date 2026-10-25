@@ -164,12 +164,12 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.6" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "1.4.8" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 local required_count = 0
 for _ in required_source_block:gmatch('"[^\"]+"') do required_count = required_count + 1 end
-assert(required_count == 69, "DockUpdate must declare all 69 files from the current AppDock 8.3.5 plugin tree as required")
+assert(required_count == 70, "DockUpdate must declare the 69 current plugin files plus the versioned NetSurf browser module")
 for _, asset in ipairs(png_assets) do
     assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current PNG asset must be required: " .. asset)
 end
@@ -177,6 +177,7 @@ assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher
 assert(required_source_block:find('"appdock_recovery.lua"', 1, true), "Boot recovery must survive every DockUpdate install")
 assert(required_source_block:find('"appdock_text.lua"', 1, true), "Transparent text support must survive every DockUpdate install")
 assert(dock_update_source:find('["appdock_text.lua"] = true', 1, true), "DockUpdate must allow the transparent text module")
+assert(dock_update_source:find('["appdock_netsurf.lua"] = true', 1, true), "DockUpdate must allow the NetSurf browser module")
 assert(dock_update_source:find("and not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
 assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 80", 1, true), "DockUpdate must accept the current bounded AppDock package")
@@ -202,6 +203,7 @@ for _, marker in ipairs({
     '["appdock_sleepscreen_weather.lua"] = "8.2.10"',
     '["appdock_text.lua"] = "8.2.13"',
     '["appdock_youtube_shorts.lua"] = "8.2.22"',
+    '["appdock_netsurf.lua"] = "8.5.2"',
 }) do
     assert(dock_update_source:find(marker, 1, true), "DockUpdate must only request versioned files after their first AppDock release: " .. marker)
 end
@@ -258,7 +260,7 @@ assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpda
 assert(#log.requests == 1 + #required + #optional_sources + #png_assets + 2,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.6 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.6")
+assert(catalog:find("dock_update.lua | 1.4.8 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.8")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")

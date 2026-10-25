@@ -59,7 +59,7 @@ local NETSURF_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main
 local NETSURF_MAX_ARCHIVE_BYTES = 7 * 1024 * 1024
 local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
-    "appdock_appstore.lua", "appdock_audio.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
+    "appdock_appstore.lua", "appdock_audio.lua", "appdock_netsurf.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
@@ -84,7 +84,7 @@ local REQUIRED_FILES = {
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
-    ["appdock_recovery.lua"] = true,
+    ["appdock_recovery.lua"] = true, ["appdock_netsurf.lua"] = true,
     ["appdock_appstore.lua"] = true, ["appdock_boot.lua"] = true,
     ["appdock_browser.lua"] = true, ["appdock_dapps.lua"] = true,
     ["appdock_filemanager.lua"] = true, ["appdock_groups.lua"] = true, ["appdock_help.lua"] = true,
@@ -120,6 +120,7 @@ local SOURCE_MIN_VERSION = {
     ["appdock_sleepscreen_weather.lua"] = "8.2.10",
     ["appdock_text.lua"] = "8.2.13",
     ["appdock_youtube_shorts.lua"] = "8.2.22",
+    ["appdock_netsurf.lua"] = "8.5.2",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -462,6 +463,9 @@ end
 local function installNetsurf()
     local root = "/mnt/onboard/.adds"
     local target = root .. "/netsurf"
+    if lfs.attributes("/mnt/onboard", "mode") ~= "directory" then
+        return nil, _("The reader's onboard storage is unavailable.")
+    end
     if lfs.attributes(target, "mode") then
         return nil, _("Netsurf is already present in .adds; DockUpdate will not overwrite it.")
     end
@@ -713,7 +717,7 @@ end
 
 return {
     id = "dock_update",
-    version = "1.4.7",
+    version = "1.4.8",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
