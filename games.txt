@@ -3,4 +3,4 @@
 # extracted into the device's .adds directory during installation.
 # Metadata: Lua path | version | logo | game | ZIP path | optional comma-separated launchers
 midless.lua | 1.0.0 | other | game | midless.zip
-geodash.lua | 1.0.6 | other | game | geodash.zip
+geodash.lua | 1.0.7 | other | game | geodash.zip

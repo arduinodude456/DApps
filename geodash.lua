@@ -60,14 +60,16 @@ local REFRESH_MODE = os.getenv("GD_REFRESH") or "fast"
 -- "fast" (A2) can only show 8 colours, so the game picture is dithered to the 8 primaries
 -- (000000 ffffff ff0000 00ff00 0000ff ff00ff ffff00 00ffff) before it is drawn.
 -- Dithering is on in every refresh mode; GD_DITHER=0 switches it off (debugging only).
-local DITHER = os.getenv("GD_DITHER") ~= "0"  -- always on: only the 8 primaries are ever drawn
+-- Dithering is expensive on the reader CPU. Prefer raw colour conversion for
+-- smooth motion; GD_DITHER=1 can re-enable the old dithered appearance.
+local DITHER = os.getenv("GD_DITHER") == "1"
 -- The real picture size is only known after the VNC handshake. Until then (and for the first
 -- layout) a 16:9 picture is assumed; the pane is laid out again once the game is connected.
 local PIC_GUESS_ASPECT = tonumber(os.getenv("GD_ASPECT")) or (16 / 9)
 -- Render fewer source pixels on the software-rendered reader, then enlarge the
 -- framebuffer with nearest-neighbour scaling to fill the pane. This keeps the
 -- visible picture large while cutting VNC capture, dithering and copy work.
-local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 2
+local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 3
 local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost before dithering (e-ink colours are pale)
 local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
@@ -77,7 +79,7 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength 
 -- Keep a larger source frame than the old 640 px default. On smaller readers
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
-local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 480
+local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 240
 local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 10
 if FRAME_MS <= 0 then FRAME_MS = 10 end
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
@@ -1146,7 +1148,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.6",
+    version = "1.0.7",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
