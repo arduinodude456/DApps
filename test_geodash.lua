@@ -61,7 +61,7 @@ install("gettext", function(value) return value end)
 
 local app = assert(loadfile("geodash.lua"))()
 local test = app._test
-assert(app.version == "1.0.7", "GeoDash must advertise the fast-render optimization version")
+assert(app.version == "1.0.8", "GeoDash must advertise the fast-render optimization version")
 assert(test.POLL_INTERVAL <= 1 / 60, "RFB polling must not cap the stream below the 60-FPS game rate")
 assert(test.FRAME_MS == 10, "The native game must not receive zero frame time and fall back to ~7 FPS")
 assert(test.PIC_OUT_W == 240 and test.MAX_SCALE == 3,

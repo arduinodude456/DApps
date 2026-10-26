@@ -60,9 +60,9 @@ local REFRESH_MODE = os.getenv("GD_REFRESH") or "fast"
 -- "fast" (A2) can only show 8 colours, so the game picture is dithered to the 8 primaries
 -- (000000 ffffff ff0000 00ff00 0000ff ff00ff ffff00 00ffff) before it is drawn.
 -- Dithering is on in every refresh mode; GD_DITHER=0 switches it off (debugging only).
--- Dithering is expensive on the reader CPU. Prefer raw colour conversion for
--- smooth motion; GD_DITHER=1 can re-enable the old dithered appearance.
-local DITHER = os.getenv("GD_DITHER") == "1"
+-- Fast/A2 refresh requires the eight-colour dithered output. Keep it enabled
+-- by default; GD_DITHER=0 remains an explicit debug override only.
+local DITHER = os.getenv("GD_DITHER") ~= "0"
 -- The real picture size is only known after the VNC handshake. Until then (and for the first
 -- layout) a 16:9 picture is assumed; the pane is laid out again once the game is connected.
 local PIC_GUESS_ASPECT = tonumber(os.getenv("GD_ASPECT")) or (16 / 9)
@@ -1148,7 +1148,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.7",
+    version = "1.0.8",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
