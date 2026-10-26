@@ -67,7 +67,7 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 3.2 -- dither strengt
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
 -- pixels = faster dithering, transfer and e-ink refresh. FRAME_MS is the minimum time between two
 -- frames the game publishes (the game's own default was 120 ms = about 8 fps).
-local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 450
+local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 480
 local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 40
 local BTN_UNIT = 34 -- height of one control row (scaled), small so the picture can be big
 
