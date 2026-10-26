@@ -1,6 +1,6 @@
 # AppDock Games catalog
 # Each game entry has a Lua DApp and a matching ZIP package. The package is
 # extracted into the device's .adds directory during installation.
-# Metadata: Lua path | version | logo | game | ZIP path
+# Metadata: Lua path | version | logo | game | ZIP path | optional comma-separated launchers
 midless.lua | 1.0.0 | other | game | midless.zip
-geodash.lua | 1.0.0 | other | game | geodash.zip
+geodash.lua | 1.0.1 | other | game | geodash.zip

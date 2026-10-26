@@ -11,7 +11,7 @@ Like the other DApps it exports { id, version, title, subtitle, symbol, buildPan
 the pane it is given. Game frames only repaint the game view (UIManager:widgetRepaint + a refresh of
 the changed rectangle), never the whole AppDock pane.
 
-Files expected on the device (installed by geodash-kobo.zip, unchanged):
+Files expected on the device (installed by geodash.zip from AppDock Store > Games):
   /mnt/onboard/.adds/geodash/bin/geodash
   /mnt/onboard/.adds/geodash/home/levels/*.txt
 
@@ -19,8 +19,8 @@ Screens: splash (Play) -> game (picture + touch controls, "Stop" in the header).
 The game process only lives while the game pane is on screen: leaving the DApp, suspending the
 device or pressing Stop shuts it down and the pane returns to the splash screen.
 
-Controls: tapping the picture = mouse click (the game jumps / menus). Buttons below it: JUMP (Space,
-hold = key held), Esc, Enter, Up, Down, Restart (R), Pause (P). Page-turn buttons = jump.
+Controls: tapping the picture or JUMP sends a frame-safe click/Space press. Other buttons: Esc, Enter,
+Up, Down, Restart (R), Pause (P). Page-turn buttons = jump.
 --]]--
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -45,12 +45,13 @@ local GD_DIR = os.getenv("GD_DIR") or "/mnt/onboard/.adds/geodash"
 local GD_LOG = GD_DIR .. "/geodash.log"
 local GD_HOME = GD_DIR .. "/home"            -- working dir: levels/, mylevels/, settings.txt
 local VNC_HOST, VNC_PORT = "127.0.0.1", 5963 -- must match scripts/03-geodash.sh
-local POLL_INTERVAL = 0.02   -- how often the VNC socket is checked (s)
+local POLL_INTERVAL = 1 / 60
 local CONNECT_TIMEOUT = 20
 local READ_TIMEOUT = 15      -- seconds a half-received message may take before the connection counts as dead
 local HOLD_SAFETY = 2.5        -- seconds after which a held key is released even without a "release" event
+local JUMP_PRESS_DURATION = 0.16 -- survive at least one 30-FPS game frame on quick e-ink taps
 local BUTTON_FEEDBACK = true   -- redraw a control button while it is held
--- KOReader refresh mode for game frames: "ui" (default), "partial", "fast" (A2, ghosty,
+-- KOReader refresh mode for game frames: "fast" (A2, ghosty,
 -- bad colours on Kaleido screens but the quickest).
 local REFRESH_MODE = os.getenv("GD_REFRESH") or "fast"
 -- "fast" (A2) can only show 8 colours, so the game picture is dithered to the 8 primaries
@@ -364,7 +365,7 @@ end
 
 function Proc.available()
     if not binaryPath() then
-        return false, _("Geometry Rush is not installed. Unzip geodash-kobo.zip into the Kobo root (see README).")
+        return false, _("Geometry Rush is not installed. Install it from AppDock Store > Games.")
     end
     return true
 end
@@ -552,12 +553,13 @@ function Game:poll()
             return
         end
         if res == nil then break end
-        if res then
+        -- Request the next update after every complete response, including an empty one.
+        pcall(self.rfb.requestUpdate, self.rfb, true)
+        if type(res) == "table" then
             ux0 = ux0 and math.min(ux0, res[1]) or res[1]
             uy0 = uy0 and math.min(uy0, res[2]) or res[2]
             ux1 = ux1 and math.max(ux1, res[3]) or res[3]
             uy1 = uy1 and math.max(uy1, res[4]) or res[4]
-            pcall(self.rfb.requestUpdate, self.rfb, true)
         end
     end
     if ux0 then
@@ -582,7 +584,7 @@ end
 
 function Game:pulseKey(key, seconds)
     self:sendKey(key, true)
-    UIManager:scheduleIn(seconds or 0.15, function() self:sendKey(key, false) end)
+    UIManager:scheduleIn(seconds or JUMP_PRESS_DURATION, function() self:sendKey(key, false) end)
 end
 
 function Game:pointer(x, y, down)
@@ -651,7 +653,7 @@ function GDButton:onTapGeodashButton()
 end
 
 -- --------------------------------------------------------------- game view ----
--- Shows the VNC picture. Tapping the picture = left click = break the block you look at.
+-- Shows the VNC picture. Tapping it sends a left click (jump in-game, menu selection otherwise).
 local GameView = InputContainer:extend{ width = nil, height = nil, dimen = nil }
 
 function GameView:init()
@@ -659,6 +661,7 @@ function GameView:init()
     self.range = Geom:new{ x = 0, y = 0, w = self.width, h = self.height }
     local screen_range = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.ptr_slot = {}
+    self.tap_suppressed = nil
     self.ges_events = {
         TouchGeodashGame = { GestureRange:new{ ges = "touch", range = self.range } },
         ReleaseGeodashGame = { GestureRange:new{ ges = "release", range = screen_range } },
@@ -716,19 +719,46 @@ end
 function GameView:onTouchGeodashGame(_arg, ges)
     local gx, gy = self:gamePos(ges.pos)
     if not gx then return true end
-    self.ptr_slot[ges.slot or 0] = true
-    self.last_game_touch = os.clock()
-    self.last_gx, self.last_gy = gx, gy
+    local slot = ges.slot or 0
+    local press = { x = gx, y = gy, released = false, min_elapsed = false }
+    self.ptr_slot[slot] = press
+    local tap_token = {}
+    self.tap_suppressed = tap_token
+    UIManager:scheduleIn(0.5, function()
+        if self.tap_suppressed == tap_token then self.tap_suppressed = nil end
+    end)
     Game:pointer(gx, gy, true)
+    press.min_cb = function()
+        press.min_elapsed = true
+        if press.released and self.ptr_slot[slot] == press then
+            self.ptr_slot[slot] = nil
+            if press.safety_cb then UIManager:unschedule(press.safety_cb) end
+            Game:pointer(press.x, press.y, false)
+        end
+    end
+    press.safety_cb = function()
+        if self.ptr_slot[slot] == press then
+            self.ptr_slot[slot] = nil
+            Game:pointer(press.x, press.y, false)
+        end
+    end
+    UIManager:scheduleIn(JUMP_PRESS_DURATION, press.min_cb)
+    UIManager:scheduleIn(HOLD_SAFETY, press.safety_cb)
     return true
 end
 
 function GameView:onReleaseGeodashGame(_arg, ges)
     local slot = ges.slot or 0
-    if not self.ptr_slot[slot] then return false end
-    self.ptr_slot[slot] = nil
+    local press = self.ptr_slot[slot]
+    if not press then return false end
     local gx, gy = self:gamePos(ges.pos)
-    Game:pointer(gx or self.last_gx or 0, gy or self.last_gy or 0, false)
+    if gx then press.x, press.y = gx, gy end
+    press.released = true
+    if press.min_elapsed then
+        self.ptr_slot[slot] = nil
+        if press.safety_cb then UIManager:unschedule(press.safety_cb) end
+        Game:pointer(press.x, press.y, false)
+    end
     return true
 end
 
@@ -736,22 +766,47 @@ end
 -- a plain tap becomes a short click.
 function GameView:onTapGeodashGame(_arg, ges)
     local gx, gy = self:gamePos(ges.pos)
-    if gx and os.clock() - (self.last_game_touch or -10) > 1.0 then
+    local slot = ges.slot or 0
+    local press = self.ptr_slot[slot]
+    if not press then
+        for candidate_slot, candidate in pairs(self.ptr_slot) do
+            slot, press = candidate_slot, candidate
+            break
+        end
+    end
+    if press then
+        press.released = true
+        if press.min_elapsed and self.ptr_slot[slot] == press then
+            self.ptr_slot[slot] = nil
+            if press.safety_cb then UIManager:unschedule(press.safety_cb) end
+            Game:pointer(press.x, press.y, false)
+        end
+        self.tap_suppressed = nil
+        return true
+    end
+    if self.tap_suppressed then
+        self.tap_suppressed = nil
+        return true
+    end
+    if gx then
+        -- The game samples input at 30 FPS; a very short tap can otherwise vanish
+        -- between two polls. Start from a known-up state and hold for one frame.
+        Game:pointer(gx, gy, false)
         Game:pointer(gx, gy, true)
-        UIManager:scheduleIn(0.2, function() Game:pointer(gx, gy, false) end)
+        UIManager:scheduleIn(JUMP_PRESS_DURATION, function() Game:pointer(gx, gy, false) end)
     end
     return true
 end
 
 -- --------------------------------------------------------------------- pad ----
--- The button grid below the picture (hold = key held).
+-- The button grid below the picture (jump uses a short frame-safe pulse; other keys follow touch).
 local Pad = InputContainer:extend{ width = nil, height = nil, dimen = nil }
 
 function Pad:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
     self.range = Geom:new{ x = 0, y = 0, w = self.width, h = self.height }
     local screen_range = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
-    self.held, self.by_slot, self.last_touch = {}, {}, {}
+    self.held, self.by_slot, self.tap_suppressed = {}, {}, {}
     self.ges_events = {
         TouchGeodashPad = { GestureRange:new{ ges = "touch", range = self.range } },
         ReleaseGeodashPad = { GestureRange:new{ ges = "release", range = screen_range } },
@@ -826,13 +881,16 @@ function Pad:press(b)
     self.held[b] = true
     Game:sendKey(b.key, true)
     -- safety net in case the "release" event never arrives
-    b.timeout_cb = function() b.timeout_cb = nil; self:release(b) end
-    UIManager:scheduleIn(HOLD_SAFETY, b.timeout_cb)
+    local is_jump = b.key == K.Space
+    b.timeout_cb = function() b.timeout_cb = nil; self:release(b, true) end
+    UIManager:scheduleIn(is_jump and JUMP_PRESS_DURATION or HOLD_SAFETY, b.timeout_cb)
     self:redrawButton(b)
 end
 
-function Pad:release(b)
+function Pad:release(b, force)
     if not self.held[b] then return end
+    -- A quick jump tap must survive at least one game input frame.
+    if b.key == K.Space and not force then return end
     self.held[b] = nil
     if b.timeout_cb then UIManager:unschedule(b.timeout_cb); b.timeout_cb = nil end
     Game:sendKey(b.key, false)
@@ -841,13 +899,18 @@ end
 
 function Pad:pulse(b, seconds)
     self:press(b)
+    if b.key == K.Space then return end -- press() schedules a frame-safe jump release
     UIManager:scheduleIn(seconds or 0.2, function() self:release(b) end)
 end
 
 function Pad:onTouchGeodashPad(_arg, ges)
     local b = self:buttonAt(ges.pos)
     if not b then return true end
-    self.last_touch[b] = os.clock()
+    local tap_token = {}
+    self.tap_suppressed[b] = tap_token
+    UIManager:scheduleIn(0.5, function()
+        if self.tap_suppressed[b] == tap_token then self.tap_suppressed[b] = nil end
+    end)
     self.by_slot[ges.slot or 0] = b
     self:press(b)
     return true
@@ -875,7 +938,11 @@ end
 -- a plain tap becomes a short key press.
 function Pad:onTapGeodashPad(_arg, ges)
     local b = self:buttonAt(ges.pos)
-    if b and os.clock() - (self.last_touch[b] or -10) > 1.0 then self:pulse(b, 0.2) end
+    if b and self.tap_suppressed[b] then
+        self.tap_suppressed[b] = nil
+    elseif b then
+        self:pulse(b, b.key == K.Space and JUMP_PRESS_DURATION or 0.2)
+    end
     return true
 end
 
@@ -953,7 +1020,7 @@ local function buildSplash(state, context, width, height)
     })
     y = y + px(18)
     add(TextBoxWidget:new{
-        text = _("Tap the picture or hold JUMP to jump over spikes and obstacles.\nEsc, Enter and the arrows control the menus; Restart and Pause work during a run.\nThe page-turn buttons jump as well."),
+        text = _("Tap the picture or JUMP to jump over spikes and obstacles.\nEsc, Enter and the arrows control the menus; Restart and Pause work during a run.\nThe page-turn buttons jump as well."),
         face = Font:getFace("smallinfofont", clamp(math.floor(width / 40), 12, px(16))), width = text_w,
     })
     y = y + px(14)
@@ -1068,7 +1135,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.0",
+    version = "1.0.1",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
@@ -1087,6 +1154,9 @@ return {
         LAYOUT = LAYOUT,
         LAYOUT_UNITS = LAYOUT_UNITS,
         K = K,
+        POLL_INTERVAL = POLL_INTERVAL,
+        REFRESH_MODE = REFRESH_MODE,
+        JUMP_PRESS_DURATION = JUMP_PRESS_DURATION,
         shq = shq,
         expectedPicture = expectedPicture,
         buildSplash = buildSplash,
