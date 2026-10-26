@@ -77,7 +77,7 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength 
 -- Keep a larger source frame than the old 640 px default. On smaller readers
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
-local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 380
+local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 480
 local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 10
 if FRAME_MS <= 0 then FRAME_MS = 10 end
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
@@ -1146,7 +1146,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.5",
+    version = "1.0.6",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
