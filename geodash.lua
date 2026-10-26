@@ -64,7 +64,10 @@ local DITHER = os.getenv("GD_DITHER") ~= "0"  -- always on: only the 8 primaries
 -- The real picture size is only known after the VNC handshake. Until then (and for the first
 -- layout) a 16:9 picture is assumed; the pane is laid out again once the game is connected.
 local PIC_GUESS_ASPECT = tonumber(os.getenv("GD_ASPECT")) or (16 / 9)
-local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 1   -- keep the picture at native size by default; GD_SCALE can override this
+-- Render fewer source pixels on the software-rendered reader, then enlarge the
+-- framebuffer with nearest-neighbour scaling to fill the pane. This keeps the
+-- visible picture large while cutting VNC capture, dithering and copy work.
+local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 2
 local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost before dithering (e-ink colours are pale)
 local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
@@ -74,7 +77,7 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength 
 -- Keep a larger source frame than the old 640 px default. On smaller readers
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
-local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 800
+local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 380
 local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 10
 if FRAME_MS <= 0 then FRAME_MS = 10 end
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
@@ -1143,7 +1146,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.4",
+    version = "1.0.5",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
@@ -1164,6 +1167,8 @@ return {
         K = K,
         POLL_INTERVAL = POLL_INTERVAL,
         FRAME_MS = FRAME_MS,
+        MAX_SCALE = MAX_SCALE,
+        PIC_OUT_W = PIC_OUT_W,
         REFRESH_MODE = REFRESH_MODE,
         JUMP_PRESS_DURATION = JUMP_PRESS_DURATION,
         shq = shq,
