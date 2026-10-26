@@ -61,7 +61,7 @@ local DITHER = os.getenv("GD_DITHER") ~= "0"  -- always on: only the 8 primaries
 -- The real picture size is only known after the VNC handshake. Until then (and for the first
 -- layout) a 16:9 picture is assumed; the pane is laid out again once the game is connected.
 local PIC_GUESS_ASPECT = tonumber(os.getenv("GD_ASPECT")) or (16 / 9)
-local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 4   -- the picture is scaled up (nearest) to fill the pane, at most this much
+local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 2   -- the picture is scaled up (nearest) to fill the pane, at most this much
 local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost before dithering (e-ink colours are pale)
 local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 4 -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
