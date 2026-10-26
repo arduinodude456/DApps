@@ -63,7 +63,7 @@ local DITHER = os.getenv("GD_DITHER") ~= "0"  -- always on: only the 8 primaries
 local PIC_GUESS_ASPECT = tonumber(os.getenv("GD_ASPECT")) or (16 / 9)
 local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 4   -- the picture is scaled up (nearest) to fill the pane, at most this much
 local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost before dithering (e-ink colours are pale)
-local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength (4 = full range, lower = purer colours)
+local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 4 -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
 -- pixels = faster dithering, transfer and e-ink refresh. FRAME_MS is the minimum time between two
 -- frames the game publishes (the game's own default was 120 ms = about 8 fps).
