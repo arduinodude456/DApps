@@ -61,11 +61,11 @@ install("gettext", function(value) return value end)
 
 local app = assert(loadfile("geodash.lua"))()
 local test = app._test
-assert(app.version == "1.0.8", "GeoDash must advertise the fast-render optimization version")
+assert(app.version == "1.0.9", "GeoDash must advertise the one-frame render optimization version")
 assert(test.POLL_INTERVAL <= 1 / 60, "RFB polling must not cap the stream below the 60-FPS game rate")
 assert(test.FRAME_MS == 10, "The native game must not receive zero frame time and fall back to ~7 FPS")
-assert(test.PIC_OUT_W == 240 and test.MAX_SCALE == 3,
-    "The game must use the fast low-resolution stream and scale it up")
+assert(test.PIC_OUT_W == 480 and test.MAX_SCALE == 2,
+    "The game must use the quality stream and scale it up")
 assert(test.REFRESH_MODE == "fast", "The default e-ink waveform must favor responsive game frames")
 assert(test.JUMP_PRESS_DURATION >= 1 / 30, "A jump press must span at least one game frame")
 assert(test.LAYOUT_UNITS == 3, "Controls must use two compact rows so the picture gets more vertical space")
@@ -91,6 +91,7 @@ test.Game.rfb = {
 test.Game:poll()
 assert(#update_requests == 1 and update_requests[1] == true,
     "A completed empty RFB response must trigger the next incremental update")
+assert(poll_responses == 1, "Each UI poll must process only one VNC frame to avoid a render backlog")
 
 -- A quick touch press/release must stay down until the minimum jump interval expires.
 local view = test.GameView:new{ width = 400, height = 240 }

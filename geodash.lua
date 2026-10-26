@@ -69,7 +69,7 @@ local PIC_GUESS_ASPECT = tonumber(os.getenv("GD_ASPECT")) or (16 / 9)
 -- Render fewer source pixels on the software-rendered reader, then enlarge the
 -- framebuffer with nearest-neighbour scaling to fill the pane. This keeps the
 -- visible picture large while cutting VNC capture, dithering and copy work.
-local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 3
+local MAX_SCALE = tonumber(os.getenv("GD_SCALE")) or 2
 local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost before dithering (e-ink colours are pale)
 local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
@@ -79,7 +79,7 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength 
 -- Keep a larger source frame than the old 640 px default. On smaller readers
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
-local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 240
+local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 480
 local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 10
 if FRAME_MS <= 0 then FRAME_MS = 10 end
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
@@ -554,29 +554,21 @@ end
 
 function Game:poll()
     if not self.running or not self.rfb then return end
-    -- read all frames that are already waiting (at most 6) and refresh their union once,
-    -- so a slow tick never builds up a backlog of old frames
-    local ux0, uy0, ux1, uy1
-    for _ = 1, 6 do
-        local ok, res = pcall(self.rfb.poll, self.rfb)
-        if not ok then
-            -- the game quit or crashed.
-            logger.warn("Geometry Rush: " .. tostring(res))
-            self:fail(_("Geometry Rush exited.") .. "\n" .. tostring(res) .. "\n" .. logTail())
-            return
-        end
-        if res == nil then break end
-        -- Request the next update after every complete response, including an empty one.
-        pcall(self.rfb.requestUpdate, self.rfb, true)
-        if type(res) == "table" then
-            ux0 = ux0 and math.min(ux0, res[1]) or res[1]
-            uy0 = uy0 and math.min(uy0, res[2]) or res[2]
-            ux1 = ux1 and math.max(ux1, res[3]) or res[3]
-            uy1 = uy1 and math.max(uy1, res[4]) or res[4]
-        end
+    -- Process exactly one complete frame per UI tick. Draining six queued frames
+    -- made dithering and widgetRepaint run back-to-back, creating a CPU backlog
+    -- on the reader. The fast image path stays responsive by dropping old frames.
+    local ok, res = pcall(self.rfb.poll, self.rfb)
+    if not ok then
+        logger.warn("Geometry Rush: " .. tostring(res))
+        self:fail(_("Geometry Rush exited.") .. "\n" .. tostring(res) .. "\n" .. logTail())
+        return
     end
-    if ux0 then
-        local rx0, ry0, rx1, ry1 = self.rfb:toDisplay(ux0, uy0, ux1, uy1)
+    if res ~= nil then
+        -- Request the next update after every complete response, including empty ones.
+        pcall(self.rfb.requestUpdate, self.rfb, true)
+    end
+    if type(res) == "table" then
+        local rx0, ry0, rx1, ry1 = self.rfb:toDisplay(res[1], res[2], res[3], res[4])
         local w, h = rx1 - rx0, ry1 - ry0
         local view = self.view
         if w > 0 and h > 0 and view and view.active then
