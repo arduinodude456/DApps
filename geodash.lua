@@ -45,7 +45,10 @@ local GD_DIR = os.getenv("GD_DIR") or "/mnt/onboard/.adds/geodash"
 local GD_LOG = GD_DIR .. "/geodash.log"
 local GD_HOME = GD_DIR .. "/home"            -- working dir: levels/, mylevels/, settings.txt
 local VNC_HOST, VNC_PORT = "127.0.0.1", 5963 -- must match scripts/03-geodash.sh
-local POLL_INTERVAL = 1 / 60
+-- Poll slightly ahead of the native 60-FPS stream so a busy UI tick does not
+-- leave an entire frame interval between VNC updates. The game itself remains
+-- capped at 60 FPS by GD_FPS below; this only reduces input/display latency.
+local POLL_INTERVAL = 1 / 75
 local CONNECT_TIMEOUT = 20
 local READ_TIMEOUT = 15      -- seconds a half-received message may take before the connection counts as dead
 local HOLD_SAFETY = 2.5        -- seconds after which a held key is released even without a "release" event
@@ -67,9 +70,12 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength 
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
 -- pixels = faster dithering, transfer and e-ink refresh. FRAME_MS is the minimum time between two
 -- frames the game publishes (the game's own default was 120 ms = about 8 fps).
-local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 640
+-- Keep a larger source frame than the old 640 px default. On smaller readers
+-- the frame is still fitted to the pane, while wider screens get a sharper
+-- picture instead of an upscaled low-resolution stream.
+local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 800
 local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 0
-local BTN_UNIT = 34 -- height of one control row (scaled), small so the picture can be big
+local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
 
 local function scale(value) return Screen:scaleBySize(value) end
 local function clamp(value, low, high) return math.max(low, math.min(high, value)) end
@@ -429,8 +435,8 @@ local function ch(c) return c:byte() end
 -- All buttons are "hold = key held".
 local LAYOUT = {
     { weight = 2, { "JUMP", K.Space } },
-    { { "Esc", K.Esc }, { "Enter", K.Enter }, { "↑", K.Up }, { "↓", K.Down } },
-    { { "Restart", ch("r") }, { "Pause", ch("p") } },
+    { { "Esc", K.Esc }, { "Enter", K.Enter }, { "↑", K.Up }, { "↓", K.Down },
+        { "Restart", ch("r") }, { "Pause", ch("p") } },
 }
 local LAYOUT_UNITS = 0
 for _, row in ipairs(LAYOUT) do LAYOUT_UNITS = LAYOUT_UNITS + (row.weight or 1) end
@@ -1135,7 +1141,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.2",
+    version = "1.0.3",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
