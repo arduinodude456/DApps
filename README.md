@@ -1,12 +1,12 @@
 # AppDock DApps
 
-Dieses Repository ist der **vertrauenswürdige AppStore-Katalog** für die AppDock-DApp in KOReader. Der AppStore lädt ausschließlich die Datei [`dapps.txt`](dapps.txt) über HTTPS. Ein Katalogabruf führt keinen DApp-Code aus. Vor jeder Installation wird der vollständige Pfad angezeigt und der Nutzer muss die Installation auf dem Gerät ausdrücklich bestätigen.
+Dieses Repository ist der **vertrauenswürdige AppStore-Katalog** für die AppDock-DApp in KOReader. Der AppStore lädt die Kataloge [`dapps.txt`](dapps.txt) und [`games.txt`](games.txt) über HTTPS. Ein Katalogabruf führt keinen DApp-Code aus. Vor jeder Installation wird der vollständige Pfad angezeigt und der Nutzer muss die Installation auf dem Gerät ausdrücklich bestätigen.
 
 > **Sicherheitsmodell:** Eine installierte DApp ist Lua-Code und läuft innerhalb von KOReader. Füge deshalb nur selbst geprüfte DApps in diesen Katalog ein. Designs sind dagegen bewusst **deklarative Daten**: Sie werden nicht als Lua geladen oder ausgeführt. Der AppStore akzeptiert keine absoluten Pfade und keine Pfade mit `..`.
 
 ## Katalog
 
-`dapps.txt` enthält eine sichere relative Datei pro Zeile. **DApps und Widgets** verwenden die Endung `.lua`; **Designs** nutzen ausschließlich `.appdock-design`. Nach dem Pfad stehen eine numerische Version, ein AppDock-Logo und optional der Typ `widget` oder `design`. Ohne Typ ist der Eintrag eine DApp. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert.
+`dapps.txt` enthält sichere relative Dateien für Apps, Widgets und Designs. **DApps und Widgets** verwenden die Endung `.lua`; **Designs** nutzen ausschließlich `.appdock-design`. Nach dem Pfad stehen eine numerische Version, ein AppDock-Logo und optional der Typ `widget` oder `design`. Ohne Typ ist der Eintrag eine DApp. Leerzeilen und Zeilen, die mit `#` beginnen, werden ignoriert. `games.txt` verwendet dasselbe Format, kennzeichnet Einträge als `game` und ergänzt als fünftes Feld den relativen ZIP-Pfad.
 
 ```text
 # Example catalog
@@ -14,6 +14,14 @@ examples/quote_card.lua | 1.0.0 | help
 examples/reading_timer.lua | 1.2.0 | timer
 quote_widget.lua | 1.0.0 | help | widget
 designs/forest.appdock-design | 1.0.0 | palette | design
+```
+
+## Games
+
+Jedes Spiel besteht aus einer Lua-DApp und einem passenden ZIP-Archiv. Nach der sichtbaren Installationsbestätigung lädt AppDock beide Dateien, prüft die Lua-Datei und entpackt das ZIP sicher in das Geräteverzeichnis `.adds`. Das Archiv darf keine absoluten Pfade oder `..`-Pfade enthalten. Beispiel:
+
+```text
+midless.lua | 1.0.0 | other | game | midless.zip
 ```
 
 Der AppStore vergleicht numerische Versionen komponentenweise. Ist die Repository-Version höher als die installierte Version, wird **Update** statt einer Installationssperre angeboten. Die Logo-Spalte akzeptiert ausschließlich Namen aus AppDocks Logo-Bibliothek, etwa `calculator`, `code`, `help`, `notes`, `timer` oder `translate`; ungültige Logoangaben werden ignoriert. Doppelte Pfade werden weiterhin ignoriert; die Reihenfolge im Katalog beeinflusst die Installationslogik nicht.
