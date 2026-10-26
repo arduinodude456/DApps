@@ -1135,7 +1135,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.1",
+    version = "1.0.2",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
