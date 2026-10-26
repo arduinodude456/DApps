@@ -69,12 +69,14 @@ local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost be
 local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or 2 -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
 -- pixels = faster dithering, transfer and e-ink refresh. FRAME_MS is the minimum time between two
--- frames the game publishes (the game's own default was 120 ms = about 8 fps).
+-- frames the game publishes. The native binary falls back to about 120 ms when this is zero,
+-- which produces the old ~7-FPS behavior, so use an explicit 10-ms frame budget by default.
 -- Keep a larger source frame than the old 640 px default. On smaller readers
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
 local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 800
-local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 0
+local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 10
+if FRAME_MS <= 0 then FRAME_MS = 10 end
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -1141,7 +1143,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "geodash",
-    version = "1.0.3",
+    version = "1.0.4",
     title = "Geometry Rush",
     subtitle = "Rhythm platformer",
     symbol = "Gd",
@@ -1161,6 +1163,7 @@ return {
         LAYOUT_UNITS = LAYOUT_UNITS,
         K = K,
         POLL_INTERVAL = POLL_INTERVAL,
+        FRAME_MS = FRAME_MS,
         REFRESH_MODE = REFRESH_MODE,
         JUMP_PRESS_DURATION = JUMP_PRESS_DURATION,
         shq = shq,

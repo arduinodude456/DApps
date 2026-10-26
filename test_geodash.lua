@@ -61,8 +61,9 @@ install("gettext", function(value) return value end)
 
 local app = assert(loadfile("geodash.lua"))()
 local test = app._test
-assert(app.version == "1.0.3", "GeoDash must advertise the FPS/layout optimization version")
+assert(app.version == "1.0.4", "GeoDash must advertise the frame-time optimization version")
 assert(test.POLL_INTERVAL <= 1 / 60, "RFB polling must not cap the stream below the 60-FPS game rate")
+assert(test.FRAME_MS == 10, "The native game must not receive zero frame time and fall back to ~7 FPS")
 assert(test.REFRESH_MODE == "fast", "The default e-ink waveform must favor responsive game frames")
 assert(test.JUMP_PRESS_DURATION >= 1 / 30, "A jump press must span at least one game frame")
 assert(test.LAYOUT_UNITS == 3, "Controls must use two compact rows so the picture gets more vertical space")
