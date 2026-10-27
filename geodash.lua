@@ -47,10 +47,9 @@ local GD_DIR = os.getenv("GD_DIR") or "/mnt/onboard/.adds/geodash"
 local GD_LOG = GD_DIR .. "/geodash.log"
 local GD_HOME = GD_DIR .. "/home"            -- working dir: levels/, mylevels/, settings.txt
 local VNC_HOST, VNC_PORT = "127.0.0.1", 5963 -- must match scripts/03-geodash.sh
--- Poll slightly ahead of the native 60-FPS stream so a busy UI tick does not
--- leave an entire frame interval between VNC updates. The game itself remains
--- capped at 60 FPS by GD_FPS below; this only reduces input/display latency.
-local POLL_INTERVAL = 1 / 75
+-- Keep the native game and the VNC polling loop capped at 15 FPS.
+local GAME_FPS = 15
+local POLL_INTERVAL = 1 / GAME_FPS
 local CONNECT_TIMEOUT = 20
 local READ_TIMEOUT = 15      -- seconds a half-received message may take before the connection counts as dead
 local HOLD_SAFETY = 2.5        -- seconds after which a held key is released even without a "release" event
@@ -82,11 +81,11 @@ local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or (BW and 4 or 2) -- di
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
 local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 720
-local FRAME_MS = tonumber(os.getenv("GD_FRAME_MS")) or 10
-if FRAME_MS <= 0 then FRAME_MS = 10 end
+local FRAME_MS = math.floor(1000 / GAME_FPS + 0.5)
 -- Small FPS read-out in the top-left corner of the picture (frames received per second, ms spent
 -- receiving+dithering, ms spent drawing). GD_STATS=0 hides it.
-local SHOW_STATS = os.getenv("GD_STATS") ~= "0"
+-- Do not draw the development statistics banner in the game view.
+local SHOW_STATS = false
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
 
 local function scale(value) return Screen:scaleBySize(value) end
@@ -430,7 +429,7 @@ function Proc.start(out_w)
     -- GD_OUT_W: the game picture is shrunk (integer factor) until it is at most this wide.
     local cmd = string.format(
         "(trap '' PIPE; cd %s && GD_OUT_W=%d GD_FRAME_MS=%d GD_FPS=%s GD_RSCALE=%s LD_LIBRARY_PATH=%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} %s; echo \"[geodash exit code $?]\") >%s 2>&1 & echo $!",
-        shq(GD_HOME), math.min(out_w, PIC_OUT_W), FRAME_MS, os.getenv("GD_FPS") or "60",
+        shq(GD_HOME), math.min(out_w, PIC_OUT_W), FRAME_MS, GAME_FPS,
         shq(os.getenv("GD_RSCALE") or "auto"), shq(GD_DIR .. "/lib"), shq(exe), shq(GD_LOG))
     local p = io.popen(cmd)
     if not p then return false end
@@ -1188,8 +1187,11 @@ end
 local function buildGame(state, context, width, height)
     Game.context = context
 
-    -- The picture gets the whole pane; there are no buttons (touch controls the game).
-    local game_avail = height
+    -- Reserve a compact control pad below the picture. It includes the ESC button
+    -- (and the existing jump/navigation controls) so the game can be exited without
+    -- relying on a physical keyboard.
+    local pad_h = math.min(scale(100), math.max(scale(72), math.floor(height * 0.30)))
+    local game_avail = math.max(scale(40), height - pad_h)
     if Game.running then
         Game.state = state -- a rebuild must never restart (and kill) the running game
     else
@@ -1222,6 +1224,9 @@ local function buildGame(state, context, width, height)
         Fill:new{ width = width, height = height, color = Blitbuffer.COLOR_WHITE },
         view,
     }
+    local pad = Pad:new{ width = width, height = pad_h }
+    pad.overlap_offset = { 0, height - pad_h }
+    children[#children + 1] = pad
     local pane = newPane(width, height, children, { state = state, game_view = view })
     view.pane = pane
     if Device:hasKeys() then
