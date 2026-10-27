@@ -75,15 +75,13 @@ local SAT = tonumber(os.getenv("GD_SAT")) or 1.6          -- saturation boost be
 local DITHER_AMP = tonumber(os.getenv("GD_DITHER_AMP")) or (BW and 4 or 2) -- dither strength (4 = full range, lower = purer colours)
 -- Speed: the game shrinks its picture (integer factor) until it is at most PIC_OUT_W wide; fewer
 -- pixels = faster dithering, transfer and e-ink refresh. FRAME_MS is the minimum time between two
--- frames the game publishes. The native binary falls back to about 120 ms when this is zero,
--- which produces the old ~7-FPS behavior, so use an explicit 10-ms frame budget by default.
+-- frames the game publishes; it is derived from the fixed 15-FPS cap above.
 -- Keep a larger source frame than the old 640 px default. On smaller readers
 -- the frame is still fitted to the pane, while wider screens get a sharper
 -- picture instead of an upscaled low-resolution stream.
 local PIC_OUT_W = tonumber(os.getenv("GD_PIC_W")) or 720
 local FRAME_MS = math.floor(1000 / GAME_FPS + 0.5)
--- Small FPS read-out in the top-left corner of the picture (frames received per second, ms spent
--- receiving+dithering, ms spent drawing). GD_STATS=0 hides it.
+-- Development FPS/read-out is intentionally disabled in the game view.
 -- Do not draw the development statistics banner in the game view.
 local SHOW_STATS = false
 local BTN_UNIT = 30 -- compact controls leave more vertical room for the picture
