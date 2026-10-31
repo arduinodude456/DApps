@@ -4,3 +4,4 @@
 # Metadata: Lua path | version | logo | game | ZIP path | optional comma-separated launchers
 midless.lua | 1.0.0 | other | game | midless.zip
 geodash.lua | 2.0.1 | other | game | geodash.zip
+tic80.lua | 1.0.0 | other | game | tic80.zip
