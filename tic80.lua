@@ -45,7 +45,7 @@ local Screen = Device.screen
 local gettime = require("socket").gettime
 
 -- ---------------------------------------------------------------- config ----
-local GD_DIR = os.getenv("GD_DIR") or "/mnt/onboard/.adds/geodash"
+local GD_DIR = os.getenv("GD_DIR") or "/mnt/onboard/.adds/tic80"
 local GD_LOG = GD_DIR .. "/geodash.log"
 local GD_HOME = GD_DIR .. "/home"                -- working dir of the process
 local CARTS_DIR = GD_HOME .. "/carts"            -- *.tic files
