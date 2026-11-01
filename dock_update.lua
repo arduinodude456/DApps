@@ -69,7 +69,7 @@ local COMPANION_DAPPS = {
     { path = "dchat.lua", title = "DChat" },
 }
 local REQUIRED_FILES = {
-    "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
+    "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_setup.lua", "appdock_order.lua",
     "appdock_appstore.lua", "appdock_audio.lua", "appdock_doom.lua", "appdock_netsurf.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
@@ -95,7 +95,7 @@ local REQUIRED_FILES = {
 }
 local ALLOWED_SOURCE_FILES = {
     ["_meta.lua"] = true, ["main.lua"] = true,
-    ["appdock_recovery.lua"] = true, ["appdock_doom.lua"] = true, ["appdock_netsurf.lua"] = true,
+    ["appdock_recovery.lua"] = true, ["appdock_setup.lua"] = true, ["appdock_doom.lua"] = true, ["appdock_netsurf.lua"] = true,
     ["appdock_appstore.lua"] = true, ["appdock_boot.lua"] = true,
     ["appdock_browser.lua"] = true, ["appdock_dapps.lua"] = true,
     ["appdock_filemanager.lua"] = true, ["appdock_groups.lua"] = true, ["appdock_help.lua"] = true,
@@ -1119,7 +1119,7 @@ local function confirmInstall(instance, context)
             .. _("Installed: ") .. tostring(installed_version_or_err) .. "\n"
             .. _("Release: ") .. release.version .. "\n"
             .. _("Validated source files: ") .. #entries
-            .. _("\n\nAppDock source files will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. The Gallery and DChat DApps are installed alongside, plus NetSurf (existing installations are never overwritten). Your current AppDock folder is kept as a rollback backup. Restart KOReader after the update."),
+            .. _("\n\nAppDock source files will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. The Gallery and DChat DApps are installed alongside, plus NetSurf (existing installations are never overwritten)."),
         ok_text = _("Install update"),
         ok_callback = function()
             local installed_version = installed_version_or_err
