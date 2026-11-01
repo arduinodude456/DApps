@@ -196,13 +196,15 @@ end
 
 function Progress:publish(force)
     local current = clockNow()
-    if not force and current - self.last < 0.4 then return end
+    if not force and current - self.last < 0.1 then return end
     self.last = current
     self.state.progress = {
         fraction = self:fraction(), label = self.label, detail = self.detail, phase = self.phase,
     }
     if self.context and self.context.requestRebuild then pcall(self.context.requestRebuild, "fast") end
-    pcall(function() UIManager:forceRePaint() end)
+    if UIManager and type(UIManager.forceRePaint) == "function" then
+        pcall(function() UIManager:forceRePaint() end)
+    end
 end
 
 function Progress:begin(label, weight, phase)
@@ -667,7 +669,7 @@ local function installNetsurf(progress)
     local binary = stage .. "/netsurf/bin/netsurf-fb"
     local command = "unzip -o -q " .. shellQuote(archive) .. " -d " .. shellQuote(stage)
         .. " >/dev/null 2>&1 && chmod 755 " .. shellQuote(binary) .. " >/dev/null 2>&1"
-    local process = io.popen(command .. "; printf '\\n%d' $?", "r")
+    local process = io.popen(command .. "; printf '\n%d' $?", "r")
     local result = process and process:read("*a") or ""
     if process then process:close() end
     if tonumber(result:match("(%d+)%s*$")) ~= 0 or not lfs.attributes(binary, "mode") then
@@ -888,6 +890,11 @@ local function showMessage(text)
     UIManager:show(InfoMessage:new{ text = text })
 end
 
+local function closePopup(widget)
+    if not widget or not UIManager or type(UIManager.close) ~= "function" then return end
+    pcall(function() UIManager:close(widget) end)
+end
+
 -- Runs `work(progress)` with live progress. The work blocks the UI thread, so
 -- Progress repaints the pane itself after each step and download chunk.
 local function withProgress(state, context, total, work)
@@ -984,11 +991,12 @@ local function confirmDoomInstall(instance, context)
         showMessage(_("Doom is already present in .adds; DockUpdate will not overwrite it."))
         return
     end
-    UIManager:show(ConfirmBox:new{
+    local dialog = ConfirmBox:new{
         text = _("Install the Doom package to /mnt/onboard/.adds/doom now?\n\n")
             .. _("DockUpdate will validate the fixed archive contents, extract it to a staging folder, set both Doom binaries executable, then move it into place. Existing installations are never overwritten."),
         ok_text = _("Install Doom"),
         ok_callback = function()
+            closePopup(dialog)
             local installed, install_err = withProgress(state, context, 10, function(progress)
                 return installDoom(progress)
             end)
@@ -1000,7 +1008,8 @@ local function confirmDoomInstall(instance, context)
             end
             requestRebuild(context)
         end,
-    })
+    }
+    UIManager:show(dialog)
 end
 
 local function confirmNetsurfInstall(instance, context)
@@ -1015,11 +1024,12 @@ local function confirmNetsurfInstall(instance, context)
         showMessage(_("NetSurf is already present in .adds; DockUpdate will not overwrite it."))
         return
     end
-    UIManager:show(ConfirmBox:new{
+    local dialog = ConfirmBox:new{
         text = _("Install the NetSurf package to /mnt/onboard/.adds/netsurf now?\n\n")
             .. _("DockUpdate will validate the archive, extract it to a staging folder, set the browser binary executable, then move it into place. Existing installations are never overwritten."),
         ok_text = _("Install NetSurf"),
         ok_callback = function()
+            closePopup(dialog)
             local installed, install_err = withProgress(state, context, 8, function(progress)
                 return installNetsurf(progress)
             end)
@@ -1031,7 +1041,8 @@ local function confirmNetsurfInstall(instance, context)
             end
             requestRebuild(context)
         end,
-    })
+    }
+    UIManager:show(dialog)
 end
 
 local function confirmCompanionInstall(instance, context)
@@ -1043,11 +1054,12 @@ local function confirmCompanionInstall(instance, context)
     end
     local names = {}
     for _index, entry in ipairs(missing) do names[#names + 1] = "- " .. entry.title end
-    UIManager:show(ConfirmBox:new{
+    local dialog = ConfirmBox:new{
         text = _("Install these DApps from the AppDock DApps repository?\n\n") .. table.concat(names, "\n")
             .. _("\n\nEach file is downloaded over HTTPS, syntax-checked and validated before it is registered with AppDock."),
         ok_text = _("Install DApps"),
         ok_callback = function()
+            closePopup(dialog)
             local results = withProgress(state, context, 3 * #missing, function(progress)
                 local collected = {}
                 for _index, entry in ipairs(missing) do
@@ -1068,7 +1080,8 @@ local function confirmCompanionInstall(instance, context)
             end
             requestRebuild(context)
         end,
-    })
+    }
+    UIManager:show(dialog)
 end
 
 -- Gallery and DChat are part of AppDock: whenever one is missing it is
@@ -1114,7 +1127,7 @@ local function confirmInstall(instance, context)
     end
     local entries, prepare_err = prepareRelease(state)
     if not entries then showMessage(prepare_err); return end
-    UIManager:show(ConfirmBox:new{
+    local dialog = ConfirmBox:new{
         text = _("Install the trusted AppDock update now?\n\n")
             .. _("Installed: ") .. tostring(installed_version_or_err) .. "\n"
             .. _("Release: ") .. release.version .. "\n"
@@ -1122,6 +1135,7 @@ local function confirmInstall(instance, context)
             .. _("\n\nAppDock source files will be downloaded over HTTPS, syntax-checked, staged, then swapped atomically. The Gallery and DChat DApps are installed alongside, plus NetSurf (existing installations are never overwritten)."),
         ok_text = _("Install update"),
         ok_callback = function()
+            closePopup(dialog)
             local installed_version = installed_version_or_err
             -- Weights: one per core file, 2 verify, 3 per DApp, 8 NetSurf, 1 swap.
             local total = #entries + 2 + 3 * #COMPANION_DAPPS + 8 + 1
@@ -1166,7 +1180,8 @@ local function confirmInstall(instance, context)
             end
             requestRebuild(context)
         end,
-    })
+    }
+    UIManager:show(dialog)
 end
 
 -- ---------------------------------------------------------------------------
