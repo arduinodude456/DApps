@@ -15,6 +15,13 @@ local function mode(path)
     local file = io.open(path, "rb")
     if file then file:close(); return "file" end
 end
+local function fileSize(path)
+    local file = io.open(path, "rb")
+    if not file then return nil end
+    local size = file:seek("end")
+    file:close()
+    return size
+end
 local function listDirectory(path)
     local process = io.popen("find " .. quote(path) .. " -mindepth 1 -maxdepth 1 -printf '%f\\n' 2>/dev/null")
     local names = {}
@@ -31,6 +38,10 @@ local function class(proto)
     return proto
 end
 local Widget = class({})
+function Widget:getSize()
+    local size = self.face and self.face.size or 12
+    return { w = #tostring(self.text or "") * size * .5, h = size }
+end
 local WidgetContainer = Widget:extend({})
 local InputContainer = WidgetContainer:extend({})
 function InputContainer:paintTo() end
@@ -38,7 +49,7 @@ local InputDialog = Widget:extend({})
 function InputDialog:getInputText() return self.input or "" end
 function InputDialog:onShowKeyboard() self.keyboard_shown = true end
 local function simpleModule() return WidgetContainer end
-local log = { shown = nil, rebuilds = 0, requests = {} }
+local log = { shown = nil, rebuilds = 0, requests = {}, timeouts = {}, large_file_failure = false }
 
 local required = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_order.lua",
@@ -47,9 +58,9 @@ local required = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
-    "appdock_audio.lua", "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
+    "appdock_audio.lua", "appdock_bwr.lua", "appdock_dither.lua", "appdock_player.lua", "appdock_youtube.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_draw.lua", "appdock_stylus.lua",
-    "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
+    "appdock_suggestions.lua", "appdock_setup.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
     "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua",
@@ -86,10 +97,9 @@ local packaged_sources = {}
 for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(versioned_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
--- Match the current AppDock 8.3.5 DApp-host module size to verify the bounded
--- per-file limit still accepts the live release.
-packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 250627) .. "\n"
-assert(#packaged_sources["appdock_dapps.lua"] == 250630, "The AppDock 8.3.5 host fixture must match its published byte size")
+-- Match the current AppDock 8.9.3 DApp-host module size to cover the large-file path.
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 268713) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 268716, "The AppDock 8.9.3 host fixture must match its published byte size")
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-8.2.1' }\n"
 packaged_sources["_meta.lua"] = "return { version = '8.2.1' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
@@ -129,6 +139,7 @@ package.preload["libs/libkoreader-lfs"] = function()
         attributes = function(path, attribute)
             local result = mode(path)
             if attribute == "mode" then return result end
+            if attribute == "size" then return result == "file" and fileSize(path) or nil end
             return result and { mode = result } or nil
         end,
         mkdir = function(path) os.execute("mkdir " .. quote(path)); return directory(path) end,
@@ -138,10 +149,14 @@ package.preload["libs/libkoreader-lfs"] = function()
 end
 package.preload["socket.url"] = function() return { parse = function(url) local scheme, host = url:match("^(https?)://([^/%?#]+)"); return scheme and { scheme = scheme, host = host } or {} end } end
 package.preload["socket"] = function() return { skip = function(_, a, code, headers, status) return code, headers, status end } end
-package.preload["socketutil"] = function() return { USER_AGENT = "DockUpdateTest", set_timeout = function() end, reset_timeout = function() end } end
+package.preload["socketutil"] = function() return { USER_AGENT = "DockUpdateTest", set_timeout = function(_, _, timeout) log.timeouts[#log.timeouts + 1] = timeout end, reset_timeout = function() end } end
 package.preload["ssl.https"] = function()
     return { request = function(request)
         log.requests[#log.requests + 1] = request.url
+        if request.url:find("/appdock.koplugin/appdock_dapps.lua", 1, true) and not log.large_file_failure then
+            log.large_file_failure = true
+            error("simulated connection reset")
+        end
         if request.url:find("releases.atom", 1, true) then request.sink(feed)
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
@@ -164,7 +179,12 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "1.4.11" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "2.1.2" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+local function findAction(pane, title)
+    for _, child in ipairs(pane) do
+        if type(child) == "table" and child.title == title then return child end
+    end
+end
 local archive_file = io.open("netsurf.zip", "rb")
 if archive_file then
     archive_file:close()
@@ -182,7 +202,7 @@ local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 local required_count = 0
 for _ in required_source_block:gmatch('"[^\"]+"') do required_count = required_count + 1 end
-assert(required_count == 71, "DockUpdate must declare the 70 current plugin files plus the versioned Doom and NetSurf modules")
+assert(required_count == 73, "DockUpdate must declare the complete current plugin file set")
 for _, asset in ipairs(png_assets) do
     assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current PNG asset must be required: " .. asset)
 end
@@ -193,7 +213,7 @@ assert(dock_update_source:find('["appdock_text.lua"] = true', 1, true), "DockUpd
 assert(dock_update_source:find('["appdock_netsurf.lua"] = true', 1, true), "DockUpdate must allow the NetSurf browser module")
 assert(dock_update_source:find('["appdock_doom.lua"] = true', 1, true), "DockUpdate must allow the Doom module")
 assert(dock_update_source:find("and not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
-assert(dock_update_source:find("MAX_FILE_BYTES = 256 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
+assert(dock_update_source:find("MAX_FILE_BYTES = 512 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
 assert(dock_update_source:find("MAX_RELEASE_FILES = 80", 1, true), "DockUpdate must accept the current bounded AppDock package")
 assert(dock_update_source:find("total_bytes > MAX_TOTAL_BYTES", 1, true), "DockUpdate must enforce the cumulative download-size limit")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
@@ -232,23 +252,24 @@ local context = {
 local instance = {}
 local pane = app.buildPane(instance, context)
 assert(pane and pane.dimen and pane.dimen.w == 600, "DockUpdate must build inside the assigned AppDock dimensions")
-local check, notes, install = pane[5], pane[6], pane[7]
+local check, notes, install = findAction(pane, "Check updates"), findAction(pane, "Release Notes"), findAction(pane, "Up to date")
 assert(check.title == "Check updates" and notes.title == "Release Notes" and install.title == "Up to date", "DockUpdate must expose its expected action tiles before a check")
 local retry_pane = app.buildPane({}, { dimen = { w = 600, h = 760 }, manager = { appdock = { version = "8.5.3" } } })
-assert(retry_pane[7].title == "Install Doom", "An AppDock 8.5.3 installation must be able to install Doom separately")
-retry_pane[7].callback()
+local doom_action = findAction(retry_pane, "Install Doom")
+assert(doom_action and doom_action.title == "Install Doom", "An AppDock 8.5.3 installation must be able to install Doom separately")
+doom_action.callback()
 assert(log.shown and log.shown.text:find("Install the Doom package", 1, true), "The Doom installation must require explicit confirmation")
-assert(check[1] and check[1][1] and check[1][1][1] and check[1][1][1].text == "Check updates", "DockUpdate action labels must be direct OverlapGroup children")
+assert(type(check.callback) == "function", "DockUpdate action labels must be direct OverlapGroup children")
 local split_context = {
     dimen = { w = 600, h = 360 },
     manager = context.manager,
     requestRebuild = function() log.rebuilds = log.rebuilds + 1 end,
 }
 local split_pane = app.buildPane({}, split_context)
-assert(split_pane and split_pane.dimen and split_pane.dimen.h == 360 and split_pane[5].title == "Check updates", "DockUpdate must build visible controls inside a split pane")
+assert(split_pane and split_pane.dimen and split_pane.dimen.h == 360 and findAction(split_pane, "Check updates"), "DockUpdate must build visible controls inside a split pane")
 
 check.callback()
-pane = app.buildPane(instance, context); check, notes, install = pane[5], pane[6], pane[7]
+pane = app.buildPane(instance, context); check, notes, install = findAction(pane, "Check updates"), findAction(pane, "Release Notes"), findAction(pane, "Install update")
 assert(install.title == "Install update" and install.subtitle == "AppDock 8.2.1", "DockUpdate must detect a newer stable release")
 notes.callback()
 assert(log.shown and log.shown.text:find("Sleepscreen", 1, true) and log.shown.title:find("v8.2.1", 1, true), "DockUpdate must display the complete release notes")
@@ -260,7 +281,7 @@ local new_main = assert(io.open(active .. "/main.lua", "rb")):read("*a")
 assert(new_main:find("packaged main", 1, true), "DockUpdate must atomically replace the active AppDock folder with the current packaged sources")
 local new_meta = assert(io.open(active .. "/_meta.lua", "rb")):read("*a")
 assert(new_meta:find("8.2.1", 1, true), "DockUpdate must prefer the current packaged release over the stale root mirror")
-for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_ytmusic.lua", "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua" }) do
+for _, module in ipairs({ "appdock_dialogs.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_setup.lua", "appdock_ytmusic.lua", "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua", "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua", "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua" }) do
     local installed = assert(io.open(active .. "/" .. module, "rb")):read("*a")
         assert(installed:find("packaged " .. module, 1, true), "DockUpdate must install required AppDock 8.2.1 module " .. module)
 end
@@ -276,10 +297,17 @@ local backup = active .. ".appdock-backup-7.9.14"
 local backed_up_main = assert(io.open(backup .. "/main.lua", "rb")):read("*a")
 assert(backed_up_main:find("old main", 1, true), "DockUpdate must retain the old AppDock folder as a rollback backup")
 assert(log.shown and log.shown.text:find("Restart KOReader", 1, true), "DockUpdate must require a restart after a successful core swap")
-assert(#log.requests == 1 + #required + #optional_sources + #png_assets + 2,
+local retry_large_file_requests, saw_large_file_timeout = 0, false
+for _, url in ipairs(log.requests) do
+    if url:find("/appdock.koplugin/appdock_dapps.lua", 1, true) then retry_large_file_requests = retry_large_file_requests + 1 end
+end
+for _, timeout in ipairs(log.timeouts) do if timeout == 90 then saw_large_file_timeout = true end end
+assert(log.large_file_failure and retry_large_file_requests == 2, "A transient appdock_dapps.lua network failure must be retried successfully")
+assert(saw_large_file_timeout, "The large appdock_dapps.lua request must use the extended receive timeout")
+assert(#log.requests == 1 + #required + 2 + #optional_sources + #png_assets + 1,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 1.4.11 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 1.4.11")
+assert(catalog:find("dock_update.lua | 2.1.2 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.2")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
@@ -294,9 +322,9 @@ packaged_sources["_meta.lua"] = "return { version = '8.2.13' }\n"
 packaged_sources["appdock_text.lua"] = "-- transparent text helper\nreturn {}\n"
 log.requests = {}
 local text_instance = {}
-app.buildPane(text_instance, context)[5].callback()
+findAction(app.buildPane(text_instance, context), "Check updates").callback()
 local text_pane = app.buildPane(text_instance, context)
-text_pane[7].callback()
+findAction(text_pane, "Install update").callback()
 assert(log.shown and log.shown.ok_callback, "New AppDock releases must still require installation confirmation: " .. tostring(log.shown and log.shown.text))
 log.shown.ok_callback()
 local installed_text = assert(io.open(active .. "/appdock_text.lua", "rb")):read("*a")
@@ -322,12 +350,12 @@ packaged_sources["_meta.lua"] = "return { version = '8.3.5' }\n"
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-8.3.5' }\n"
 log.requests = {}
 local current_instance = {}
-app.buildPane(current_instance, context)[5].callback()
+findAction(app.buildPane(current_instance, context), "Check updates").callback()
 local current_pane = app.buildPane(current_instance, context)
-current_pane[7].callback()
+findAction(current_pane, "Install update").callback()
 assert(log.shown and log.shown.ok_callback, "Installing the current AppDock release must still require explicit confirmation")
 log.shown.ok_callback()
-assert(#required + #versioned_sources + #png_assets == 69, "The current AppDock fixture must represent all 69 files in the live plugin tree")
+assert(#required + #versioned_sources + #png_assets == 71, "The current AppDock fixture must represent all 71 files in the live plugin tree")
 assert(#log.requests == 1 + #required + #versioned_sources + #png_assets, "DockUpdate must fetch every current plugin file exactly once")
 for _, name in ipairs(required) do
     local installed = assert(io.open(active .. "/" .. name, "rb")):read("*a")

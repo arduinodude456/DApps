@@ -268,7 +268,7 @@ local function compareVersions(left, right)
     return 0
 end
 
-local function fetch(url, limit, accept, on_chunk)
+local function fetch(url, limit, accept, on_chunk, response_timeout)
     local socket_url = require("socket.url")
     local socket = require("socket")
     local socketutil = require("socketutil")
@@ -285,7 +285,7 @@ local function fetch(url, limit, accept, on_chunk)
         end
         return 1
     end
-    socketutil:set_timeout(12, 30)
+    socketutil:set_timeout(12, response_timeout or 30)
     local ok, code, headers, status = pcall(function()
         return socket.skip(1, https.request{
             url = url,
@@ -298,9 +298,22 @@ local function fetch(url, limit, accept, on_chunk)
         })
     end)
     socketutil:reset_timeout()
-    if not ok or not headers then return nil, status or _("Network request failed.") end
+    if not ok then return nil, tostring(code or _("Network request failed.")) end
+    if not headers then return nil, tostring(status or code or _("Network request failed.")) end
     if not code or code < 200 or code > 299 then return nil, status or _("Update source is unavailable.") end
     return table.concat(chunks)
+end
+
+-- Retrying a GET from byte zero is safe, and avoids aborting an update after a
+-- transient TLS or Wi-Fi interruption on a large source file.
+local function fetchWithRetry(url, limit, accept, on_chunk, response_timeout, attempts)
+    local last_err
+    for _attempt = 1, attempts or 2 do
+        local body, err = fetch(url, limit, accept, on_chunk, response_timeout)
+        if body then return body end
+        last_err = err
+    end
+    return nil, last_err or _("Network request failed.")
 end
 
 -- ---------------------------------------------------------------------------
@@ -423,19 +436,40 @@ end
 -- Fetch through the shared connection when possible (one retry on a stale
 -- connection), otherwise through the regular one-request-per-connection path.
 local function fetchPersistent(session, url, limit, accept, on_chunk)
+    local session_err
     if session and not session.disabled then
         local host, path = url:match("^https://([^/]+)(/.*)$")
         if host and host == session.host then
             for _attempt = 1, 2 do
-                if not session.conn and not session:open() then break end
-                local body = session:request(path, limit, accept, on_chunk)
+                if not session.conn then
+                    local open_ok, opened, open_err = pcall(session.open, session)
+                    if not open_ok then session_err = opened; break end
+                    if not opened then session_err = open_err; break end
+                end
+                local request_ok, body, request_err = pcall(session.request, session, path, limit, accept, on_chunk)
+                if not request_ok then session_err = body; pcall(session.close, session); break end
                 if body then session.failures = 0; return body end
+                session_err = request_err
             end
             session.failures = session.failures + 1
             if session.failures >= 2 then session.disabled = true end
         end
     end
-    return fetch(url, limit, accept, on_chunk)
+    local body, fallback_err = fetch(url, limit, accept, on_chunk)
+    if not body and session_err then
+        return nil, tostring(fallback_err or _("Network request failed.")) .. " (" .. tostring(session_err) .. ")"
+    end
+    return body, fallback_err
+end
+
+local function fetchReleaseFile(session, entry, url, limit, accept, on_chunk)
+    if entry.kind == "source" and entry.path == "appdock_dapps.lua" then
+        -- This host module is about 269 KiB. Use LuaSec's stock HTTP framing
+        -- with a longer read timeout instead of the custom keep-alive parser,
+        -- then retry once on a transient network failure.
+        return fetchWithRetry(url, limit, accept, on_chunk, 90, 2)
+    end
+    return fetchPersistent(session, url, limit, accept, on_chunk)
 end
 
 local function xmlUnescape(value)
@@ -620,8 +654,9 @@ local function stageRelease(release, entries, target, progress, session)
         local max_size = is_asset and MAX_ASSET_BYTES or (is_data and MAX_DATA_BYTES or MAX_FILE_BYTES)
         local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         if progress then progress:begin(string.format(_("Downloading %s"), entry.path), 1, "core") end
-        local source, fetch_err = fetchPersistent(session, RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path), max_size, accept,
-            progress and function(received) progress:bytes(received) end or nil)
+        local source_url = RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path)
+        local on_chunk = progress and function(received) progress:bytes(received) end or nil
+        local source, fetch_err = fetchReleaseFile(session, entry, source_url, max_size, accept, on_chunk)
         if not source then removeTree(stage); return nil, _("Could not download ") .. entry.path .. ": " .. tostring(fetch_err) end
         total_bytes = total_bytes + #source
         if total_bytes > MAX_TOTAL_BYTES then
@@ -1694,7 +1729,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.1",
+    version = "2.1.2",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
