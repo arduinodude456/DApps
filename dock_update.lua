@@ -53,9 +53,9 @@ local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
 -- The current AppDock 8.3.5 package has 69 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
-local MAX_FILE_BYTES = 256 * 1024
+local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
-local MAX_DATA_BYTES = 512 * 1024
+local MAX_DATA_BYTES = 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
 local MAX_RELEASE_FILES = 80
