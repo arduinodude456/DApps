@@ -1694,7 +1694,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.0",
+    version = "2.1.1",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
