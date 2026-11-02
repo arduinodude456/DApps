@@ -1270,7 +1270,7 @@ end
 -- ------------------------------------------------------------ public API ----
 return {
     id = "midless",
-    version = "1.3.0",
+    version = "2.0.0",
     title = "Midless",
     subtitle = "Voxel sandbox",
     symbol = "Ml",
