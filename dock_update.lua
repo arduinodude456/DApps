@@ -51,7 +51,7 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.0.0 package has 75 files. Keep explicit headroom while
+-- The current AppDock 9.1.0 package has 76 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
@@ -76,7 +76,7 @@ local REQUIRED_FILES = {
     "_meta.lua", "main.lua", "appdock_recovery.lua", "appdock_setup.lua", "appdock_order.lua",
     "appdock_appstore.lua", "appdock_audio.lua", "appdock_doom.lua", "appdock_netsurf.lua", "appdock_bluetooth.lua", "appdock_browser.lua",
     "appdock_dapps.lua", "appdock_filemanager.lua", "appdock_groups.lua", "appdock_homescreen.lua",
-    "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
+    "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua", "appdock_glass.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_media.lua", "appdock_whatsnew.lua",
@@ -107,7 +107,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_layout.lua"] = true, ["appdock_lockscreen.lua"] = true,
     ["appdock_logo.lua"] = true, ["appdock_manager.lua"] = true,
     ["appdock_motion.lua"] = true, ["appdock_notifications.lua"] = true,
-    ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true,
+    ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true, ["appdock_glass.lua"] = true,
     ["appdock_sleepscreen.lua"] = true,
     ["appdock_sleepscreen_catalog.lua"] = true,
     ["appdock_sleepscreen_editor.lua"] = true,
@@ -141,6 +141,7 @@ local SOURCE_MIN_VERSION = {
     ["appdock_doom.lua"] = "8.5.3",
     ["appdock_media.lua"] = "9.0.0",
     ["appdock_whatsnew.lua"] = "9.0.0",
+    ["appdock_glass.lua"] = "9.1.0",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
