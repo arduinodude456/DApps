@@ -51,7 +51,7 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 8.3.5 package has 69 files. Keep explicit headroom while
+-- The current AppDock 9.0.0 package has 75 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
@@ -79,7 +79,7 @@ local REQUIRED_FILES = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
-    "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua",
+    "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_media.lua", "appdock_whatsnew.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_stylus.lua",
     "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
@@ -118,6 +118,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_device_controls.lua"] = true,
     ["appdock_audio.lua"] = true, ["appdock_bluetooth.lua"] = true, ["appdock_bwr.lua"] = true,
     ["appdock_player.lua"] = true, ["appdock_youtube.lua"] = true,
+    ["appdock_media.lua"] = true, ["appdock_whatsnew.lua"] = true,
     ["appdock_transfer.lua"] = true, ["appdock_youtube_shorts.lua"] = true,
     ["appdock_sleepscreen_weather.lua"] = true,
     ["appdock_dialogs.lua"] = true,
@@ -138,6 +139,8 @@ local SOURCE_MIN_VERSION = {
     ["appdock_youtube_shorts.lua"] = "8.2.22",
     ["appdock_netsurf.lua"] = "8.5.2",
     ["appdock_doom.lua"] = "8.5.3",
+    ["appdock_media.lua"] = "9.0.0",
+    ["appdock_whatsnew.lua"] = "9.0.0",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -1729,7 +1732,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.2",
+    version = "2.1.3",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
