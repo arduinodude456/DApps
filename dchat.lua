@@ -4353,7 +4353,7 @@ end
 
 return {
     id = "dchat",
-    version = "2.5.0",
+    version = "2.6.0",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
