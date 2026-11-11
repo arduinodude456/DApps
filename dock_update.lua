@@ -51,7 +51,7 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.1.0 package has 76 files. Keep explicit headroom while
+-- The current AppDock 9.1.1 package has 76 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
@@ -141,7 +141,7 @@ local SOURCE_MIN_VERSION = {
     ["appdock_doom.lua"] = "8.5.3",
     ["appdock_media.lua"] = "9.0.0",
     ["appdock_whatsnew.lua"] = "9.0.0",
-    ["appdock_glass.lua"] = "9.1.0",
+    ["appdock_glass.lua"] = "9.1.1",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -1733,7 +1733,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.3",
+    version = "2.1.5",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
