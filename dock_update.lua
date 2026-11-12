@@ -51,7 +51,7 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.1.1 package has 76 files. Keep explicit headroom while
+-- The current AppDock 9.3.0 package has 77 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
@@ -80,7 +80,7 @@ local REQUIRED_FILES = {
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
     "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_media.lua", "appdock_whatsnew.lua",
-    "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_stylus.lua",
+    "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_anim.lua", "appdock_stylus.lua",
     "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
@@ -125,6 +125,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_text.lua"] = true,
     ["appdock_draw.lua"] = true,
     ["appdock_dither.lua"] = true,
+    ["appdock_anim.lua"] = true,
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
     ["appdock_suggestions.lua"] = true, ["appdock_tbs_account.lua"] = true,
 }
@@ -142,6 +143,7 @@ local SOURCE_MIN_VERSION = {
     ["appdock_media.lua"] = "9.0.0",
     ["appdock_whatsnew.lua"] = "9.0.0",
     ["appdock_glass.lua"] = "9.1.1",
+    ["appdock_anim.lua"] = "9.3.0",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -1733,7 +1735,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.5",
+    version = "2.1.6",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

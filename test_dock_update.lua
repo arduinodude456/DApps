@@ -71,7 +71,7 @@ local optional_sources = {
 local versioned_sources = {
     "appdock_bluetooth.lua", "appdock_sleepscreen_weather.lua", "appdock_transfer.lua",
     "appdock_text.lua", "appdock_youtube_shorts.lua", "appdock_netsurf.lua", "appdock_doom.lua",
-    "appdock_media.lua", "appdock_whatsnew.lua", "appdock_glass.lua",
+    "appdock_media.lua", "appdock_whatsnew.lua", "appdock_glass.lua", "appdock_anim.lua",
 }
 local png_assets = {
     "assets/lockscreen/appdock_lockscreen_hero.png",
@@ -180,7 +180,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "2.1.5" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "2.1.6" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local function findAction(pane, title)
     for _, child in ipairs(pane) do
         if type(child) == "table" and child.title == title then return child end
@@ -203,7 +203,7 @@ local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 local required_count = 0
 for _ in required_source_block:gmatch('"[^\"]+"') do required_count = required_count + 1 end
-assert(required_count == 76, "DockUpdate must declare the complete current plugin file set")
+assert(required_count == 77, "DockUpdate must declare the complete current plugin file set")
 for _, asset in ipairs(png_assets) do
     assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current PNG asset must be required: " .. asset)
 end
@@ -227,6 +227,8 @@ for _, module in ipairs({ "appdock_media.lua", "appdock_whatsnew.lua", "appdock_
     assert(required_source_block:find('"' .. module .. '"', 1, true), "DockUpdate must require the AppDock 9.1.1 module " .. module)
     assert(dock_update_source:find('["' .. module .. '"] = true', 1, true), "DockUpdate must allow the AppDock 9.1.1 module " .. module)
 end
+assert(required_source_block:find('"appdock_anim.lua"', 1, true), "DockUpdate must require the AppDock 9.3.0 animation module")
+assert(dock_update_source:find('["appdock_anim.lua"] = true', 1, true), "DockUpdate must allow the AppDock 9.3.0 animation module")
 assert(dock_update_source:find('["appdock_groups.lua"] = true', 1, true), "DockUpdate must allow the AppDock group model")
 assert(not dock_update_source:find('assets/wallpaper/appdock_default.svg', 1, true), "DockUpdate must not require or request the removed default wallpaper")
 assert(dock_update_source:find('kind = "data"', 1, true), "DockUpdate must stage data files without Lua execution")
@@ -246,6 +248,7 @@ for _, marker in ipairs({
     '["appdock_doom.lua"] = "8.5.3"',
     '["appdock_media.lua"] = "9.0.0"',
     '["appdock_whatsnew.lua"] = "9.0.0"',
+    '["appdock_anim.lua"] = "9.3.0"',
 }) do
     assert(dock_update_source:find(marker, 1, true), "DockUpdate must only request versioned files after their first AppDock release: " .. marker)
 end
@@ -317,7 +320,7 @@ assert(saw_large_file_timeout, "The large appdock_dapps.lua request must use the
 assert(#log.requests == 1 + #required + 2 + #optional_sources + #png_assets + 1,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 2.1.3 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.3")
+assert(catalog:find("dock_update.lua | 2.1.6 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.6")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
@@ -354,11 +357,11 @@ for _, url in ipairs(log.requests) do
     assert(not url:find("appdock_youtube_shorts.lua", 1, true), "AppDock 8.2.13 must not request a module first released in 8.2.22")
 end
 
--- Verify the complete current AppDock 9.1.1 package, including all newly
+-- Verify the complete current AppDock 9.3.0 package, including all newly
 -- versioned modules, all 23 PNG assets, and both inert AppDock data files.
-feed = feed:gsub("8%.2%.13", "9.1.1")
-packaged_sources["_meta.lua"] = "return { version = '9.1.1' }\n"
-packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-9.1.1' }\n"
+feed = feed:gsub("8%.2%.13", "9.3.0")
+packaged_sources["_meta.lua"] = "return { version = '9.3.0' }\n"
+packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-9.3.0' }\n"
 log.requests = {}
 local current_instance = {}
 findAction(app.buildPane(current_instance, context), "Check updates").callback()
@@ -366,7 +369,7 @@ local current_pane = app.buildPane(current_instance, context)
 findAction(current_pane, "Install update").callback()
 assert(log.shown and log.shown.ok_callback, "Installing the current AppDock release must still require explicit confirmation")
 log.shown.ok_callback()
-assert(#required + #versioned_sources + #png_assets == 76, "The current AppDock 9.1.1 fixture must represent all 76 files in the live plugin tree")
+assert(#required + #versioned_sources + #png_assets == 77, "The current AppDock 9.3.0 fixture must represent all 77 files in the live plugin tree")
 assert(#log.requests == 1 + #required + #versioned_sources + #png_assets, "DockUpdate must fetch every current plugin file exactly once")
 for _, name in ipairs(required) do
     local installed = assert(io.open(active .. "/" .. name, "rb")):read("*a")
