@@ -69,9 +69,18 @@ local attachment_cache_prepared = false
 local STICKER_MARKER = "\226\129\164"
 local STICKER_DIR = DataStorage:getDataDir() .. "/appdock_dchat_stickers"
 local STICKER_MAX_FRAMES = 40
-local STICKER_FRAME_DELAY = 0.5 -- seconds; slow on purpose, e-ink cannot keep up with more
+local STICKER_FRAME_DELAY = 0.16 -- seconds; about 6 FPS when the panel permits it
 local STICKER_MAX_LOOPS = 3 -- the animation rests after this many loops; "Replay" restarts it
 local sticker_frame_cache = {}
+-- E-ink sticker palette: limiting output to five panel-friendly colours makes
+-- partial/fast refresh considerably cheaper than repainting full colour.
+local STICKER_PALETTE = {
+    { 0, 0, 0 },       -- black
+    { 255, 255, 255 }, -- white
+    { 255, 0, 0 },     -- red
+    { 0, 255, 0 },     -- green
+    { 0, 0, 255 },     -- blue
+}
 local MAX_NOTE_BYTES = 840
 local MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 local RESPONSE_TOO_LARGE = "response too large"
@@ -1415,6 +1424,7 @@ local function chooseImageAttachment(state, context, mode)
         local attr = lfs.attributes(path)
         if not attr or attr.mode ~= "file" then state.status = _("The image could not be opened."); refresh(context); return end
         if attr.size > MAX_IMAGE_SOURCE_BYTES then state.status = _("The image is too large (max. 40 MB)."); refresh(context); return end
+        if mode == "avatar" and ASSETS.avatarHook then ASSETS.avatarHook(state, context, path); return end
         local file = io.open(path, "rb")
         if not file then state.status = _("The image could not be opened."); refresh(context); return end
         local data = file:read("*a"); file:close()
@@ -1871,23 +1881,351 @@ local function stickerAsBlitbuffer(frame)
     end
 end
 
+-- ---- own GIF decoder (KOReader builds without a GIF frame decoder) ---------------------------
+-- Pure LuaJIT + ffi: LZW, local/global palettes, interlacing, transparency and disposal
+-- methods. Frames are flattened onto white and box-scaled to fit width x height.
+-- Returns { w =, h =, count =, frames = { RGBA ffi buffers } } or nil, reason.
+function UI.gifDecode(data, box_w, box_h, max_frames)
+    local ffi, bit = require("ffi"), require("bit")
+    local byte, band, bor, lshift, rshift = string.byte, bit.band, bit.bor, bit.lshift, bit.rshift
+    if type(data) ~= "string" or #data < 20 or data:sub(1, 3) ~= "GIF" then return nil, "not a GIF file" end
+    local function u16(p) return (byte(data, p) or 0) + (byte(data, p + 1) or 0) * 256 end
+    local W, H = u16(7), u16(9)
+    if W < 1 or H < 1 or W * H > 4 * 1024 * 1024 then return nil, "unsupported GIF size" end
+    local flags = byte(data, 11)
+    local pos = 14
+    local global_pal, global_n
+    if band(flags, 0x80) ~= 0 then
+        global_n = 2 ^ (band(flags, 7) + 1)
+        global_pal = pos
+        pos = pos + 3 * global_n
+    end
+
+    -- pass 1: list the frames without decoding them
+    local frames, gce = {}, nil
+    local total = #data
+    while pos <= total do
+        local block = byte(data, pos)
+        if block == 0x3B or block == nil then break end
+        if block == 0x21 then
+            local label = byte(data, pos + 1)
+            if label == 0xF9 and byte(data, pos + 2) == 4 then
+                local packed = byte(data, pos + 3)
+                gce = {
+                    disposal = band(rshift(packed, 2), 7),
+                    transparent = band(packed, 1) ~= 0 and byte(data, pos + 6) or nil,
+                }
+            end
+            pos = pos + 2
+            while true do
+                local size = byte(data, pos)
+                if not size then break end
+                pos = pos + 1 + size
+                if size == 0 then break end
+            end
+        elseif block == 0x2C then
+            local f = {
+                left = u16(pos + 1), top = u16(pos + 3), w = u16(pos + 5), h = u16(pos + 7),
+                disposal = gce and gce.disposal or 0, transparent = gce and gce.transparent or nil,
+            }
+            local packed = byte(data, pos + 9)
+            pos = pos + 10
+            if band(packed, 0x80) ~= 0 then
+                f.pal_n = 2 ^ (band(packed, 7) + 1)
+                f.pal = pos
+                pos = pos + 3 * f.pal_n
+            end
+            f.interlace = band(packed, 0x40) ~= 0
+            f.min = byte(data, pos)
+            pos = pos + 1
+            f.data_start = pos
+            while true do
+                local size = byte(data, pos)
+                if not size then break end
+                pos = pos + 1 + size
+                if size == 0 then break end
+            end
+            frames[#frames + 1] = f
+            gce = nil
+        else
+            pos = pos + 1
+        end
+    end
+    local count = #frames
+    if count < 1 then return nil, "no image data in GIF" end
+
+    -- which frames are kept (evenly spaced)
+    local picks = math.min(count, max_frames or count)
+    local keep = {}
+    for n = 1, picks do keep[math.floor((n - 1) * count / picks) + 1] = true end
+    local function opaque_full(f)
+        return f and f.left == 0 and f.top == 0 and f.w == W and f.h == H and f.transparent == nil and f.disposal ~= 3
+    end
+
+    -- output geometry
+    local scale = math.min(1, (box_w or W) / W, (box_h or H) / H)
+    local SW, SH = math.max(1, math.floor(W * scale + 0.5)), math.max(1, math.floor(H * scale + 0.5))
+
+    local canvas = ffi.new("uint8_t[?]", W * H * 4)
+    ffi.fill(canvas, W * H * 4, 255)
+    local saved = nil
+    local out_frames = {}
+
+    local function lzw(f, out, out_size)
+        local parts, p = {}, f.data_start
+        while true do
+            local size = byte(data, p)
+            if not size or size == 0 then break end
+            parts[#parts + 1] = data:sub(p + 1, p + size)
+            p = p + 1 + size
+        end
+        local str = table.concat(parts)
+        local n = #str
+        if n == 0 then return end
+        local src = ffi.new("uint8_t[?]", n)
+        ffi.copy(src, str, n)
+        local min = f.min
+        if min < 2 or min > 8 then return end
+        local clear = lshift(1, min)
+        local eoi = clear + 1
+        local prefix = ffi.new("uint16_t[4096]")
+        local suffix = ffi.new("uint8_t[4096]")
+        local stack = ffi.new("uint8_t[4097]")
+        local codesize, nextcode = min + 1, eoi + 1
+        local bitbuf, bitcnt, sp_in, o = 0, 0, 0, 0
+        local prev, first = -1, 0
+        while o < out_size do
+            while bitcnt < codesize do
+                if sp_in >= n then return end
+                bitbuf = bor(bitbuf, lshift(src[sp_in], bitcnt))
+                bitcnt = bitcnt + 8
+                sp_in = sp_in + 1
+            end
+            local code = band(bitbuf, lshift(1, codesize) - 1)
+            bitbuf = rshift(bitbuf, codesize)
+            bitcnt = bitcnt - codesize
+            if code == clear then
+                codesize, nextcode, prev = min + 1, eoi + 1, -1
+            elseif code == eoi then
+                return
+            elseif prev == -1 then
+                if code < clear then out[o] = code; o = o + 1 end
+                prev, first = code, code
+            else
+                local sp, c = 0, code
+                if code >= nextcode then
+                    stack[sp] = first; sp = sp + 1
+                    c = prev
+                end
+                while c >= clear and sp < 4096 do
+                    stack[sp] = suffix[c]; sp = sp + 1
+                    c = prefix[c]
+                end
+                stack[sp] = c; sp = sp + 1
+                first = c
+                for i = sp - 1, 0, -1 do
+                    if o < out_size then out[o] = stack[i]; o = o + 1 end
+                end
+                if nextcode < 4096 then
+                    prefix[nextcode] = prev
+                    suffix[nextcode] = first
+                    nextcode = nextcode + 1
+                    if nextcode == lshift(1, codesize) and codesize < 12 then codesize = codesize + 1 end
+                end
+                prev = code
+            end
+        end
+    end
+
+    for i, f in ipairs(frames) do
+        local needed = keep[i] or not (opaque_full(f) and (i == count or opaque_full(frames[i + 1])))
+        if f.disposal == 3 then
+            saved = saved or ffi.new("uint8_t[?]", W * H * 4)
+            ffi.copy(saved, canvas, W * H * 4)
+        end
+        if needed and f.w > 0 and f.h > 0 and f.left + f.w <= W and f.top + f.h <= H then
+            local fw, fh = f.w, f.h
+            local idx = ffi.new("uint8_t[?]", fw * fh)
+            lzw(f, idx, fw * fh)
+            local pal = ffi.new("uint8_t[768]")
+            local base, pn = f.pal or global_pal, f.pal_n or global_n
+            if base and pn then ffi.copy(pal, data:sub(base, base + 3 * pn - 1), 3 * pn) end
+            local transparent = f.transparent or -1
+            local rows
+            if f.interlace then
+                rows = {}
+                for _, pass in ipairs({ { 0, 8 }, { 4, 8 }, { 2, 4 }, { 1, 2 } }) do
+                    for y = pass[1], fh - 1, pass[2] do rows[#rows + 1] = y end
+                end
+            end
+            for row = 0, fh - 1 do
+                local y = rows and rows[row + 1] or row
+                local dst = ((f.top + y) * W + f.left) * 4
+                local srow = row * fw
+                for x = 0, fw - 1 do
+                    local v = idx[srow + x]
+                    if v ~= transparent then
+                        local d = dst + x * 4
+                        canvas[d] = pal[v * 3]
+                        canvas[d + 1] = pal[v * 3 + 1]
+                        canvas[d + 2] = pal[v * 3 + 2]
+                        canvas[d + 3] = 255
+                    end
+                end
+            end
+        end
+        if keep[i] then
+            local out = ffi.new("uint8_t[?]", SW * SH * 4)
+            if SW == W and SH == H then
+                ffi.copy(out, canvas, W * H * 4)
+            else
+                for y = 0, SH - 1 do
+                    local y0 = math.floor(y * H / SH)
+                    local y1 = math.max(y0 + 1, math.floor((y + 1) * H / SH))
+                    for x = 0, SW - 1 do
+                        local x0 = math.floor(x * W / SW)
+                        local x1 = math.max(x0 + 1, math.floor((x + 1) * W / SW))
+                        local r, g, b, c = 0, 0, 0, 0
+                        for yy = y0, y1 - 1 do
+                            local o = (yy * W + x0) * 4
+                            for _ = x0, x1 - 1 do
+                                r = r + canvas[o]; g = g + canvas[o + 1]; b = b + canvas[o + 2]
+                                c = c + 1
+                                o = o + 4
+                            end
+                        end
+                        local d = (y * SW + x) * 4
+                        out[d] = math.floor(r / c + 0.5); out[d + 1] = math.floor(g / c + 0.5)
+                        out[d + 2] = math.floor(b / c + 0.5); out[d + 3] = 255
+                    end
+                end
+            end
+            UI.ditherStickerBuffer(out, SW, SH)
+            out_frames[#out_frames + 1] = out
+        end
+        -- disposal after display
+        if f.disposal == 2 then
+            for y = f.top, math.min(H, f.top + f.h) - 1 do
+                ffi.fill(canvas + (y * W + f.left) * 4, math.min(f.w, W - f.left) * 4, 255)
+            end
+        elseif f.disposal == 3 and saved then
+            ffi.copy(canvas, saved, W * H * 4)
+        end
+    end
+    return { w = SW, h = SH, count = count, frames = out_frames }
+end
+
+-- Floyd-Steinberg dither into the five-colour sticker palette. This operates
+-- on decoded RGBA buffers, before they become Blitbuffers.
+function UI.ditherStickerBuffer(buf, width, height)
+    local errors_r, errors_g, errors_b = {}, {}, {}
+    local function nearest(r, g, b)
+        local best, best_distance = 1, math.huge
+        for index, colour in ipairs(STICKER_PALETTE) do
+            local dr, dg, db = r - colour[1], g - colour[2], b - colour[3]
+            local distance = dr * dr + dg * dg + db * db
+            if distance < best_distance then best, best_distance = index, distance end
+        end
+        return best
+    end
+    local function add(errors, x, y, value)
+        if x >= 0 and x < width and y >= 0 and y < height then
+            local index = y * width + x + 1
+            errors[index] = (errors[index] or 0) + value
+        end
+    end
+    for y = 0, height - 1 do
+        for x = 0, width - 1 do
+            local index = y * width + x + 1
+            local offset = (y * width + x) * 4
+            local r = math.max(0, math.min(255, buf[offset] + (errors_r[index] or 0)))
+            local g = math.max(0, math.min(255, buf[offset + 1] + (errors_g[index] or 0)))
+            local b = math.max(0, math.min(255, buf[offset + 2] + (errors_b[index] or 0)))
+            local colour = STICKER_PALETTE[nearest(r, g, b)]
+            buf[offset], buf[offset + 1], buf[offset + 2] = colour[1], colour[2], colour[3]
+            local er, eg, eb = r - colour[1], g - colour[2], b - colour[3]
+            add(errors_r, x + 1, y, er * 7 / 16); add(errors_g, x + 1, y, eg * 7 / 16); add(errors_b, x + 1, y, eb * 7 / 16)
+            add(errors_r, x - 1, y + 1, er * 3 / 16); add(errors_g, x - 1, y + 1, eg * 3 / 16); add(errors_b, x - 1, y + 1, eb * 3 / 16)
+            add(errors_r, x, y + 1, er * 5 / 16); add(errors_g, x, y + 1, eg * 5 / 16); add(errors_b, x, y + 1, eb * 5 / 16)
+            add(errors_r, x + 1, y + 1, er / 16); add(errors_g, x + 1, y + 1, eg / 16); add(errors_b, x + 1, y + 1, eb / 16)
+        end
+    end
+    return buf
+end
+
+-- Blitbuffer frames in the shape RenderImage:renderGifImageFile returns, using the decoder above.
+function UI.gifFrames(path, width, height, max_frames)
+    local data = UI.readFile(path, 8 * 1024 * 1024)
+    if not data then return nil, "could not read the file" end
+    local ok, decoded, reason = pcall(UI.gifDecode, data, width, height, max_frames)
+    if not ok then return nil, "decoder error: " .. tostring(decoded):sub(1, 80) end
+    if not decoded then return nil, reason end
+    local ffi = require("ffi")
+    local result = { image_count = #decoded.frames }
+    local order
+    for i, buf in ipairs(decoded.frames) do
+        local bb = Blitbuffer.new(decoded.w, decoded.h, Blitbuffer.TYPE_BBRGB32)
+        local dst = ffi.cast("uint8_t*", bb.data)
+        local stride = tonumber(bb.stride) or decoded.w * 4
+        if not order then
+            -- find out the byte order of this build (r,g,b,a or b,g,r,a)
+            dst[0], dst[1], dst[2], dst[3] = 10, 20, 30, 255
+            local c = bb:getPixel(0, 0):getColorRGB32()
+            if c.r == 10 and c.b == 30 then order = "rgb" elseif c.r == 30 and c.b == 10 then order = "bgr" else return nil, "unknown pixel layout" end
+        end
+        for y = 0, decoded.h - 1 do
+            local s, d = y * decoded.w * 4, y * stride
+            if order == "rgb" then
+                ffi.copy(dst + d, buf + s, decoded.w * 4)
+            else
+                for x = 0, decoded.w - 1 do
+                    dst[d + x * 4] = buf[s + x * 4 + 2]
+                    dst[d + x * 4 + 1] = buf[s + x * 4 + 1]
+                    dst[d + x * 4 + 2] = buf[s + x * 4]
+                    dst[d + x * 4 + 3] = 255
+                end
+            end
+        end
+        result[i] = bb
+    end
+    return result
+end
+
 local function loadStickerFrames(path, width, height)
     local key = path .. "|" .. width .. "x" .. height
     local cached = sticker_frame_cache[key]
     if cached ~= nil then return cached or nil end
     sticker_frame_cache[key] = false
-    if not tostring(path):lower():match("%.gif$") then return nil end
+    if not tostring(path):lower():match("%.gif$") then UI.anim_debug = "not a .gif file"; return nil end
+    -- Prefer KOReader's native animated-GIF decoder: some GIF disposal and
+    -- extension blocks are not supported by the small fallback decoder. The
+    -- fallback still provides deterministic five-colour frames on older hosts.
+    local result, reason
     local ok_render, RenderImage = pcall(require, "ui/renderimage")
-    if not ok_render or type(RenderImage) ~= "table" or type(RenderImage.renderGifImageFile) ~= "function" then return nil end
-    local ok, result = pcall(RenderImage.renderGifImageFile, RenderImage, path, true, width, height)
-    if not ok or type(result) ~= "table" then return nil end
+    if ok_render and type(RenderImage) == "table" and type(RenderImage.renderGifImageFile) == "function" then
+        local ok, rendered = pcall(RenderImage.renderGifImageFile, RenderImage, path, true, width, height)
+        if ok and type(rendered) == "table" then result = rendered end
+    end
+    if not result then result, reason = UI.gifFrames(path, width, height, STICKER_MAX_FRAMES) end
+    if not result then UI.anim_debug = tostring(reason); return nil end
     local count = tonumber(result.image_count) or #result
     local frames = {}
     for index = 1, math.min(count, STICKER_MAX_FRAMES) do
         local frame = result[index] and stickerAsBlitbuffer(result[index])
-        if frame then frames[#frames + 1] = frame end
+        if frame then
+            -- Noto GIFs have a transparent background: flatten every frame onto white,
+            -- otherwise it is drawn black (or blank).
+            local flat_ok, flat = pcall(function()
+                local w, h = frame:getWidth(), frame:getHeight()
+                local canvas = Blitbuffer.new(w, h, frame:getType())
+                canvas:fill(Blitbuffer.COLOR_WHITE)
+                canvas:alphablitFrom(frame, 0, 0, 0, 0, w, h)
+                return canvas
+            end)
+            frames[#frames + 1] = (flat_ok and flat) or frame
+        end
     end
-    if #frames < 2 then return nil end
+    if #frames < 2 then UI.anim_debug = "only " .. #frames .. " frame(s) decoded of " .. tostring(count); return nil end
     local entry = { frames = frames, index = 1, loops = 0, done = false, path = path }
     sticker_frame_cache[key] = entry
     return entry
@@ -1911,27 +2249,38 @@ if ok_base_widget and type(BaseWidget) == "table" and type(BaseWidget.extend) ==
             bb:blitFrom(frame, x + math.floor((self.width - frame_w) / 2), y + math.floor((self.height - frame_h) / 2), 0, 0, frame_w, frame_h)
         end)
         if not blit_ok then entry.done = true; return end
-        self._painted = true
-        if not entry.done and not self._scheduled and not self._dead then
-            self._scheduled = true
-            self._tick = self._tick or function() self:advance() end
-            UIManager:scheduleIn(STICKER_FRAME_DELAY, self._tick)
+        entry.painted = true
+        entry.region = self.dimen
+        if not entry.done and not entry.tick_pending and not self._dead then
+            entry.tick_pending = true
+            entry.tick = entry.tick or function() AnimatedSticker.advance(entry) end
+            UIManager:scheduleIn(STICKER_FRAME_DELAY, entry.tick)
         end
     end
 
-    function AnimatedSticker:advance()
-        self._scheduled = false
-        if self._dead or not self._painted then return end
-        self._painted = false
-        local entry = self.entry
+    -- Runs on the shared entry (a pane rebuild creates new widgets for the same frames).
+    function AnimatedSticker.advance(entry)
+        entry.tick_pending = false
+        if not entry.painted then return end -- view changed: stop until it is painted again
+        entry.painted = false
         entry.index = entry.index + 1
         if entry.index > #entry.frames then
             entry.index = 1
             entry.loops = entry.loops + 1
             if entry.loops >= STICKER_MAX_LOOPS then entry.done = true end
         end
-        local region = self.dimen
-        if region then UIManager:setDirty("all", function() return "ui", region end) end
+        -- Repaint just this region (as the original widget did); only if no region is known, rebuild.
+        if entry.region then
+            local region = entry.region
+            local ok = pcall(UIManager.setDirty, UIManager, "all", function() return "fast", region end)
+            if not ok then UIManager:setDirty("all", function() return "ui", region end) end
+            -- Timer callbacks can mark the region dirty without waking the
+            -- e-ink event loop. Force the pending fast update onto the panel.
+            if UIManager.forceRePaint then pcall(UIManager.forceRePaint, UIManager) end
+            if UIManager.yieldToEPDC then pcall(UIManager.yieldToEPDC, UIManager) end
+        elseif UI.pane_context and type(UI.pane_context.requestRebuild) == "function" then
+            pcall(UI.pane_context.requestRebuild, "ui")
+        end
     end
 
     function AnimatedSticker:free()
@@ -1953,7 +2302,7 @@ end
 function UI.replayAnimation(path)
     local replayed = false
     for _, entry in pairs(sticker_frame_cache) do
-        if entry and entry.path == path then entry.index, entry.loops, entry.done = 1, 0, false; replayed = true end
+        if entry and entry.path == path then entry.index, entry.loops, entry.done, entry.tick_pending = 1, 0, false, false; replayed = true end
     end
     return replayed
 end
@@ -2753,7 +3102,7 @@ function UI.writeFileAtomic(path, data)
 end
 
 -- Plain GET with a hard size limit. Returns data, or nil + "network" | "toolarge" | "http" (+ status code).
-function UI.httpGetBinary(url, limit, accept)
+function UI.httpGetBinary(url, limit, accept, max_time)
     local ok_https, https = pcall(require, "ssl.https")
     local ok_socket, socket = pcall(require, "socket")
     local ok_util, socketutil = pcall(require, "socketutil")
@@ -2772,7 +3121,7 @@ function UI.httpGetBinary(url, limit, accept)
         url = url, method = "GET", sink = sink,
         headers = { ["accept"] = accept or "*/*", ["user-agent"] = "AppDock-DChat/2.6" },
     }
-    socketutil:set_timeout(CONNECT_TIMEOUT, 40)
+    socketutil:set_timeout(CONNECT_TIMEOUT, max_time or 40)
     local ok, code, response_headers = pcall(function() return socket.skip(1, https.request(request)) end)
     socketutil:reset_timeout()
     if too_large then return nil, "toolarge" end
@@ -2952,6 +3301,102 @@ function UI.stickerThumb(entry, size)
     end
 end
 
+-- ---- GIF re-encoder (shrinks big animations so they fit the 512 KiB limit) -----------------
+-- Fixed five-colour palette + plain LZW, no dependencies. Input: arrays of palette indices.
+function UI.gifEncode(frames, width, height, delay_cs)
+    local bit = require("bit")
+    local out = { "GIF89a", string.char(width % 256, math.floor(width / 256), height % 256, math.floor(height / 256), 0xF7, 0, 0) }
+    local palette = {}
+    for _, colour in ipairs(STICKER_PALETTE) do
+        palette[#palette + 1] = string.char(colour[1], colour[2], colour[3])
+    end
+    for _ = #palette + 1, 256 do palette[#palette + 1] = "\0\0\0" end
+    out[#out + 1] = table.concat(palette)
+    out[#out + 1] = "\33\255\11NETSCAPE2.0\3\1\0\0\0"
+    for _, indices in ipairs(frames) do
+        out[#out + 1] = "\33\249\4\0" .. string.char(delay_cs % 256, math.floor(delay_cs / 256)) .. "\0\0"
+        out[#out + 1] = "\44\0\0\0\0" .. string.char(width % 256, math.floor(width / 256), height % 256, math.floor(height / 256), 0) .. "\8"
+        -- LZW
+        local bytes, bitbuf, bitcnt, codesize = {}, 0, 0, 9
+        local function emit(code)
+            bitbuf = bit.bor(bitbuf, bit.lshift(code, bitcnt))
+            bitcnt = bitcnt + codesize
+            while bitcnt >= 8 do
+                bytes[#bytes + 1] = string.char(bit.band(bitbuf, 255))
+                bitbuf = bit.rshift(bitbuf, 8)
+                bitcnt = bitcnt - 8
+            end
+        end
+        local dict, next_code = {}, 258
+        emit(256)
+        local prefix = indices[1]
+        for i = 2, #indices do
+            local k = indices[i]
+            local key = prefix * 256 + k
+            local found = dict[key]
+            if found then
+                prefix = found
+            else
+                emit(prefix)
+                dict[key] = next_code
+                next_code = next_code + 1
+                if next_code > (2 ^ codesize) and codesize < 12 then codesize = codesize + 1 end
+                if next_code >= 4095 then
+                    emit(256)
+                    dict, next_code, codesize = {}, 258, 9
+                end
+                prefix = k
+            end
+        end
+        emit(prefix)
+        emit(257)
+        if bitcnt > 0 then bytes[#bytes + 1] = string.char(bit.band(bitbuf, 255)) end
+        local stream = table.concat(bytes)
+        for pos = 1, #stream, 255 do
+            local chunk = stream:sub(pos, pos + 254)
+            out[#out + 1] = string.char(#chunk) .. chunk
+        end
+        out[#out + 1] = "\0"
+    end
+    out[#out + 1] = ";"
+    return table.concat(out)
+end
+
+-- Decodes `source` scaled to `size` px, keeps at most `max_frames`, flattens on white,
+-- quantises and re-encodes. Returns GIF data or nil.
+function UI.gifShrinkData(source, size, max_frames)
+    local data = UI.readFile(source, 8 * 1024 * 1024)
+    if not data then return nil end
+    local ok, decoded = pcall(UI.gifDecode, data, size, size, max_frames)
+    if not ok or not decoded or #decoded.frames < 2 then return nil end
+    local frames = {}
+    for n, buf in ipairs(decoded.frames) do
+        local indices, pos = {}, 0
+        UI.ditherStickerBuffer(buf, decoded.w, decoded.h)
+        for i = 0, decoded.w * decoded.h - 1 do
+            pos = pos + 1
+            local r, g, b = buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2]
+            local index = 0
+            if r > 200 and g < 80 and b < 80 then index = 2
+            elseif r < 80 and g > 200 and b < 80 then index = 3
+            elseif r < 80 and g < 80 and b > 200 then index = 4
+            elseif r > 200 and g > 200 and b > 200 then index = 1 end
+            indices[pos] = index
+        end
+        frames[n] = indices
+    end
+    return UI.gifEncode(frames, decoded.w, decoded.h, 6)
+end
+
+-- Tries smaller sizes until the result fits. Returns the path of the small GIF or nil.
+function UI.gifShrink(source, target)
+    for _, attempt in ipairs({ { 128, 30 }, { 96, 24 }, { 64, 20 } }) do
+        local data = UI.gifShrinkData(source, attempt[1], attempt[2])
+        if data and #data <= MAX_ATTACHMENT_BYTES and UI.writeFileAtomic(target, data) then return target end
+    end
+    return nil
+end
+
 -- Downloads the animation to the (self-cleaning) attachment cache, or finds it in the library.
 -- Returns path, in_library, format  |  nil, "network" | "toolarge" | "http" | "invalid" | "storage", status.
 function UI.notoDownload(code)
@@ -2968,6 +3413,18 @@ function UI.notoDownload(code)
         local temporary = ATTACHMENT_CACHE_DIR .. "/dchat_noto-" .. code .. "_" .. (idx - 1) .. "." .. variant[2]
         if (UI.fileSize(temporary) or 0) > 0 then return temporary, false, variant[2] end
         local data, err, status = UI.httpGetBinary(UI.NOTO_CDN .. "latest/" .. code .. "/" .. variant[1], MAX_ATTACHMENT_BYTES, "image/*")
+        if err == "toolarge" and variant[2] == "gif" then
+            -- Too big for DChat: fetch the full GIF once, scale it down and re-encode it.
+            local small = ATTACHMENT_CACHE_DIR .. "/dchat_noto-" .. code .. "_2.gif"
+            if (UI.fileSize(small) or 0) > 0 then return small, false, "gif" end
+            local big = UI.httpGetBinary(UI.NOTO_CDN .. "latest/" .. code .. "/512.gif", 8 * 1024 * 1024, "image/*", 90)
+            local big_path = ATTACHMENT_CACHE_DIR .. "/dchat_noto-" .. code .. "_9.gif"
+            if big and big:sub(1, 3) == "GIF" and UI.writeFileAtomic(big_path, big) then
+                local shrunk = UI.gifShrink(big_path, small)
+                pcall(os.remove, big_path)
+                if shrunk then return shrunk, false, "gif" end
+            end
+        end
         if data then
             local signature_ok = (variant[2] == "gif" and data:sub(1, 3) == "GIF") or (variant[2] == "webp" and data:sub(1, 4) == "RIFF")
             if signature_ok and UI.writeFileAtomic(temporary, data) then return temporary, false, variant[2] end
@@ -3063,6 +3520,9 @@ function UI.StickerPreview:init()
     local busy = showBusy(_("Loading preview…"))
     self.sticker = UI.attachmentWidget(self.path, mime, sticker_size, sticker_size)
     hideBusy(busy)
+    if animated and not (self.sticker and self.sticker.entry) then
+        info = info .. " · " .. _("not playable here") .. ": " .. tostring(UI.anim_debug or "?")
+    end
 
     local button_h = math.max(px(38), math.floor(H * 0.05))
     local button_w = math.floor((inner_w - px(6)) / 2)
@@ -3429,7 +3889,7 @@ function UI.StickerBrowser:openEntry(entry)
         UIManager:show(UI.StickerPreview:new{ browser = self, path = entry.path, name = entry.name, code = entry.code, library = true, format = format })
         return
     end
-    local busy = showBusy(_("Downloading sticker…"))
+    local busy = showBusy(_("Downloading and scaling sticker…"))
     local path, in_library, format = UI.notoDownload(entry.code)
     hideBusy(busy)
     if not path then
@@ -3508,7 +3968,10 @@ function UI.messageMenu(state, context, message, mode)
     if not public and (message.attachmentData or "") ~= "" then
         if message.attachmentMime == "image/gif" then
             items[#items + 1] = { text = _("Replay animation"), callback = function()
-                UI.replayAnimation(state.attachment_files and state.attachment_files[message.id])
+                local replayed = UI.replayAnimation(state.attachment_files and state.attachment_files[message.id])
+                if not replayed then
+                    UIManager:show(InfoMessage:new{ text = _("This image is not shown as an animation:") .. " " .. tostring(UI.anim_debug or "unknown reason") })
+                end
                 refresh(context)
             end }
         end
@@ -3689,8 +4152,13 @@ function UI.avatarPicture(name, diameter, background)
     }
 end
 
-function UI.avatar(diameter, name, color, px, background)
-    local picture = UI.avatarPicture(name, diameter, background)
+function UI.avatar(diameter, name, color, px, background, picture_key)
+    local picture = UI.avatarPicture(picture_key or name, diameter, background)
+    -- A local DChat avatar wins, but an InkBlog picture is also valid when the
+    -- DChat identity is unrelated to the optional TBS account.
+    if not picture and picture_key and name and picture_key ~= name then
+        picture = UI.avatarPicture(name, diameter, background)
+    end
     if picture then return picture end
     local label = TextWidget:new{
         text = UI.initial(name),
@@ -3728,7 +4196,7 @@ function UI.header(elements, context, width, o)
     end
     if o.avatar_name then
         local diameter = math.floor(h * .66)
-        local avatar = UI.avatar(diameter, o.avatar_name, o.avatar_color, px, WA.header)
+        local avatar = UI.avatar(diameter, o.avatar_name, o.avatar_color, px, WA.header, o.avatar_key)
         avatar.overlap_offset = { x, math.floor((h - diameter) / 2) }
         elements[#elements + 1] = avatar
         x = x + diameter + math.floor(margin * .8)
@@ -3748,10 +4216,101 @@ end
 function UI.sidebarMenu(state, context)
     local items = {
         { text = _("Settings"), callback = function() UI.goSettings(state, context) end },
+        { text = _("Profile picture…"), callback = function() UI.profilePictureMenu(state, context) end },
         { text = _("Restore removed contacts"), callback = function() restoreRemovedRecipients(state, context) end },
     }
     if not UI.showMenu(items, "DChat") then UI.goSettings(state, context) end
 end
+
+-- ---- own profile picture ----------------------------------------------
+-- Picked with the file chooser, cropped to a square, scaled to 192 px and saved as PNG.
+-- DChat has no upload endpoint, so the picture is only shown on this reader.
+UI.OWN_KEY = "\1own"
+UI.AVATAR_SIZE = 192
+
+function UI.ownAvatarInit()
+    UI.own_avatar_loaded = true
+    local newest, newest_n
+    local ok, iterator, directory, initial = pcall(lfs.dir, UI.AVATAR_DIR)
+    if ok and type(iterator) == "function" then
+        for name in iterator, directory, initial do
+            local stamp = type(name) == "string" and name:match("^own_(%d+)%.png$")
+            if stamp and (not newest_n or tonumber(stamp) > newest_n) then newest, newest_n = name, tonumber(stamp) end
+        end
+    end
+    UI.avatar_state[UI.OWN_KEY] = newest and { path = UI.AVATAR_DIR .. "/" .. newest } or nil
+end
+
+function UI.removeOwnAvatarFiles(keep)
+    local ok, iterator, directory, initial = pcall(lfs.dir, UI.AVATAR_DIR)
+    if ok and type(iterator) == "function" then
+        for name in iterator, directory, initial do
+            if type(name) == "string" and name:match("^own_%d+%.png$") and UI.AVATAR_DIR .. "/" .. name ~= keep then
+                pcall(os.remove, UI.AVATAR_DIR .. "/" .. name)
+            end
+        end
+    end
+end
+
+-- Returns the new file path, or nil + reason.
+function UI.makeAvatarFile(path)
+    local ok_ri, RenderImage = pcall(require, "ui/renderimage")
+    if not ok_ri or type(RenderImage) ~= "table" then return nil, "no image support" end
+    local src = RenderImage:renderImageFile(path, false)
+    if not src then return nil, "the image could not be decoded" end
+    local w, h = src:getWidth(), src:getHeight()
+    local side = math.min(w, h)
+    if side < 1 then pcall(src.free, src); return nil, "empty image" end
+    local square = Blitbuffer.new(side, side, Blitbuffer.TYPE_BBRGB32)
+    square:fill(Blitbuffer.COLOR_WHITE)
+    local ox, oy = math.floor((w - side) / 2), math.floor((h - side) / 2)
+    if square.alphablitFrom then square:alphablitFrom(src, 0, 0, ox, oy, side, side) else square:blitFrom(src, 0, 0, ox, oy, side, side) end
+    pcall(src.free, src)
+    local final = square
+    if side > UI.AVATAR_SIZE then
+        local ok_s, scaled = pcall(function() return RenderImage:scaleBlitBuffer(square, UI.AVATAR_SIZE, UI.AVATAR_SIZE, false) end)
+        if ok_s and scaled then pcall(square.free, square); final = scaled end
+    end
+    if not UI.ensureDir(UI.AVATAR_DIR) then pcall(final.free, final); return nil, "no storage" end
+    local file = UI.AVATAR_DIR .. "/own_" .. os.time() .. ".png"
+    local ok_w, err
+    if final.writePNG then ok_w, err = pcall(final.writePNG, final, file)
+    elseif final.writeToFile then ok_w, err = pcall(final.writeToFile, final, file, "png") end
+    pcall(final.free, final)
+    if (UI.fileSize(file) or 0) == 0 then return nil, tostring(err or "PNG encoder missing"):sub(1, 80) end
+    UI.removeOwnAvatarFiles(file)
+    return file
+end
+
+function UI.setOwnAvatar(state, context, path)
+    local busy = showBusy(_("Setting profile picture…"))
+    local ok, file, reason = pcall(UI.makeAvatarFile, path)
+    hideBusy(busy)
+    if ok and file then
+        UI.avatar_state[UI.OWN_KEY] = { path = file }
+        state.status = _("Profile picture set. It is only shown on this reader.")
+    else
+        state.status = _("The picture could not be used.") .. " " .. tostring(ok and reason or file):sub(1, 80)
+    end
+    refresh(context)
+end
+
+function UI.removeOwnAvatar(state, context)
+    UI.removeOwnAvatarFiles(nil)
+    UI.avatar_state[UI.OWN_KEY] = nil
+    state.status = _("Profile picture removed.")
+    refresh(context)
+end
+
+function UI.profilePictureMenu(state, context)
+    local items = { { text = _("Choose picture…"), callback = function() chooseImageAttachment(state, context, "avatar") end } }
+    if UI.avatar_state[UI.OWN_KEY] then
+        items[#items + 1] = { text = _("Remove picture"), callback = function() UI.removeOwnAvatar(state, context) end }
+    end
+    if not UI.showMenu(items, _("Profile picture")) then chooseImageAttachment(state, context, "avatar") end
+end
+-- chooseImageAttachment is defined before UI exists, so it reaches the handler through ASSETS.
+ASSETS.avatarHook = UI.setOwnAvatar
 
 function UI.chatRow(o)
     local px, width, height, margin = o.px, o.width, o.height, o.margin
@@ -3802,14 +4361,18 @@ function UI.buildSidebar(state, context, width, height, highlight)
         entries[#entries + 1] = recipient
         avatar_names[#avatar_names + 1] = recipient.displayName
     end
+    local own_name = hasIdentity(state.store) and state.store.display_name or nil
+    if own_name then avatar_names[#avatar_names + 1] = own_name end
     UI.queueAvatars(avatar_names, context)
     local first, last, normalized = visibleTopRange(entries, state.recipient_scroll or 0, capacity)
     state.recipient_scroll = normalized
     local elements = {
         FrameContainer:new{ width = width, height = height, padding = 0, bordersize = 0, background = WA.white, emptySizedWidget(width, height) },
     }
+    if not UI.own_avatar_loaded then UI.ownAvatarInit() end
     UI.header(elements, context, width, {
         height = header_height, margin = margin, title = "DChat",
+        avatar_name = own_name, avatar_color = own_name and UI.nameColor(own_name) or nil, avatar_key = UI.OWN_KEY,
         subtitle = hasIdentity(state.store) and state.store.display_name or _("No local identity"),
         actions = {
             { icon = "search", callback = function() promptRecipientSearch(state, context) end },
@@ -4191,6 +4754,7 @@ local function tinySettingsPane(instance, context)
     local state = stateFor(instance)
     active_palette = themePalette(context)
     active_px = context.px or scale
+    UI.pane_context = context
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
@@ -4214,6 +4778,7 @@ local function chatWorkspacePane(instance, context, mode)
     local state = stateFor(instance)
     active_palette = themePalette(context)
     active_px = context.px or scale
+    UI.pane_context = context
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
     local split_minimum = math.max(px(420), 360)
@@ -4250,6 +4815,7 @@ local function settingsPane(instance, context)
     local state = stateFor(instance)
     active_palette = themePalette(context)
     active_px = context.px or scale
+    UI.pane_context = context
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
@@ -4292,6 +4858,7 @@ local function dmMessagePane(instance, context)
     local state = stateFor(instance)
     active_palette = themePalette(context)
     active_px = context.px or scale
+    UI.pane_context = context
     local palette = active_palette
     local message = selectedDirectMessage(state)
     if not message then clearAttachmentFiles(state); state.view = "dm_conversation"; return dmConversationPane(instance, context) end
@@ -4333,6 +4900,7 @@ local function messagePane(instance, context)
     local state = stateFor(instance)
     active_palette = themePalette(context)
     active_px = context.px or scale
+    UI.pane_context = context
     local palette = active_palette
     local width, height = context.dimen.w, context.dimen.h
     local px = context.px or scale
@@ -4353,7 +4921,7 @@ end
 
 return {
     id = "dchat",
-    version = "2.6.0",
+    version = "2.7.0",
     title = "DChat",
     subtitle = "Public Lounge and private device chats",
     symbol = "D",
