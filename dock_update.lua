@@ -51,7 +51,7 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.3.0 package has 77 files. Keep explicit headroom while
+-- The current AppDock 9.5.1 package has 78 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
@@ -79,6 +79,7 @@ local REQUIRED_FILES = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua", "appdock_glass.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
+    "appdock_health.lua",
     "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_media.lua", "appdock_whatsnew.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_anim.lua", "appdock_stylus.lua",
     "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
@@ -106,6 +107,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_homescreen.lua"] = true, ["appdock_keyboard.lua"] = true,
     ["appdock_layout.lua"] = true, ["appdock_lockscreen.lua"] = true,
     ["appdock_logo.lua"] = true, ["appdock_manager.lua"] = true,
+    ["appdock_health.lua"] = true,
     ["appdock_motion.lua"] = true, ["appdock_notifications.lua"] = true,
     ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true, ["appdock_glass.lua"] = true,
     ["appdock_sleepscreen.lua"] = true,
@@ -144,6 +146,7 @@ local SOURCE_MIN_VERSION = {
     ["appdock_whatsnew.lua"] = "9.0.0",
     ["appdock_glass.lua"] = "9.1.1",
     ["appdock_anim.lua"] = "9.3.0",
+    ["appdock_health.lua"] = "9.5.1",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -1735,7 +1738,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.6",
+    version = "2.1.7",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
