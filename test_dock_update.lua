@@ -103,9 +103,9 @@ for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. na
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(versioned_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(upcoming_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
--- Match the current AppDock 8.9.3 DApp-host module size to cover the large-file path.
-packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 268713) .. "\n"
-assert(#packaged_sources["appdock_dapps.lua"] == 268716, "The AppDock 8.9.3 host fixture must match its published byte size")
+-- Match the AppDock 9.5.2 DApp-host module size to cover the large-file path.
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 299653) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 299656, "The AppDock 9.5.2 host fixture must match its published byte size")
 packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-8.2.1' }\n"
 packaged_sources["_meta.lua"] = "return { version = '8.2.1' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
@@ -185,7 +185,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "2.1.7" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "2.1.8" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local function findAction(pane, title)
     for _, child in ipairs(pane) do
         if type(child) == "table" and child.title == title then return child end
@@ -328,7 +328,7 @@ assert(saw_large_file_timeout, "The large appdock_dapps.lua request must use the
 assert(#log.requests == 1 + #required + 2 + #optional_sources + #png_assets + 1,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 2.1.7 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.7")
+assert(catalog:find("dock_update.lua | 2.1.8 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.8")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
@@ -416,6 +416,25 @@ end
 assert(health_requests == 1, "AppDock 9.5.1 must fetch appdock_health.lua exactly once")
 assert(#log.requests == 1 + #required + #versioned_sources + #upcoming_sources + #png_assets,
     "DockUpdate must fetch the complete bounded AppDock 9.5.1 package")
+
+-- AppDock 9.5.2 reuses the same allowlisted 78-file package while shipping a
+-- larger DApp host and the in-app navigation changes in existing modules.
+feed = feed:gsub("9%.5%.1", "9.5.2")
+packaged_sources["_meta.lua"] = "return { version = '9.5.2' }\n"
+packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-9.5.2' }\n"
+log.requests = {}
+local navigation_instance = {}
+findAction(app.buildPane(navigation_instance, context), "Check updates").callback()
+local navigation_pane = app.buildPane(navigation_instance, context)
+local navigation_install = findAction(navigation_pane, "Install update")
+assert(navigation_install and navigation_install.subtitle == "AppDock 9.5.2", "DockUpdate must detect AppDock 9.5.2")
+navigation_install.callback()
+assert(log.shown and log.shown.ok_callback, "AppDock 9.5.2 installation must require explicit confirmation")
+log.shown.ok_callback()
+local installed_host = assert(io.open(active .. "/appdock_dapps.lua", "rb")):read("*a")
+assert(#installed_host == 299656, "DockUpdate must accept and install the complete AppDock 9.5.2 DApp host")
+assert(#log.requests == 1 + #required + #versioned_sources + #upcoming_sources + #png_assets,
+    "DockUpdate must fetch every allowlisted AppDock 9.5.2 file")
 
 os.execute("rm -rf " .. root)
 print("DockUpdate test: OK")

@@ -51,7 +51,7 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.5.1 package has 78 files. Keep explicit headroom while
+-- The current AppDock 9.5.2 package has 78 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
@@ -473,7 +473,7 @@ end
 
 local function fetchReleaseFile(session, entry, url, limit, accept, on_chunk)
     if entry.kind == "source" and entry.path == "appdock_dapps.lua" then
-        -- This host module is about 269 KiB. Use LuaSec's stock HTTP framing
+        -- This host module is about 293 KiB in AppDock 9.5.2. Use LuaSec's stock HTTP framing
         -- with a longer read timeout instead of the custom keep-alive parser,
         -- then retry once on a transient network failure.
         return fetchWithRetry(url, limit, accept, on_chunk, 90, 2)
@@ -1738,7 +1738,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.7",
+    version = "2.1.8",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
