@@ -3,7 +3,7 @@ DockUpdate for AppDock.
 
 A local, explicit-confirmation updater for the AppDock core plugin. It reads
 release metadata only from the pinned public GitHub repository, displays the
-release notes, validates a small root-level Lua release tree plus bundled PNG
+release notes, validates a small root-level Lua release tree plus bundled image
 assets and AppDock data files, stages every file, and atomically swaps the
 active plugin folder only after the user confirms. The previous plugin folder
 is kept as a nearby rollback backup. The Gallery and DChat DApps are installed
@@ -51,14 +51,14 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.5.2 package has 78 files. Keep explicit headroom while
+-- The current AppDock 9.6.0 package has 81 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
-local MAX_RELEASE_FILES = 80
+local MAX_RELEASE_FILES = 84
 local MAX_RELEASE_NOTES = 16 * 1024
 local NETSURF_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main/netsurf.zip"
 local NETSURF_MAX_ARCHIVE_BYTES = 7 * 1024 * 1024
@@ -82,6 +82,7 @@ local REQUIRED_FILES = {
     "appdock_health.lua",
     "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_media.lua", "appdock_whatsnew.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_anim.lua", "appdock_stylus.lua",
+    "appdock_gradient.lua", "appdock_rotation.lua",
     "appdock_suggestions.lua", "appdock_tbs_account.lua", "appdock_keyboard.lua", "appdock_layout.lua", "appdock_motion.lua",
     "appdock_sleepscreen.lua", "appdock_sleepscreen_catalog.lua",
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
@@ -89,6 +90,7 @@ local REQUIRED_FILES = {
     "appdock_transfer.lua", "appdock_youtube_shorts.lua",
     "appdock_suggestions.db", "features.adf",
     "assets/lockscreen/appdock_lockscreen_hero.png",
+    "assets/lockscreen/appdock_lockscreen_aurora.jpg",
     "assets/logos/analog_clock.png", "assets/logos/app_store.png", "assets/logos/appdock.png",
     "assets/logos/battery.png", "assets/logos/calculator.png", "assets/logos/calendar.png",
     "assets/logos/dchat.png", "assets/logos/display.png", "assets/logos/dockupdate.png",
@@ -130,6 +132,7 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_anim.lua"] = true,
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
     ["appdock_suggestions.lua"] = true, ["appdock_tbs_account.lua"] = true,
+    ["appdock_gradient.lua"] = true, ["appdock_rotation.lua"] = true,
 }
 -- Modules added after older stable releases are allowlisted but requested only
 -- from the first tag that contains them. This keeps updates from old installs
@@ -147,6 +150,11 @@ local SOURCE_MIN_VERSION = {
     ["appdock_glass.lua"] = "9.1.1",
     ["appdock_anim.lua"] = "9.3.0",
     ["appdock_health.lua"] = "9.5.1",
+    ["appdock_gradient.lua"] = "9.6.0",
+    ["appdock_rotation.lua"] = "9.6.0",
+}
+local ASSET_MIN_VERSION = {
+    ["assets/lockscreen/appdock_lockscreen_aurora.jpg"] = "9.6.0",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -154,6 +162,7 @@ local ALLOWED_DATA_FILES = {
 }
 local ALLOWED_ASSET_FILES = {
     ["assets/lockscreen/appdock_lockscreen_hero.png"] = true,
+    ["assets/lockscreen/appdock_lockscreen_aurora.jpg"] = true,
     ["assets/logos/analog_clock.png"] = true, ["assets/logos/app_store.png"] = true,
     ["assets/logos/appdock.png"] = true, ["assets/logos/display.png"] = true,
     ["assets/logos/file_manager.png"] = true, ["assets/logos/help.png"] = true,
@@ -473,7 +482,7 @@ end
 
 local function fetchReleaseFile(session, entry, url, limit, accept, on_chunk)
     if entry.kind == "source" and entry.path == "appdock_dapps.lua" then
-        -- This host module is about 293 KiB in AppDock 9.5.2. Use LuaSec's stock HTTP framing
+        -- This host module is about 295 KiB in AppDock 9.6.0. Use LuaSec's stock HTTP framing
         -- with a longer read timeout instead of the custom keep-alive parser,
         -- then retry once on a transient network failure.
         return fetchWithRetry(url, limit, accept, on_chunk, 90, 2)
@@ -545,7 +554,7 @@ local function releaseEntries(tag)
     local entries = {}
     local included = {}
     local function availableAtTag(path)
-        local minimum = SOURCE_MIN_VERSION[path]
+        local minimum = SOURCE_MIN_VERSION[path] or ASSET_MIN_VERSION[path]
         return not minimum or compareVersions(tag, minimum) >= 0
     end
     for path in pairs(ALLOWED_SOURCE_FILES) do
@@ -555,8 +564,10 @@ local function releaseEntries(tag)
         end
     end
     for path in pairs(ALLOWED_ASSET_FILES) do
-        entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "asset" }
-        included[path] = true
+        if availableAtTag(path) then
+            entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "asset" }
+            included[path] = true
+        end
     end
     for path in pairs(ALLOWED_DATA_FILES) do
         entries[#entries + 1] = { path = path, source_path = "appdock.koplugin/" .. path, kind = "data" }
@@ -615,6 +626,7 @@ end
 local function validAsset(path, content)
     if type(path) ~= "string" then return false end
     if path:match("%.png$") then return isPng(content) end
+    if path:match("%.jpg$") then return type(content) == "string" and content:sub(1, 3) == "\255\216\255" end
     return false
 end
 
@@ -661,7 +673,7 @@ local function stageRelease(release, entries, target, progress, session)
         local is_asset = entry.kind == "asset"
         local is_data = entry.kind == "data"
         local max_size = is_asset and MAX_ASSET_BYTES or (is_data and MAX_DATA_BYTES or MAX_FILE_BYTES)
-        local accept = is_asset and "image/png,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
+        local accept = is_asset and "image/png,image/jpeg,*/*;q=0.1" or "text/plain,text/x-lua;q=0.9,*/*;q=0.1"
         if progress then progress:begin(string.format(_("Downloading %s"), entry.path), 1, "core") end
         local source_url = RAW_ROOT .. "/" .. release.tag .. "/" .. (entry.source_path or entry.path)
         local on_chunk = progress and function(received) progress:bytes(received) end or nil
@@ -1738,7 +1750,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.8",
+    version = "2.1.9",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",

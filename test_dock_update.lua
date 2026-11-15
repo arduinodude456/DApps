@@ -73,6 +73,8 @@ local versioned_sources = {
     "appdock_text.lua", "appdock_youtube_shorts.lua", "appdock_netsurf.lua", "appdock_doom.lua",
     "appdock_media.lua", "appdock_whatsnew.lua", "appdock_glass.lua", "appdock_anim.lua",
 }
+local future_sources = { "appdock_gradient.lua", "appdock_rotation.lua" }
+local jpeg_assets = { "assets/lockscreen/appdock_lockscreen_aurora.jpg" }
 local upcoming_sources = { "appdock_health.lua" }
 local png_assets = {
     "assets/lockscreen/appdock_lockscreen_hero.png",
@@ -103,6 +105,7 @@ for _, name in ipairs(required) do packaged_sources[name] = "-- packaged " .. na
 for _, name in ipairs(optional_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(versioned_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 for _, name in ipairs(upcoming_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
+for _, name in ipairs(future_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
 -- Match the AppDock 9.5.2 DApp-host module size to cover the large-file path.
 packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 299653) .. "\n"
 assert(#packaged_sources["appdock_dapps.lua"] == 299656, "The AppDock 9.5.2 host fixture must match its published byte size")
@@ -111,7 +114,9 @@ packaged_sources["_meta.lua"] = "return { version = '8.2.1' }\n"
 packaged_sources["appdock_suggestions.db"] = "# AppDock offline suggestion database v1\n# language<TAB>frequency<TAB>word\nde\t7.4\tdie\nen\t7.4\tthe\n"
 packaged_sources["features.adf"] = "# AppDock news\n[page]\ntitle=AppDock update\ntext=New features are ready.\nbuttons=Done\n"
 local png_signature = "\137PNG\r\n\26\nfixture"
+local jpeg_signature = "\255\216\255fixture"
 for _, asset in ipairs(png_assets) do packaged_sources[asset] = png_signature end
+for _, asset in ipairs(jpeg_assets) do packaged_sources[asset] = jpeg_signature end
 local feed = [[<feed><entry>
 <id>tag:github.com,2008:Repository/1345844414/v8.2.1</id>
 <updated>2026-10-11T07:53:22Z</updated>
@@ -166,7 +171,7 @@ package.preload["ssl.https"] = function()
         if request.url:find("releases.atom", 1, true) then request.sink(feed)
         else
             local packaged = request.url:find("/appdock.koplugin/", 1, true) ~= nil
-            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.svg)$") or request.url:match("/([^/]+%.db)$") or request.url:match("/([^/]+%.adf)$")
+            local name = request.url:match("/([^/]+%.lua)$") or request.url:match("/([^/]+%.png)$") or request.url:match("/([^/]+%.jpg)$") or request.url:match("/([^/]+%.svg)$") or request.url:match("/([^/]+%.db)$") or request.url:match("/([^/]+%.adf)$")
             local relative = request.url:match("/v[%d.]+/appdock%.koplugin/(.+)$")
             local source = packaged and packaged_sources[relative or name] or sources[name]
             assert(name and source, "unexpected source URL " .. request.url)
@@ -185,7 +190,7 @@ end
 
 local dock_update_path = os.getenv("DOCK_UPDATE_SOURCE") or "dock_update.lua"
 local app = dofile(dock_update_path)
-assert(app.id == "dock_update" and app.version == "2.1.8" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
+assert(app.id == "dock_update" and app.version == "2.1.9" and app.logo == "dockupdate", "DockUpdate must satisfy the Store DApp contract")
 local function findAction(pane, title)
     for _, child in ipairs(pane) do
         if type(child) == "table" and child.title == title then return child end
@@ -208,21 +213,29 @@ local dock_update_source = assert(io.open(dock_update_path, "rb")):read("*a")
 local required_source_block = assert(dock_update_source:match("local REQUIRED_FILES = {(.-)\n}"))
 local required_count = 0
 for _ in required_source_block:gmatch('"[^\"]+"') do required_count = required_count + 1 end
-assert(required_count == 78, "DockUpdate must declare the complete current plugin file set")
+assert(required_count == 81, "DockUpdate must declare the complete current plugin file set")
 for _, asset in ipairs(png_assets) do
     assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current PNG asset must be required: " .. asset)
+end
+for _, asset in ipairs(jpeg_assets) do
+    assert(required_source_block:find('"' .. asset .. '"', 1, true), "Every current JPEG asset must be required: " .. asset)
 end
 assert(required_source_block:find('"appdock_order.lua"', 1, true), "The launcher ordering module is required for AppDock startup")
 assert(required_source_block:find('"appdock_recovery.lua"', 1, true), "Boot recovery must survive every DockUpdate install")
 assert(required_source_block:find('"appdock_text.lua"', 1, true), "Transparent text support must survive every DockUpdate install")
 assert(required_source_block:find('"appdock_health.lua"', 1, true), "Health & reading must be included in the AppDock 9.5.1 package")
 assert(dock_update_source:find('["appdock_health.lua"] = true', 1, true), "DockUpdate must allow the Health & reading module")
+assert(required_source_block:find('"appdock_gradient.lua"', 1, true) and required_source_block:find('"appdock_rotation.lua"', 1, true), "DockUpdate must require both AppDock 9.6.0 modules")
+assert(dock_update_source:find('["appdock_gradient.lua"] = true', 1, true) and dock_update_source:find('["appdock_rotation.lua"] = true', 1, true), "DockUpdate must allow both new Lua modules")
+assert(dock_update_source:find('["appdock_gradient.lua"] = "9.6.0"', 1, true) and dock_update_source:find('["appdock_rotation.lua"] = "9.6.0"', 1, true), "The new Lua modules must be version-gated")
+assert(dock_update_source:find('["assets/lockscreen/appdock_lockscreen_aurora.jpg"] = true', 1, true), "DockUpdate must allow the Aurora JPEG asset")
+assert(dock_update_source:find('["assets/lockscreen/appdock_lockscreen_aurora.jpg"] = "9.6.0"', 1, true), "The Aurora JPEG must be version-gated")
 assert(dock_update_source:find('["appdock_text.lua"] = true', 1, true), "DockUpdate must allow the transparent text module")
 assert(dock_update_source:find('["appdock_netsurf.lua"] = true', 1, true), "DockUpdate must allow the NetSurf browser module")
 assert(dock_update_source:find('["appdock_doom.lua"] = true', 1, true), "DockUpdate must allow the Doom module")
 assert(dock_update_source:find("and not included[path]", 1, true), "The updater must reject a release when a required module is not allowlisted")
 assert(dock_update_source:find("MAX_FILE_BYTES = 512 * 1024", 1, true), "DockUpdate must accept the current AppDock module size with a bounded per-file limit")
-assert(dock_update_source:find("MAX_RELEASE_FILES = 80", 1, true), "DockUpdate must accept the current bounded AppDock package")
+assert(dock_update_source:find("MAX_RELEASE_FILES = 84", 1, true), "DockUpdate must accept the current bounded AppDock package")
 assert(dock_update_source:find("total_bytes > MAX_TOTAL_BYTES", 1, true), "DockUpdate must enforce the cumulative download-size limit")
 assert(dock_update_source:find('["appdock_suggestions.db"] = true', 1, true), "DockUpdate must allow the suggestion database")
 assert(dock_update_source:find('["appdock_tbs_account.lua"] = true', 1, true), "DockUpdate must allow the TBS account client")
@@ -328,7 +341,7 @@ assert(saw_large_file_timeout, "The large appdock_dapps.lua request must use the
 assert(#log.requests == 1 + #required + 2 + #optional_sources + #png_assets + 1,
     "DockUpdate must fetch the Atom feed and only the fixed allowlisted release files")
 local catalog = assert(io.open("dapps.txt", "rb")):read("*a")
-assert(catalog:find("dock_update.lua | 2.1.8 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.8")
+assert(catalog:find("dock_update.lua | 2.1.9 | dockupdate", 1, true), "The DApps catalog must publish DockUpdate 2.1.9")
 for _, url in ipairs(log.requests) do
     assert(not url:find("api.github.com", 1, true), "DockUpdate must never use the rate-limited GitHub REST API")
     assert(not url:find("appdock_default.svg", 1, true), "DockUpdate must not request the optional default wallpaper")
@@ -435,6 +448,39 @@ local installed_host = assert(io.open(active .. "/appdock_dapps.lua", "rb")):rea
 assert(#installed_host == 299656, "DockUpdate must accept and install the complete AppDock 9.5.2 DApp host")
 assert(#log.requests == 1 + #required + #versioned_sources + #upcoming_sources + #png_assets,
     "DockUpdate must fetch every allowlisted AppDock 9.5.2 file")
+for _, path in ipairs({ "appdock_gradient.lua", "appdock_rotation.lua", "appdock_lockscreen_aurora.jpg" }) do
+    for _, url in ipairs(log.requests) do assert(not url:find(path, 1, true), "AppDock 9.5.2 must not request a file first released in 9.6.0: " .. path) end
+end
+
+-- AppDock 9.6.0 adds two Lua modules and a version-gated Aurora JPEG asset.
+feed = feed:gsub("9%.5%.2", "9.6.0")
+packaged_sources["_meta.lua"] = "return { version = '9.6.0' }\n"
+packaged_sources["main.lua"] = "-- packaged main\nreturn { name = 'appdock-9.6.0' }\n"
+packaged_sources["appdock_dapps.lua"] = "--" .. string.rep("x", 302369) .. "\n"
+assert(#packaged_sources["appdock_dapps.lua"] == 302372, "The AppDock 9.6.0 host fixture must match its published byte size")
+for _, name in ipairs(future_sources) do packaged_sources[name] = "-- packaged " .. name .. "\nreturn {}\n" end
+for _, asset in ipairs(jpeg_assets) do packaged_sources[asset] = jpeg_signature end
+log.requests = {}
+local aurora_instance = {}
+findAction(app.buildPane(aurora_instance, context), "Check updates").callback()
+local aurora_pane = app.buildPane(aurora_instance, context)
+local aurora_install = findAction(aurora_pane, "Install update")
+assert(aurora_install and aurora_install.subtitle == "AppDock 9.6.0", "DockUpdate must detect AppDock 9.6.0")
+aurora_install.callback()
+assert(log.shown and log.shown.ok_callback, "AppDock 9.6.0 installation must require explicit confirmation")
+log.shown.ok_callback()
+for _, name in ipairs(future_sources) do
+    local installed = assert(io.open(active .. "/" .. name, "rb")):read("*a")
+    assert(installed == packaged_sources[name], "DockUpdate must install the new AppDock source " .. name)
+end
+for _, asset in ipairs(jpeg_assets) do
+    local installed = assert(io.open(active .. "/" .. asset, "rb")):read("*a")
+    assert(installed == jpeg_signature, "DockUpdate must validate and install the Aurora JPEG asset")
+end
+local installed_96_host = assert(io.open(active .. "/appdock_dapps.lua", "rb")):read("*a")
+assert(#installed_96_host == 302372, "DockUpdate must accept and install the complete AppDock 9.6.0 DApp host")
+assert(#log.requests == 1 + #required + #versioned_sources + #upcoming_sources + #future_sources + #png_assets + #jpeg_assets,
+    "DockUpdate must fetch every allowlisted AppDock 9.6.0 file exactly once")
 
 os.execute("rm -rf " .. root)
 print("DockUpdate test: OK")
