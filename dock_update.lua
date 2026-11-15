@@ -51,14 +51,14 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.6.0 package has 81 files. Keep explicit headroom while
+-- The current AppDock 9.7.0 package has 92 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
-local MAX_RELEASE_FILES = 84
+local MAX_RELEASE_FILES = 96
 local MAX_RELEASE_NOTES = 16 * 1024
 local NETSURF_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main/netsurf.zip"
 local NETSURF_MAX_ARCHIVE_BYTES = 7 * 1024 * 1024
@@ -88,6 +88,8 @@ local REQUIRED_FILES = {
     "appdock_sleepscreen_editor.lua", "appdock_sleepscreen_presets.lua",
     "appdock_sleepscreen_renderer.lua", "appdock_sleepscreen_store.lua", "appdock_sleepscreen_weather.lua",
     "appdock_transfer.lua", "appdock_youtube_shorts.lua",
+    "appdock_color.lua", "appdock_features.lua", "appdock_filechooser.lua",
+    "appdock_pet.lua", "appdock_shutdown.lua", "appdock_skin.lua",
     "appdock_suggestions.db", "features.adf",
     "assets/lockscreen/appdock_lockscreen_hero.png",
     "assets/lockscreen/appdock_lockscreen_aurora.jpg",
@@ -97,6 +99,8 @@ local REQUIRED_FILES = {
     "assets/logos/document.png", "assets/logos/file_manager.png", "assets/logos/help.png",
     "assets/logos/minecraft.png", "assets/logos/music.png", "assets/logos/network.png",
     "assets/logos/notes.png", "assets/logos/settings.png", "assets/logos/web_browser.png",
+    "assets/skin/cyber_circuit.png", "assets/skin/cyber_city.png", "assets/skin/cyber_grid.png",
+    "assets/skin/cyber_hex.png", "assets/skin/cyber_scan.png",
     "assets/screensaver/happy_ereader_01.png", "assets/screensaver/happy_ereader_02.png",
     "assets/screensaver/happy_ereader_03.png", "assets/screensaver/happy_ereader_04.png",
 }
@@ -133,6 +137,9 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_ytmusic.lua"] = true, ["appdock_stylus.lua"] = true,
     ["appdock_suggestions.lua"] = true, ["appdock_tbs_account.lua"] = true,
     ["appdock_gradient.lua"] = true, ["appdock_rotation.lua"] = true,
+    ["appdock_color.lua"] = true, ["appdock_features.lua"] = true,
+    ["appdock_filechooser.lua"] = true, ["appdock_pet.lua"] = true,
+    ["appdock_shutdown.lua"] = true, ["appdock_skin.lua"] = true,
 }
 -- Modules added after older stable releases are allowlisted but requested only
 -- from the first tag that contains them. This keeps updates from old installs
@@ -152,9 +159,20 @@ local SOURCE_MIN_VERSION = {
     ["appdock_health.lua"] = "9.5.1",
     ["appdock_gradient.lua"] = "9.6.0",
     ["appdock_rotation.lua"] = "9.6.0",
+    ["appdock_color.lua"] = "9.7.0",
+    ["appdock_features.lua"] = "9.7.0",
+    ["appdock_filechooser.lua"] = "9.7.0",
+    ["appdock_pet.lua"] = "9.7.0",
+    ["appdock_shutdown.lua"] = "9.7.0",
+    ["appdock_skin.lua"] = "9.7.0",
 }
 local ASSET_MIN_VERSION = {
     ["assets/lockscreen/appdock_lockscreen_aurora.jpg"] = "9.6.0",
+    ["assets/skin/cyber_circuit.png"] = "9.7.0",
+    ["assets/skin/cyber_city.png"] = "9.7.0",
+    ["assets/skin/cyber_grid.png"] = "9.7.0",
+    ["assets/skin/cyber_hex.png"] = "9.7.0",
+    ["assets/skin/cyber_scan.png"] = "9.7.0",
 }
 local ALLOWED_DATA_FILES = {
     ["appdock_suggestions.db"] = true,
@@ -172,6 +190,9 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
     ["assets/logos/music.png"] = true, ["assets/logos/dchat.png"] = true,
     ["assets/logos/dockupdate.png"] = true, ["assets/logos/minecraft.png"] = true,
+    ["assets/skin/cyber_circuit.png"] = true, ["assets/skin/cyber_city.png"] = true,
+    ["assets/skin/cyber_grid.png"] = true, ["assets/skin/cyber_hex.png"] = true,
+    ["assets/skin/cyber_scan.png"] = true,
     ["assets/screensaver/happy_ereader_01.png"] = true,
     ["assets/screensaver/happy_ereader_02.png"] = true,
     ["assets/screensaver/happy_ereader_03.png"] = true,
@@ -482,7 +503,7 @@ end
 
 local function fetchReleaseFile(session, entry, url, limit, accept, on_chunk)
     if entry.kind == "source" and entry.path == "appdock_dapps.lua" then
-        -- This host module is about 295 KiB in AppDock 9.6.0. Use LuaSec's stock HTTP framing
+        -- This host module is about 300 KiB in AppDock 9.7.0. Use LuaSec's stock HTTP framing
         -- with a longer read timeout instead of the custom keep-alive parser,
         -- then retry once on a transient network failure.
         return fetchWithRetry(url, limit, accept, on_chunk, 90, 2)
@@ -1750,7 +1771,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.1.9",
+    version = "2.2.0",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
