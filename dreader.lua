@@ -1863,7 +1863,7 @@ end
 
 return {
     id = "dreader",
-    version = "3.1.0",
+    version = "3.1.1",
     title = "DReader",
     subtitle = "EPUB, PDF and more, rendered by KOReader",
     symbol = "R",
