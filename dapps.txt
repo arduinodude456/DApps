@@ -9,7 +9,7 @@ calc.lua | 1.0.1 | calculator
 dreader.lua | 3.1.1 | document
 calendar.lua | 1.0.2 | calendar
 rss_reader.lua | 1.0.3 | rss
-dock_update.lua | 2.2.0 | dockupdate
+dock_update.lua | 2.3.0 | dockupdate
 ai_chat.lua | 1.5.4 | dchat
 appdock_guide.lua | 1.0.0 | help
 dpdf.lua | 1.0.0 | document

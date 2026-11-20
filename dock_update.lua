@@ -51,14 +51,14 @@ local INSTALL_NETSURF_WITH_UPDATE = true
 -- fixed, local allowlist instead; neither endpoint consumes the REST quota.
 local RELEASE_URL = "https://github.com/" .. REPOSITORY .. "/releases.atom"
 local MAX_METADATA_BYTES = 128 * 1024
--- The current AppDock 9.7.0 package has 92 files. Keep explicit headroom while
+-- The current AppDock 9.12.0 package has 97 files. Keep explicit headroom while
 -- preserving a strict upper bound against unexpected release trees.
 local MAX_FILE_BYTES = 512 * 1024
 local MAX_ASSET_BYTES = 3 * 1024 * 1024
 local MAX_DATA_BYTES = 1024 * 1024
 local MAX_TOTAL_BYTES = 16 * 1024 * 1024
 -- Keep the fixed package bounded even as the explicit module and asset lists evolve.
-local MAX_RELEASE_FILES = 96
+local MAX_RELEASE_FILES = 104
 local MAX_RELEASE_NOTES = 16 * 1024
 local NETSURF_URL = "https://raw.githubusercontent.com/arduinodude456/DApps/main/netsurf.zip"
 local NETSURF_MAX_ARCHIVE_BYTES = 7 * 1024 * 1024
@@ -79,7 +79,8 @@ local REQUIRED_FILES = {
     "appdock_logo.lua", "appdock_manager.lua", "appdock_quicksettings.lua", "appdock_glass.lua",
     "appdock_theme.lua", "appdock_notifications.lua", "appdock_help.lua", "appdock_boot.lua",
     "appdock_wallpaper.lua", "appdock_lockscreen.lua", "appdock_device_controls.lua",
-    "appdock_health.lua",
+    "appdock_health.lua", "appdock_dockai.lua", "appdock_dockai_proxy.lua",
+    "appdock_glassclock.lua", "appdock_prof.lua",
     "appdock_bwr.lua", "appdock_player.lua", "appdock_youtube.lua", "appdock_media.lua", "appdock_whatsnew.lua",
     "appdock_ytmusic.lua", "appdock_dialogs.lua", "appdock_text.lua", "appdock_draw.lua", "appdock_dither.lua", "appdock_anim.lua", "appdock_stylus.lua",
     "appdock_gradient.lua", "appdock_rotation.lua",
@@ -95,7 +96,7 @@ local REQUIRED_FILES = {
     "assets/lockscreen/appdock_lockscreen_aurora.jpg",
     "assets/logos/analog_clock.png", "assets/logos/app_store.png", "assets/logos/appdock.png",
     "assets/logos/battery.png", "assets/logos/calculator.png", "assets/logos/calendar.png",
-    "assets/logos/dchat.png", "assets/logos/display.png", "assets/logos/dockupdate.png",
+    "assets/logos/dchat.png", "assets/logos/display.png", "assets/logos/dockupdate.png", "assets/logos/dockai.png",
     "assets/logos/document.png", "assets/logos/file_manager.png", "assets/logos/help.png",
     "assets/logos/minecraft.png", "assets/logos/music.png", "assets/logos/network.png",
     "assets/logos/notes.png", "assets/logos/settings.png", "assets/logos/web_browser.png",
@@ -114,6 +115,8 @@ local ALLOWED_SOURCE_FILES = {
     ["appdock_layout.lua"] = true, ["appdock_lockscreen.lua"] = true,
     ["appdock_logo.lua"] = true, ["appdock_manager.lua"] = true,
     ["appdock_health.lua"] = true,
+    ["appdock_dockai.lua"] = true, ["appdock_dockai_proxy.lua"] = true,
+    ["appdock_glassclock.lua"] = true, ["appdock_prof.lua"] = true,
     ["appdock_motion.lua"] = true, ["appdock_notifications.lua"] = true,
     ["appdock_order.lua"] = true, ["appdock_quicksettings.lua"] = true, ["appdock_glass.lua"] = true,
     ["appdock_sleepscreen.lua"] = true,
@@ -165,8 +168,13 @@ local SOURCE_MIN_VERSION = {
     ["appdock_pet.lua"] = "9.7.0",
     ["appdock_shutdown.lua"] = "9.7.0",
     ["appdock_skin.lua"] = "9.7.0",
+    ["appdock_glassclock.lua"] = "9.9.0",
+    ["appdock_dockai.lua"] = "9.10.0",
+    ["appdock_prof.lua"] = "9.11.0",
+    ["appdock_dockai_proxy.lua"] = "9.12.0",
 }
 local ASSET_MIN_VERSION = {
+    ["assets/logos/dockai.png"] = "9.10.0",
     ["assets/lockscreen/appdock_lockscreen_aurora.jpg"] = "9.6.0",
     ["assets/skin/cyber_circuit.png"] = "9.7.0",
     ["assets/skin/cyber_city.png"] = "9.7.0",
@@ -190,6 +198,7 @@ local ALLOWED_ASSET_FILES = {
     ["assets/logos/calculator.png"] = true, ["assets/logos/document.png"] = true,
     ["assets/logos/music.png"] = true, ["assets/logos/dchat.png"] = true,
     ["assets/logos/dockupdate.png"] = true, ["assets/logos/minecraft.png"] = true,
+    ["assets/logos/dockai.png"] = true,
     ["assets/skin/cyber_circuit.png"] = true, ["assets/skin/cyber_city.png"] = true,
     ["assets/skin/cyber_grid.png"] = true, ["assets/skin/cyber_hex.png"] = true,
     ["assets/skin/cyber_scan.png"] = true,
@@ -1771,7 +1780,7 @@ end
 
 return {
     id = "dock_update",
-    version = "2.2.0",
+    version = "2.3.0",
     title = "DockUpdate",
     subtitle = "AppDock release updates",
     symbol = "U",
