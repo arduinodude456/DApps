@@ -6,7 +6,7 @@ book_translator.lua | 1.1.1 | translate
 night_lua.lua | 1.0.1 | code
 markup.lua | 1.0.0 | notes
 calc.lua | 1.0.1 | calculator
-dreader.lua | 3.1.1 | document
+dreader.lua | 4.0.0 | document
 calendar.lua | 1.0.2 | calendar
 rss_reader.lua | 1.0.3 | rss
 dock_update.lua | 2.3.0 | dockupdate
